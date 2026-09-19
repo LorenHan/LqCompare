@@ -1,8 +1,12 @@
 name: Build and test
 
-# 每次提交都验证：分层依赖、图标一致性、规格与 PRD 同步、构建、测试。
+# 每次提交都验证：分层依赖、图标一致性、规格与 PRD 同步、脚本可移植性、构建、测试。
 # 这些检查都很便宜，但能挡住「加一行 include 破坏可测性」「手改 PRD 被冲掉」
-# 这类要过很久才暴露的问题。
+# 「脚本用了 macOS 上不存在的写法」这类要过很久才暴露的问题。
+#
+# 注意一个覆盖盲区：构建与测试只在 Ubuntu 上跑，而仓库还声称支持 macOS 与
+# Windows（Git Bash）。因此 macOS/Windows 特有的问题**不会**在这里暴露，
+# 只能靠 check_shell.py 这类静态护栏兜住。新增脚本时请记得这一点。
 
 on:
   push:
@@ -25,6 +29,10 @@ jobs:
         run: python3 tools/check_icons.py
       - name: 规格数据自检（UI-024 / DOC-005）
         run: python3 tools/check_spec.py
+      # CI 只在 Linux 上跑测试，所以「在 CI 上全绿」不代表脚本能在 macOS 上跑。
+      # 这一步专门拦 bash 4 内建与 GNU 工具扩展这两类「Linux 能跑、macOS 崩」的写法。
+      - name: Shell 脚本可移植性检查（ENG-003 / PLAT-001）
+        run: python3 tools/check_shell.py
 
   build-and-test:
     name: Build and test (${{ matrix.os }})
