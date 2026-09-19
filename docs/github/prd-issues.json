@@ -1,0 +1,2591 @@
+{
+  "repository": "LorenHan/LqCompare",
+  "generated_at": "2026-09-19 17:25 UTC",
+  "total": 369,
+  "published": 369,
+  "issues": {
+    "UI-001": {
+      "number": 2,
+      "url": "https://github.com/LorenHan/LqCompare/issues/2",
+      "title": "Ribbon 主窗口外壳",
+      "module": "界面",
+      "priority": "P0"
+    },
+    "UI-002": {
+      "number": 1,
+      "url": "https://github.com/LorenHan/LqCompare/issues/1",
+      "title": "Ribbon 样式、最小化与分组标题",
+      "module": "界面",
+      "priority": "P0"
+    },
+    "UI-003": {
+      "number": 3,
+      "url": "https://github.com/LorenHan/LqCompare/issues/3",
+      "title": "快速访问工具栏（QAT）策略",
+      "module": "界面",
+      "priority": "P0"
+    },
+    "UI-004": {
+      "number": 4,
+      "url": "https://github.com/LorenHan/LqCompare/issues/4",
+      "title": "居中命令搜索栏",
+      "module": "界面",
+      "priority": "P0"
+    },
+    "UI-005": {
+      "number": 5,
+      "url": "https://github.com/LorenHan/LqCompare/issues/5",
+      "title": "Application Menu 后台视图",
+      "module": "界面",
+      "priority": "P0"
+    },
+    "UI-006": {
+      "number": 6,
+      "url": "https://github.com/LorenHan/LqCompare/issues/6",
+      "title": "Ribbon 上下文菜单抑制与页面右键菜单",
+      "module": "界面",
+      "priority": "P0"
+    },
+    "UI-007": {
+      "number": 7,
+      "url": "https://github.com/LorenHan/LqCompare/issues/7",
+      "title": "Ribbon 页面：Home 开始",
+      "module": "界面",
+      "priority": "P0"
+    },
+    "UI-008": {
+      "number": 8,
+      "url": "https://github.com/LorenHan/LqCompare/issues/8",
+      "title": "Ribbon 页面：Compare 比较",
+      "module": "界面",
+      "priority": "P0"
+    },
+    "UI-009": {
+      "number": 10,
+      "url": "https://github.com/LorenHan/LqCompare/issues/10",
+      "title": "Ribbon 页面：Merge 合并",
+      "module": "界面",
+      "priority": "P0"
+    },
+    "UI-010": {
+      "number": 9,
+      "url": "https://github.com/LorenHan/LqCompare/issues/9",
+      "title": "Ribbon 页面：Edit 编辑",
+      "module": "界面",
+      "priority": "P0"
+    },
+    "UI-011": {
+      "number": 11,
+      "url": "https://github.com/LorenHan/LqCompare/issues/11",
+      "title": "Ribbon 页面：View 视图",
+      "module": "界面",
+      "priority": "P0"
+    },
+    "UI-012": {
+      "number": 12,
+      "url": "https://github.com/LorenHan/LqCompare/issues/12",
+      "title": "Ribbon 页面：Filter 过滤",
+      "module": "界面",
+      "priority": "P0"
+    },
+    "UI-013": {
+      "number": 13,
+      "url": "https://github.com/LorenHan/LqCompare/issues/13",
+      "title": "Ribbon 页面：Session 会话",
+      "module": "界面",
+      "priority": "P0"
+    },
+    "UI-014": {
+      "number": 15,
+      "url": "https://github.com/LorenHan/LqCompare/issues/15",
+      "title": "Ribbon 页面：Report 报表",
+      "module": "界面",
+      "priority": "P0"
+    },
+    "UI-015": {
+      "number": 14,
+      "url": "https://github.com/LorenHan/LqCompare/issues/14",
+      "title": "Ribbon 页面：Tools 工具",
+      "module": "界面",
+      "priority": "P0"
+    },
+    "UI-016": {
+      "number": 16,
+      "url": "https://github.com/LorenHan/LqCompare/issues/16",
+      "title": "Ribbon 页面：Help 帮助",
+      "module": "界面",
+      "priority": "P0"
+    },
+    "UI-017": {
+      "number": 17,
+      "url": "https://github.com/LorenHan/LqCompare/issues/17",
+      "title": "Ribbon 页面与分组的上下文可见性",
+      "module": "界面",
+      "priority": "P0"
+    },
+    "UI-018": {
+      "number": 20,
+      "url": "https://github.com/LorenHan/LqCompare/issues/20",
+      "title": "Ribbon 分组收缩策略（ScalingPolicy）",
+      "module": "界面",
+      "priority": "P0"
+    },
+    "UI-019": {
+      "number": 18,
+      "url": "https://github.com/LorenHan/LqCompare/issues/18",
+      "title": "复合控件支持：SplitButton",
+      "module": "界面",
+      "priority": "P1"
+    },
+    "UI-020": {
+      "number": 19,
+      "url": "https://github.com/LorenHan/LqCompare/issues/19",
+      "title": "复合控件支持：DropDownButton 与复选列表",
+      "module": "界面",
+      "priority": "P1"
+    },
+    "UI-021": {
+      "number": 21,
+      "url": "https://github.com/LorenHan/LqCompare/issues/21",
+      "title": "复合控件支持：Gallery",
+      "module": "界面",
+      "priority": "P1"
+    },
+    "UI-022": {
+      "number": 22,
+      "url": "https://github.com/LorenHan/LqCompare/issues/22",
+      "title": "复合控件支持：可编辑 ComboBox（路径下拉）",
+      "module": "界面",
+      "priority": "P1"
+    },
+    "UI-023": {
+      "number": 23,
+      "url": "https://github.com/LorenHan/LqCompare/issues/23",
+      "title": "命令 tooltip 两段式规范与强制校验",
+      "module": "界面",
+      "priority": "P1"
+    },
+    "UI-024": {
+      "number": 24,
+      "url": "https://github.com/LorenHan/LqCompare/issues/24",
+      "title": "命令注册中心",
+      "module": "界面",
+      "priority": "P1"
+    },
+    "UI-025": {
+      "number": 25,
+      "url": "https://github.com/LorenHan/LqCompare/issues/25",
+      "title": "图标体系与资源管理",
+      "module": "界面",
+      "priority": "P1"
+    },
+    "UI-026": {
+      "number": 26,
+      "url": "https://github.com/LorenHan/LqCompare/issues/26",
+      "title": "Ribbon 状态栏宿主",
+      "module": "界面",
+      "priority": "P1"
+    },
+    "UI-027": {
+      "number": 27,
+      "url": "https://github.com/LorenHan/LqCompare/issues/27",
+      "title": "快捷键系统与自定义",
+      "module": "界面",
+      "priority": "P1"
+    },
+    "UI-028": {
+      "number": 28,
+      "url": "https://github.com/LorenHan/LqCompare/issues/28",
+      "title": "主题与配色方案",
+      "module": "界面",
+      "priority": "P1"
+    },
+    "UI-029": {
+      "number": 30,
+      "url": "https://github.com/LorenHan/LqCompare/issues/30",
+      "title": "窗口几何与布局持久化",
+      "module": "界面",
+      "priority": "P1"
+    },
+    "UI-030": {
+      "number": 29,
+      "url": "https://github.com/LorenHan/LqCompare/issues/29",
+      "title": "Ribbon 本地化与语言切换",
+      "module": "界面",
+      "priority": "P1"
+    },
+    "UI-031": {
+      "number": 33,
+      "url": "https://github.com/LorenHan/LqCompare/issues/33",
+      "title": "主窗口标题与文档状态标记",
+      "module": "界面",
+      "priority": "P1"
+    },
+    "UI-032": {
+      "number": 32,
+      "url": "https://github.com/LorenHan/LqCompare/issues/32",
+      "title": "对话框风格统一",
+      "module": "界面",
+      "priority": "P1"
+    },
+    "UI-033": {
+      "number": 31,
+      "url": "https://github.com/LorenHan/LqCompare/issues/31",
+      "title": "拖放目标",
+      "module": "界面",
+      "priority": "P1"
+    },
+    "UI-034": {
+      "number": 34,
+      "url": "https://github.com/LorenHan/LqCompare/issues/34",
+      "title": "高 DPI 与分数缩放适配",
+      "module": "界面",
+      "priority": "P1"
+    },
+    "UI-035": {
+      "number": 35,
+      "url": "https://github.com/LorenHan/LqCompare/issues/35",
+      "title": "键盘全导航与无障碍",
+      "module": "界面",
+      "priority": "P1"
+    },
+    "SESS-001": {
+      "number": 36,
+      "url": "https://github.com/LorenHan/LqCompare/issues/36",
+      "title": "会话抽象基类",
+      "module": "会话",
+      "priority": "P0"
+    },
+    "SESS-002": {
+      "number": 37,
+      "url": "https://github.com/LorenHan/LqCompare/issues/37",
+      "title": "会话类型注册表",
+      "module": "会话",
+      "priority": "P0"
+    },
+    "SESS-003": {
+      "number": 38,
+      "url": "https://github.com/LorenHan/LqCompare/issues/38",
+      "title": "Home 视图",
+      "module": "会话",
+      "priority": "P0"
+    },
+    "SESS-004": {
+      "number": 41,
+      "url": "https://github.com/LorenHan/LqCompare/issues/41",
+      "title": "会话树与分组管理",
+      "module": "会话",
+      "priority": "P0"
+    },
+    "SESS-005": {
+      "number": 40,
+      "url": "https://github.com/LorenHan/LqCompare/issues/40",
+      "title": "新建会话向导",
+      "module": "会话",
+      "priority": "P0"
+    },
+    "SESS-006": {
+      "number": 39,
+      "url": "https://github.com/LorenHan/LqCompare/issues/39",
+      "title": "会话设置对话框框架",
+      "module": "会话",
+      "priority": "P0"
+    },
+    "SESS-007": {
+      "number": 42,
+      "url": "https://github.com/LorenHan/LqCompare/issues/42",
+      "title": "设置作用域语义",
+      "module": "会话",
+      "priority": "P0"
+    },
+    "SESS-008": {
+      "number": 43,
+      "url": "https://github.com/LorenHan/LqCompare/issues/43",
+      "title": "会话文件保存与加载",
+      "module": "会话",
+      "priority": "P0"
+    },
+    "SESS-009": {
+      "number": 46,
+      "url": "https://github.com/LorenHan/LqCompare/issues/46",
+      "title": "最近会话与最近比较列表",
+      "module": "会话",
+      "priority": "P0"
+    },
+    "SESS-010": {
+      "number": 44,
+      "url": "https://github.com/LorenHan/LqCompare/issues/44",
+      "title": "会话标签页与多标签管理",
+      "module": "会话",
+      "priority": "P0"
+    },
+    "SESS-011": {
+      "number": 45,
+      "url": "https://github.com/LorenHan/LqCompare/issues/45",
+      "title": "工作区（Workspaces）",
+      "module": "会话",
+      "priority": "P1"
+    },
+    "SESS-012": {
+      "number": 48,
+      "url": "https://github.com/LorenHan/LqCompare/issues/48",
+      "title": "剪贴板比对会话",
+      "module": "会话",
+      "priority": "P1"
+    },
+    "SESS-013": {
+      "number": 47,
+      "url": "https://github.com/LorenHan/LqCompare/issues/47",
+      "title": "文件对自动选视图",
+      "module": "会话",
+      "priority": "P1"
+    },
+    "SESS-014": {
+      "number": 49,
+      "url": "https://github.com/LorenHan/LqCompare/issues/49",
+      "title": "用其它视图打开（Compare Using）",
+      "module": "会话",
+      "priority": "P1"
+    },
+    "SESS-015": {
+      "number": 50,
+      "url": "https://github.com/LorenHan/LqCompare/issues/50",
+      "title": "会话默认值管理",
+      "module": "会话",
+      "priority": "P1"
+    },
+    "SESS-016": {
+      "number": 51,
+      "url": "https://github.com/LorenHan/LqCompare/issues/51",
+      "title": "会话参数从命令行导入",
+      "module": "会话",
+      "priority": "P1"
+    },
+    "SESS-017": {
+      "number": 53,
+      "url": "https://github.com/LorenHan/LqCompare/issues/53",
+      "title": "会话只读与可编辑状态管理",
+      "module": "会话",
+      "priority": "P1"
+    },
+    "SESS-018": {
+      "number": 52,
+      "url": "https://github.com/LorenHan/LqCompare/issues/52",
+      "title": "会话生命周期与脏状态提示",
+      "module": "会话",
+      "priority": "P1"
+    },
+    "SESS-019": {
+      "number": 55,
+      "url": "https://github.com/LorenHan/LqCompare/issues/55",
+      "title": "会话统计与汇总",
+      "module": "会话",
+      "priority": "P1"
+    },
+    "SESS-020": {
+      "number": 54,
+      "url": "https://github.com/LorenHan/LqCompare/issues/54",
+      "title": "会话级错误处理与部分失败恢复",
+      "module": "会话",
+      "priority": "P1"
+    },
+    "TXT-001": {
+      "number": 56,
+      "url": "https://github.com/LorenHan/LqCompare/issues/56",
+      "title": "文本比对会话与双窗格视图骨架",
+      "module": "文本比对",
+      "priority": "P0"
+    },
+    "TXT-002": {
+      "number": 57,
+      "url": "https://github.com/LorenHan/LqCompare/issues/57",
+      "title": "基础行对齐算法（Myers）",
+      "module": "文本比对",
+      "priority": "P0"
+    },
+    "TXT-003": {
+      "number": 58,
+      "url": "https://github.com/LorenHan/LqCompare/issues/58",
+      "title": "耐心对齐（Patience Diff）",
+      "module": "文本比对",
+      "priority": "P0"
+    },
+    "TXT-004": {
+      "number": 59,
+      "url": "https://github.com/LorenHan/LqCompare/issues/59",
+      "title": "对齐样式选择与持久化",
+      "module": "文本比对",
+      "priority": "P0"
+    },
+    "TXT-005": {
+      "number": 60,
+      "url": "https://github.com/LorenHan/LqCompare/issues/60",
+      "title": "相似度阈值与相似行对齐",
+      "module": "文本比对",
+      "priority": "P0"
+    },
+    "TXT-006": {
+      "number": 62,
+      "url": "https://github.com/LorenHan/LqCompare/issues/62",
+      "title": "手动对齐与断开对齐",
+      "module": "文本比对",
+      "priority": "P0"
+    },
+    "TXT-007": {
+      "number": 61,
+      "url": "https://github.com/LorenHan/LqCompare/issues/61",
+      "title": "对齐覆盖（Alignment Override）",
+      "module": "文本比对",
+      "priority": "P0"
+    },
+    "TXT-008": {
+      "number": 63,
+      "url": "https://github.com/LorenHan/LqCompare/issues/63",
+      "title": "忽略大小写差异",
+      "module": "文本比对",
+      "priority": "P0"
+    },
+    "TXT-009": {
+      "number": 64,
+      "url": "https://github.com/LorenHan/LqCompare/issues/64",
+      "title": "忽略空白变化",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-010": {
+      "number": 65,
+      "url": "https://github.com/LorenHan/LqCompare/issues/65",
+      "title": "忽略行尾（EOL）差异",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-011": {
+      "number": 66,
+      "url": "https://github.com/LorenHan/LqCompare/issues/66",
+      "title": "忽略注释差异",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-012": {
+      "number": 69,
+      "url": "https://github.com/LorenHan/LqCompare/issues/69",
+      "title": "忽略行号、行内数字与日期等待定模式",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-013": {
+      "number": 67,
+      "url": "https://github.com/LorenHan/LqCompare/issues/67",
+      "title": "行重要性规则（Importance）",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-014": {
+      "number": 68,
+      "url": "https://github.com/LorenHan/LqCompare/issues/68",
+      "title": "编码探测与手动指定编码",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-015": {
+      "number": 70,
+      "url": "https://github.com/LorenHan/LqCompare/issues/70",
+      "title": "BOM 处理策略",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-016": {
+      "number": 71,
+      "url": "https://github.com/LorenHan/LqCompare/issues/71",
+      "title": "行尾规范化、显示与保存",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-017": {
+      "number": 72,
+      "url": "https://github.com/LorenHan/LqCompare/issues/72",
+      "title": "制表符宽度与不可见字符显示",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-018": {
+      "number": 73,
+      "url": "https://github.com/LorenHan/LqCompare/issues/73",
+      "title": "语法高亮",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-019": {
+      "number": 75,
+      "url": "https://github.com/LorenHan/LqCompare/issues/75",
+      "title": "并排双栏布局与同步滚动",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-020": {
+      "number": 76,
+      "url": "https://github.com/LorenHan/LqCompare/issues/76",
+      "title": "上下分栏布局",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-021": {
+      "number": 74,
+      "url": "https://github.com/LorenHan/LqCompare/issues/74",
+      "title": "单栏与全部内联布局",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-022": {
+      "number": 77,
+      "url": "https://github.com/LorenHan/LqCompare/issues/77",
+      "title": "差异导航",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-023": {
+      "number": 78,
+      "url": "https://github.com/LorenHan/LqCompare/issues/78",
+      "title": "概览栏与差异缩略图",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-024": {
+      "number": 79,
+      "url": "https://github.com/LorenHan/LqCompare/issues/79",
+      "title": "行号与当前定位指示",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-025": {
+      "number": 80,
+      "url": "https://github.com/LorenHan/LqCompare/issues/80",
+      "title": "行内差异高亮（字符级）",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-026": {
+      "number": 353,
+      "url": "https://github.com/LorenHan/LqCompare/issues/353",
+      "title": "显示过滤器（差异/相同/上下文）",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-027": {
+      "number": 352,
+      "url": "https://github.com/LorenHan/LqCompare/issues/352",
+      "title": "书签与标记",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-028": {
+      "number": 354,
+      "url": "https://github.com/LorenHan/LqCompare/issues/354",
+      "title": "匹配项高亮与文本搜索",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-029": {
+      "number": 355,
+      "url": "https://github.com/LorenHan/LqCompare/issues/355",
+      "title": "行内编辑与保存",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-030": {
+      "number": 81,
+      "url": "https://github.com/LorenHan/LqCompare/issues/81",
+      "title": "内容搬运（复制块与整体方向）",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-031": {
+      "number": 82,
+      "url": "https://github.com/LorenHan/LqCompare/issues/82",
+      "title": "文本转换命令",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-032": {
+      "number": 83,
+      "url": "https://github.com/LorenHan/LqCompare/issues/83",
+      "title": "大文件策略与内存管理",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-033": {
+      "number": 84,
+      "url": "https://github.com/LorenHan/LqCompare/issues/84",
+      "title": "空白与不可见字符的语义显示",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-034": {
+      "number": 85,
+      "url": "https://github.com/LorenHan/LqCompare/issues/85",
+      "title": "自动换行与超长行处理",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-035": {
+      "number": 86,
+      "url": "https://github.com/LorenHan/LqCompare/issues/86",
+      "title": "列选择模式与块编辑",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-036": {
+      "number": 87,
+      "url": "https://github.com/LorenHan/LqCompare/issues/87",
+      "title": "行列导航与跳转",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-037": {
+      "number": 88,
+      "url": "https://github.com/LorenHan/LqCompare/issues/88",
+      "title": "文本比对报表导出",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-038": {
+      "number": 90,
+      "url": "https://github.com/LorenHan/LqCompare/issues/90",
+      "title": "剪贴板与外部复制的文本格式",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-039": {
+      "number": 89,
+      "url": "https://github.com/LorenHan/LqCompare/issues/89",
+      "title": "文本比对的视图状态快照与恢复",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "TXT-040": {
+      "number": 91,
+      "url": "https://github.com/LorenHan/LqCompare/issues/91",
+      "title": "文本会话的自动化测试与固定语料",
+      "module": "文本比对",
+      "priority": "P1"
+    },
+    "MRG-001": {
+      "number": 92,
+      "url": "https://github.com/LorenHan/LqCompare/issues/92",
+      "title": "三方合并会话与多窗格布局",
+      "module": "三方合并",
+      "priority": "P1"
+    },
+    "MRG-002": {
+      "number": 93,
+      "url": "https://github.com/LorenHan/LqCompare/issues/93",
+      "title": "共同祖先栏（Base）显示与定位",
+      "module": "三方合并",
+      "priority": "P1"
+    },
+    "MRG-003": {
+      "number": 94,
+      "url": "https://github.com/LorenHan/LqCompare/issues/94",
+      "title": "自动合并引擎",
+      "module": "三方合并",
+      "priority": "P1"
+    },
+    "MRG-004": {
+      "number": 95,
+      "url": "https://github.com/LorenHan/LqCompare/issues/95",
+      "title": "冲突识别与可视化标记",
+      "module": "三方合并",
+      "priority": "P1"
+    },
+    "MRG-005": {
+      "number": 96,
+      "url": "https://github.com/LorenHan/LqCompare/issues/96",
+      "title": "块级决策：使用左侧 / 使用右侧",
+      "module": "三方合并",
+      "priority": "P1"
+    },
+    "MRG-006": {
+      "number": 98,
+      "url": "https://github.com/LorenHan/LqCompare/issues/98",
+      "title": "双向应用：先左后右 / 先右后左",
+      "module": "三方合并",
+      "priority": "P1"
+    },
+    "MRG-007": {
+      "number": 97,
+      "url": "https://github.com/LorenHan/LqCompare/issues/97",
+      "title": "整文件决策",
+      "module": "三方合并",
+      "priority": "P1"
+    },
+    "MRG-008": {
+      "number": 99,
+      "url": "https://github.com/LorenHan/LqCompare/issues/99",
+      "title": "手动编辑合并输出",
+      "module": "三方合并",
+      "priority": "P1"
+    },
+    "MRG-009": {
+      "number": 100,
+      "url": "https://github.com/LorenHan/LqCompare/issues/100",
+      "title": "标记冲突已解决 / 撤销解决",
+      "module": "三方合并",
+      "priority": "P1"
+    },
+    "MRG-010": {
+      "number": 101,
+      "url": "https://github.com/LorenHan/LqCompare/issues/101",
+      "title": "冲突导航",
+      "module": "三方合并",
+      "priority": "P1"
+    },
+    "MRG-011": {
+      "number": 102,
+      "url": "https://github.com/LorenHan/LqCompare/issues/102",
+      "title": "只显示冲突",
+      "module": "三方合并",
+      "priority": "P1"
+    },
+    "MRG-012": {
+      "number": 103,
+      "url": "https://github.com/LorenHan/LqCompare/issues/103",
+      "title": "独立显示差异（相对 Base 的左右差异）",
+      "module": "三方合并",
+      "priority": "P1"
+    },
+    "MRG-013": {
+      "number": 104,
+      "url": "https://github.com/LorenHan/LqCompare/issues/104",
+      "title": "保存合并结果与源文件语义",
+      "module": "三方合并",
+      "priority": "P1"
+    },
+    "MRG-014": {
+      "number": 105,
+      "url": "https://github.com/LorenHan/LqCompare/issues/105",
+      "title": "合并输出重新比较与一致性校验",
+      "module": "三方合并",
+      "priority": "P1"
+    },
+    "MRG-015": {
+      "number": 106,
+      "url": "https://github.com/LorenHan/LqCompare/issues/106",
+      "title": "合并决策的撤销、重做与决策日志",
+      "module": "三方合并",
+      "priority": "P1"
+    },
+    "MRG-016": {
+      "number": 107,
+      "url": "https://github.com/LorenHan/LqCompare/issues/107",
+      "title": "三方合并的命令行与外部工具集成",
+      "module": "三方合并",
+      "priority": "P1"
+    },
+    "MRG-017": {
+      "number": 108,
+      "url": "https://github.com/LorenHan/LqCompare/issues/108",
+      "title": "合并会话的差异统计与前置校验",
+      "module": "三方合并",
+      "priority": "P1"
+    },
+    "MRG-018": {
+      "number": 109,
+      "url": "https://github.com/LorenHan/LqCompare/issues/109",
+      "title": "合并场景的自动化测试与语料",
+      "module": "三方合并",
+      "priority": "P1"
+    },
+    "DIR-001": {
+      "number": 110,
+      "url": "https://github.com/LorenHan/LqCompare/issues/110",
+      "title": "文件夹比对会话与双树视图",
+      "module": "文件夹比对",
+      "priority": "P0"
+    },
+    "DIR-002": {
+      "number": 112,
+      "url": "https://github.com/LorenHan/LqCompare/issues/112",
+      "title": "目录扫描引擎与并行扫描",
+      "module": "文件夹比对",
+      "priority": "P0"
+    },
+    "DIR-003": {
+      "number": 111,
+      "url": "https://github.com/LorenHan/LqCompare/issues/111",
+      "title": "递归子目录策略",
+      "module": "文件夹比对",
+      "priority": "P0"
+    },
+    "DIR-004": {
+      "number": 113,
+      "url": "https://github.com/LorenHan/LqCompare/issues/113",
+      "title": "快速测试：文件大小",
+      "module": "文件夹比对",
+      "priority": "P0"
+    },
+    "DIR-005": {
+      "number": 114,
+      "url": "https://github.com/LorenHan/LqCompare/issues/114",
+      "title": "快速测试：修改时间",
+      "module": "文件夹比对",
+      "priority": "P0"
+    },
+    "DIR-006": {
+      "number": 115,
+      "url": "https://github.com/LorenHan/LqCompare/issues/115",
+      "title": "快速测试：文件名大小写与规范化",
+      "module": "文件夹比对",
+      "priority": "P0"
+    },
+    "DIR-007": {
+      "number": 117,
+      "url": "https://github.com/LorenHan/LqCompare/issues/117",
+      "title": "内容比对：CRC 校验和",
+      "module": "文件夹比对",
+      "priority": "P0"
+    },
+    "DIR-008": {
+      "number": 116,
+      "url": "https://github.com/LorenHan/LqCompare/issues/116",
+      "title": "内容比对：二进制逐字节",
+      "module": "文件夹比对",
+      "priority": "P0"
+    },
+    "DIR-009": {
+      "number": 118,
+      "url": "https://github.com/LorenHan/LqCompare/issues/118",
+      "title": "内容比对：基于文件格式规则",
+      "module": "文件夹比对",
+      "priority": "P0"
+    },
+    "DIR-010": {
+      "number": 119,
+      "url": "https://github.com/LorenHan/LqCompare/issues/119",
+      "title": "比较准则的组合与优先级",
+      "module": "文件夹比对",
+      "priority": "P0"
+    },
+    "DIR-011": {
+      "number": 120,
+      "url": "https://github.com/LorenHan/LqCompare/issues/120",
+      "title": "条目状态判定与语义",
+      "module": "文件夹比对",
+      "priority": "P0"
+    },
+    "DIR-012": {
+      "number": 122,
+      "url": "https://github.com/LorenHan/LqCompare/issues/122",
+      "title": "状态着色与图标",
+      "module": "文件夹比对",
+      "priority": "P0"
+    },
+    "DIR-013": {
+      "number": 121,
+      "url": "https://github.com/LorenHan/LqCompare/issues/121",
+      "title": "列定义与自定义列",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-014": {
+      "number": 124,
+      "url": "https://github.com/LorenHan/LqCompare/issues/124",
+      "title": "排序、分组与稳定顺序",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-015": {
+      "number": 126,
+      "url": "https://github.com/LorenHan/LqCompare/issues/126",
+      "title": "树展开、折叠与导航",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-016": {
+      "number": 123,
+      "url": "https://github.com/LorenHan/LqCompare/issues/123",
+      "title": "加载时的展开策略",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-017": {
+      "number": 125,
+      "url": "https://github.com/LorenHan/LqCompare/issues/125",
+      "title": "显示过滤器（文件夹视图）",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-018": {
+      "number": 127,
+      "url": "https://github.com/LorenHan/LqCompare/issues/127",
+      "title": "选择模型与按状态选择",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-019": {
+      "number": 128,
+      "url": "https://github.com/LorenHan/LqCompare/issues/128",
+      "title": "复制到左 / 复制到右",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-020": {
+      "number": 131,
+      "url": "https://github.com/LorenHan/LqCompare/issues/131",
+      "title": "复制选项（时间戳 / 属性 / 权限）",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-021": {
+      "number": 129,
+      "url": "https://github.com/LorenHan/LqCompare/issues/129",
+      "title": "移动条目",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-022": {
+      "number": 130,
+      "url": "https://github.com/LorenHan/LqCompare/issues/130",
+      "title": "删除条目（回收站优先）",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-023": {
+      "number": 132,
+      "url": "https://github.com/LorenHan/LqCompare/issues/132",
+      "title": "重命名与批量重命名",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-024": {
+      "number": 133,
+      "url": "https://github.com/LorenHan/LqCompare/issues/133",
+      "title": "新建文件夹与文件",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-025": {
+      "number": 134,
+      "url": "https://github.com/LorenHan/LqCompare/issues/134",
+      "title": "镜像（单向覆盖整个目录）",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-026": {
+      "number": 136,
+      "url": "https://github.com/LorenHan/LqCompare/issues/136",
+      "title": "文件属性与权限查看/编辑",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-027": {
+      "number": 137,
+      "url": "https://github.com/LorenHan/LqCompare/issues/137",
+      "title": "文件系统操作的可撤销与操作日志",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-028": {
+      "number": 135,
+      "url": "https://github.com/LorenHan/LqCompare/issues/135",
+      "title": "在系统中定位与打开",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-029": {
+      "number": 138,
+      "url": "https://github.com/LorenHan/LqCompare/issues/138",
+      "title": "双击打开与子视图路由",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-030": {
+      "number": 139,
+      "url": "https://github.com/LorenHan/LqCompare/issues/139",
+      "title": "外部工具与自定义命令",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-031": {
+      "number": 142,
+      "url": "https://github.com/LorenHan/LqCompare/issues/142",
+      "title": "文件名对齐规则（模糊配对）",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-032": {
+      "number": 140,
+      "url": "https://github.com/LorenHan/LqCompare/issues/140",
+      "title": "名称不匹配仍比较内容（对齐覆盖）",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-033": {
+      "number": 141,
+      "url": "https://github.com/LorenHan/LqCompare/issues/141",
+      "title": "压缩包作为文件夹参与比对",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-034": {
+      "number": 143,
+      "url": "https://github.com/LorenHan/LqCompare/issues/143",
+      "title": "扫描进度、取消与增量刷新",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-035": {
+      "number": 144,
+      "url": "https://github.com/LorenHan/LqCompare/issues/144",
+      "title": "文件夹比对的报表导出",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-036": {
+      "number": 145,
+      "url": "https://github.com/LorenHan/LqCompare/issues/145",
+      "title": "WebDAV / 网络位置与长路径支持",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-037": {
+      "number": 146,
+      "url": "https://github.com/LorenHan/LqCompare/issues/146",
+      "title": "符号链接、硬链接与特殊文件处理",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "DIR-038": {
+      "number": 147,
+      "url": "https://github.com/LorenHan/LqCompare/issues/147",
+      "title": "文件夹比对的自动化测试与语料",
+      "module": "文件夹比对",
+      "priority": "P1"
+    },
+    "SYNC-001": {
+      "number": 148,
+      "url": "https://github.com/LorenHan/LqCompare/issues/148",
+      "title": "双向同步会话与三栏预览布局",
+      "module": "文件夹同步",
+      "priority": "P1"
+    },
+    "SYNC-002": {
+      "number": 149,
+      "url": "https://github.com/LorenHan/LqCompare/issues/149",
+      "title": "同步方向与同步规则",
+      "module": "文件夹同步",
+      "priority": "P1"
+    },
+    "SYNC-003": {
+      "number": 150,
+      "url": "https://github.com/LorenHan/LqCompare/issues/150",
+      "title": "同步预览与操作清单交互",
+      "module": "文件夹同步",
+      "priority": "P1"
+    },
+    "SYNC-004": {
+      "number": 153,
+      "url": "https://github.com/LorenHan/LqCompare/issues/153",
+      "title": "同步执行、进度与失败处理",
+      "module": "文件夹同步",
+      "priority": "P1"
+    },
+    "SYNC-005": {
+      "number": 151,
+      "url": "https://github.com/LorenHan/LqCompare/issues/151",
+      "title": "同步删除策略与安全阈值",
+      "module": "文件夹同步",
+      "priority": "P1"
+    },
+    "SYNC-006": {
+      "number": 152,
+      "url": "https://github.com/LorenHan/LqCompare/issues/152",
+      "title": "同步冲突处理",
+      "module": "文件夹同步",
+      "priority": "P1"
+    },
+    "SYNC-007": {
+      "number": 154,
+      "url": "https://github.com/LorenHan/LqCompare/issues/154",
+      "title": "同步后的校验",
+      "module": "文件夹同步",
+      "priority": "P1"
+    },
+    "SYNC-008": {
+      "number": 155,
+      "url": "https://github.com/LorenHan/LqCompare/issues/155",
+      "title": "同步日志与报告",
+      "module": "文件夹同步",
+      "priority": "P1"
+    },
+    "SYNC-009": {
+      "number": 156,
+      "url": "https://github.com/LorenHan/LqCompare/issues/156",
+      "title": "同步会话预设与批量执行",
+      "module": "文件夹同步",
+      "priority": "P1"
+    },
+    "SYNC-010": {
+      "number": 157,
+      "url": "https://github.com/LorenHan/LqCompare/issues/157",
+      "title": "同步的过滤与范围限定",
+      "module": "文件夹同步",
+      "priority": "P1"
+    },
+    "SYNC-011": {
+      "number": 159,
+      "url": "https://github.com/LorenHan/LqCompare/issues/159",
+      "title": "同步的基线快照",
+      "module": "文件夹同步",
+      "priority": "P1"
+    },
+    "SYNC-012": {
+      "number": 357,
+      "url": "https://github.com/LorenHan/LqCompare/issues/357",
+      "title": "同步会话的自动化测试",
+      "module": "文件夹同步",
+      "priority": "P1"
+    },
+    "FMG-001": {
+      "number": 158,
+      "url": "https://github.com/LorenHan/LqCompare/issues/158",
+      "title": "文件夹合并会话与三路布局",
+      "module": "文件夹合并",
+      "priority": "P1"
+    },
+    "FMG-002": {
+      "number": 160,
+      "url": "https://github.com/LorenHan/LqCompare/issues/160",
+      "title": "逐条目合并决策",
+      "module": "文件夹合并",
+      "priority": "P1"
+    },
+    "FMG-003": {
+      "number": 356,
+      "url": "https://github.com/LorenHan/LqCompare/issues/356",
+      "title": "目录级决策传播",
+      "module": "文件夹合并",
+      "priority": "P1"
+    },
+    "FMG-004": {
+      "number": 358,
+      "url": "https://github.com/LorenHan/LqCompare/issues/358",
+      "title": "冲突文件夹与冲突标识",
+      "module": "文件夹合并",
+      "priority": "P1"
+    },
+    "FMG-005": {
+      "number": 359,
+      "url": "https://github.com/LorenHan/LqCompare/issues/359",
+      "title": "合并输出的写回策略与应用",
+      "module": "文件夹合并",
+      "priority": "P1"
+    },
+    "FMG-006": {
+      "number": 161,
+      "url": "https://github.com/LorenHan/LqCompare/issues/161",
+      "title": "文件夹合并预览与模拟执行",
+      "module": "文件夹合并",
+      "priority": "P1"
+    },
+    "FMG-007": {
+      "number": 163,
+      "url": "https://github.com/LorenHan/LqCompare/issues/163",
+      "title": "文件夹合并的批量决策与筛选联动",
+      "module": "文件夹合并",
+      "priority": "P1"
+    },
+    "FMG-008": {
+      "number": 162,
+      "url": "https://github.com/LorenHan/LqCompare/issues/162",
+      "title": "文件夹合并报表与审计",
+      "module": "文件夹合并",
+      "priority": "P1"
+    },
+    "FMG-009": {
+      "number": 164,
+      "url": "https://github.com/LorenHan/LqCompare/issues/164",
+      "title": "文件夹合并的撤销与应用前检查",
+      "module": "文件夹合并",
+      "priority": "P1"
+    },
+    "FMG-010": {
+      "number": 166,
+      "url": "https://github.com/LorenHan/LqCompare/issues/166",
+      "title": "文件夹合并的自动化测试",
+      "module": "文件夹合并",
+      "priority": "P1"
+    },
+    "HEX-001": {
+      "number": 165,
+      "url": "https://github.com/LorenHan/LqCompare/issues/165",
+      "title": "十六进制比对会话与双窗格字节视图",
+      "module": "十六进制",
+      "priority": "P1"
+    },
+    "HEX-002": {
+      "number": 167,
+      "url": "https://github.com/LorenHan/LqCompare/issues/167",
+      "title": "字节地址导航与跳转",
+      "module": "十六进制",
+      "priority": "P1"
+    },
+    "HEX-003": {
+      "number": 168,
+      "url": "https://github.com/LorenHan/LqCompare/issues/168",
+      "title": "差异导航与差异统计",
+      "module": "十六进制",
+      "priority": "P1"
+    },
+    "HEX-004": {
+      "number": 171,
+      "url": "https://github.com/LorenHan/LqCompare/issues/171",
+      "title": "字节编辑与保存",
+      "module": "十六进制",
+      "priority": "P1"
+    },
+    "HEX-005": {
+      "number": 170,
+      "url": "https://github.com/LorenHan/LqCompare/issues/170",
+      "title": "十六进制视图的查找（模式与通配）",
+      "module": "十六进制",
+      "priority": "P1"
+    },
+    "HEX-006": {
+      "number": 169,
+      "url": "https://github.com/LorenHan/LqCompare/issues/169",
+      "title": "结构化解释面板（PE/ELF/PNG 等）",
+      "module": "十六进制",
+      "priority": "P1"
+    },
+    "HEX-007": {
+      "number": 172,
+      "url": "https://github.com/LorenHan/LqCompare/issues/172",
+      "title": "十六进制比对的内容搬运与导出",
+      "module": "十六进制",
+      "priority": "P1"
+    },
+    "HEX-008": {
+      "number": 173,
+      "url": "https://github.com/LorenHan/LqCompare/issues/173",
+      "title": "字节对齐与块大小对齐模式",
+      "module": "十六进制",
+      "priority": "P1"
+    },
+    "HEX-009": {
+      "number": 174,
+      "url": "https://github.com/LorenHan/LqCompare/issues/174",
+      "title": "十六进制视图的着色与显示选项",
+      "module": "十六进制",
+      "priority": "P1"
+    },
+    "HEX-010": {
+      "number": 175,
+      "url": "https://github.com/LorenHan/LqCompare/issues/175",
+      "title": "十六进制比对的测试语料",
+      "module": "十六进制",
+      "priority": "P1"
+    },
+    "DATA-001": {
+      "number": 178,
+      "url": "https://github.com/LorenHan/LqCompare/issues/178",
+      "title": "表格比对会话与网格视图",
+      "module": "表格比对",
+      "priority": "P1"
+    },
+    "DATA-002": {
+      "number": 176,
+      "url": "https://github.com/LorenHan/LqCompare/issues/176",
+      "title": "行对齐（按内容而非行号）",
+      "module": "表格比对",
+      "priority": "P1"
+    },
+    "DATA-003": {
+      "number": 177,
+      "url": "https://github.com/LorenHan/LqCompare/issues/177",
+      "title": "列映射与「比较列」定义",
+      "module": "表格比对",
+      "priority": "P1"
+    },
+    "DATA-004": {
+      "number": 179,
+      "url": "https://github.com/LorenHan/LqCompare/issues/179",
+      "title": "单元格级差异与行级状态",
+      "module": "表格比对",
+      "priority": "P1"
+    },
+    "DATA-005": {
+      "number": 180,
+      "url": "https://github.com/LorenHan/LqCompare/issues/180",
+      "title": "数值列的比较语义",
+      "module": "表格比对",
+      "priority": "P1"
+    },
+    "DATA-006": {
+      "number": 183,
+      "url": "https://github.com/LorenHan/LqCompare/issues/183",
+      "title": "分隔符、编码与表头处理",
+      "module": "表格比对",
+      "priority": "P1"
+    },
+    "DATA-007": {
+      "number": 181,
+      "url": "https://github.com/LorenHan/LqCompare/issues/181",
+      "title": "多工作表与多表格处理",
+      "module": "表格比对",
+      "priority": "P1"
+    },
+    "DATA-008": {
+      "number": 182,
+      "url": "https://github.com/LorenHan/LqCompare/issues/182",
+      "title": "表格视图的列宽、冻结与显示选项",
+      "module": "表格比对",
+      "priority": "P1"
+    },
+    "DATA-009": {
+      "number": 184,
+      "url": "https://github.com/LorenHan/LqCompare/issues/184",
+      "title": "表格数据的复制与导出",
+      "module": "表格比对",
+      "priority": "P1"
+    },
+    "DATA-010": {
+      "number": 185,
+      "url": "https://github.com/LorenHan/LqCompare/issues/185",
+      "title": "表格的编辑与保存",
+      "module": "表格比对",
+      "priority": "P1"
+    },
+    "DATA-011": {
+      "number": 186,
+      "url": "https://github.com/LorenHan/LqCompare/issues/186",
+      "title": "表格比对的报表",
+      "module": "表格比对",
+      "priority": "P1"
+    },
+    "DATA-012": {
+      "number": 187,
+      "url": "https://github.com/LorenHan/LqCompare/issues/187",
+      "title": "表格比对的测试语料",
+      "module": "表格比对",
+      "priority": "P1"
+    },
+    "IMG-001": {
+      "number": 188,
+      "url": "https://github.com/LorenHan/LqCompare/issues/188",
+      "title": "图片比对会话与并排视图",
+      "module": "图片比对",
+      "priority": "P1"
+    },
+    "IMG-002": {
+      "number": 189,
+      "url": "https://github.com/LorenHan/LqCompare/issues/189",
+      "title": "差异可视化方式",
+      "module": "图片比对",
+      "priority": "P1"
+    },
+    "IMG-003": {
+      "number": 190,
+      "url": "https://github.com/LorenHan/LqCompare/issues/190",
+      "title": "像素级容差与颜色容差",
+      "module": "图片比对",
+      "priority": "P1"
+    },
+    "IMG-004": {
+      "number": 191,
+      "url": "https://github.com/LorenHan/LqCompare/issues/191",
+      "title": "缩放、平移与对齐工具",
+      "module": "图片比对",
+      "priority": "P1"
+    },
+    "IMG-005": {
+      "number": 192,
+      "url": "https://github.com/LorenHan/LqCompare/issues/192",
+      "title": "差异导航与差异列表",
+      "module": "图片比对",
+      "priority": "P1"
+    },
+    "IMG-006": {
+      "number": 193,
+      "url": "https://github.com/LorenHan/LqCompare/issues/193",
+      "title": "图片元数据与 EXIF 比对",
+      "module": "图片比对",
+      "priority": "P1"
+    },
+    "IMG-007": {
+      "number": 194,
+      "url": "https://github.com/LorenHan/LqCompare/issues/194",
+      "title": "图片比对的编辑与保存",
+      "module": "图片比对",
+      "priority": "P1"
+    },
+    "IMG-008": {
+      "number": 195,
+      "url": "https://github.com/LorenHan/LqCompare/issues/195",
+      "title": "多帧与动画图片处理",
+      "module": "图片比对",
+      "priority": "P1"
+    },
+    "IMG-009": {
+      "number": 196,
+      "url": "https://github.com/LorenHan/LqCompare/issues/196",
+      "title": "图片比对报表导出",
+      "module": "图片比对",
+      "priority": "P1"
+    },
+    "IMG-010": {
+      "number": 197,
+      "url": "https://github.com/LorenHan/LqCompare/issues/197",
+      "title": "图片比对的测试语料",
+      "module": "图片比对",
+      "priority": "P1"
+    },
+    "MED-001": {
+      "number": 198,
+      "url": "https://github.com/LorenHan/LqCompare/issues/198",
+      "title": "媒体比对会话与标签视图",
+      "module": "媒体比对",
+      "priority": "P1"
+    },
+    "MED-002": {
+      "number": 202,
+      "url": "https://github.com/LorenHan/LqCompare/issues/202",
+      "title": "标签字段的编辑与保存",
+      "module": "媒体比对",
+      "priority": "P1"
+    },
+    "MED-003": {
+      "number": 199,
+      "url": "https://github.com/LorenHan/LqCompare/issues/199",
+      "title": "封面图与附加资源比对",
+      "module": "媒体比对",
+      "priority": "P1"
+    },
+    "MED-004": {
+      "number": 201,
+      "url": "https://github.com/LorenHan/LqCompare/issues/201",
+      "title": "波形与频谱可视化（辅助）",
+      "module": "媒体比对",
+      "priority": "P1"
+    },
+    "MED-005": {
+      "number": 200,
+      "url": "https://github.com/LorenHan/LqCompare/issues/200",
+      "title": "媒体比对报表与批量场景",
+      "module": "媒体比对",
+      "priority": "P1"
+    },
+    "MED-006": {
+      "number": 203,
+      "url": "https://github.com/LorenHan/LqCompare/issues/203",
+      "title": "媒体比对的测试语料",
+      "module": "媒体比对",
+      "priority": "P1"
+    },
+    "REG-001": {
+      "number": 204,
+      "url": "https://github.com/LorenHan/LqCompare/issues/204",
+      "title": "注册表比对会话与树视图",
+      "module": "注册表",
+      "priority": "P1"
+    },
+    "REG-002": {
+      "number": 205,
+      "url": "https://github.com/LorenHan/LqCompare/issues/205",
+      "title": "键值差异判定与呈现",
+      "module": "注册表",
+      "priority": "P1"
+    },
+    "REG-003": {
+      "number": 206,
+      "url": "https://github.com/LorenHan/LqCompare/issues/206",
+      "title": "注册表内容的复制与导出",
+      "module": "注册表",
+      "priority": "P1"
+    },
+    "REG-004": {
+      "number": 208,
+      "url": "https://github.com/LorenHan/LqCompare/issues/208",
+      "title": "注册表比对报表",
+      "module": "注册表",
+      "priority": "P1"
+    },
+    "REG-005": {
+      "number": 209,
+      "url": "https://github.com/LorenHan/LqCompare/issues/209",
+      "title": "注册表比对的权限与安全边界",
+      "module": "注册表",
+      "priority": "P1"
+    },
+    "REG-006": {
+      "number": 207,
+      "url": "https://github.com/LorenHan/LqCompare/issues/207",
+      "title": "注册表比对的测试",
+      "module": "注册表",
+      "priority": "P1"
+    },
+    "VER-001": {
+      "number": 210,
+      "url": "https://github.com/LorenHan/LqCompare/issues/210",
+      "title": "可执行文件版本资源比对",
+      "module": "版本比对",
+      "priority": "P1"
+    },
+    "VER-002": {
+      "number": 211,
+      "url": "https://github.com/LorenHan/LqCompare/issues/211",
+      "title": "PE 头部与依赖信息比对",
+      "module": "版本比对",
+      "priority": "P1"
+    },
+    "VER-003": {
+      "number": 212,
+      "url": "https://github.com/LorenHan/LqCompare/issues/212",
+      "title": "版本号语义化比较",
+      "module": "版本比对",
+      "priority": "P1"
+    },
+    "VER-004": {
+      "number": 213,
+      "url": "https://github.com/LorenHan/LqCompare/issues/213",
+      "title": "批量版本比对与清单导出",
+      "module": "版本比对",
+      "priority": "P1"
+    },
+    "VER-005": {
+      "number": 214,
+      "url": "https://github.com/LorenHan/LqCompare/issues/214",
+      "title": "版本比对的测试",
+      "module": "版本比对",
+      "priority": "P1"
+    },
+    "ARC-001": {
+      "number": 216,
+      "url": "https://github.com/LorenHan/LqCompare/issues/216",
+      "title": "压缩包读取与条目枚举",
+      "module": "压缩包",
+      "priority": "P1"
+    },
+    "ARC-002": {
+      "number": 215,
+      "url": "https://github.com/LorenHan/LqCompare/issues/215",
+      "title": "归档内文件比对",
+      "module": "压缩包",
+      "priority": "P1"
+    },
+    "ARC-003": {
+      "number": 217,
+      "url": "https://github.com/LorenHan/LqCompare/issues/217",
+      "title": "归档结构差异比对",
+      "module": "压缩包",
+      "priority": "P1"
+    },
+    "ARC-004": {
+      "number": 218,
+      "url": "https://github.com/LorenHan/LqCompare/issues/218",
+      "title": "归档的写入与修改",
+      "module": "压缩包",
+      "priority": "P1"
+    },
+    "ARC-005": {
+      "number": 219,
+      "url": "https://github.com/LorenHan/LqCompare/issues/219",
+      "title": "归档专项比对：压缩率与冗余分析",
+      "module": "压缩包",
+      "priority": "P1"
+    },
+    "ARC-006": {
+      "number": 220,
+      "url": "https://github.com/LorenHan/LqCompare/issues/220",
+      "title": "归档路径安全与兼容性",
+      "module": "压缩包",
+      "priority": "P1"
+    },
+    "ARC-007": {
+      "number": 221,
+      "url": "https://github.com/LorenHan/LqCompare/issues/221",
+      "title": "归档比对的命令行与自动化",
+      "module": "压缩包",
+      "priority": "P1"
+    },
+    "ARC-008": {
+      "number": 223,
+      "url": "https://github.com/LorenHan/LqCompare/issues/223",
+      "title": "归档比对的测试与安全语料",
+      "module": "压缩包",
+      "priority": "P1"
+    },
+    "EDV-001": {
+      "number": 222,
+      "url": "https://github.com/LorenHan/LqCompare/issues/222",
+      "title": "单窗格文本编辑视图",
+      "module": "编辑视图",
+      "priority": "P1"
+    },
+    "EDV-002": {
+      "number": 224,
+      "url": "https://github.com/LorenHan/LqCompare/issues/224",
+      "title": "补丁文件查看（Text Patch）",
+      "module": "编辑视图",
+      "priority": "P1"
+    },
+    "EDV-003": {
+      "number": 225,
+      "url": "https://github.com/LorenHan/LqCompare/issues/225",
+      "title": "应用补丁",
+      "module": "编辑视图",
+      "priority": "P1"
+    },
+    "EDV-004": {
+      "number": 226,
+      "url": "https://github.com/LorenHan/LqCompare/issues/226",
+      "title": "生成补丁文件",
+      "module": "编辑视图",
+      "priority": "P1"
+    },
+    "EDV-005": {
+      "number": 227,
+      "url": "https://github.com/LorenHan/LqCompare/issues/227",
+      "title": "编辑视图与补丁视图的测试",
+      "module": "编辑视图",
+      "priority": "P1"
+    },
+    "FILT-001": {
+      "number": 228,
+      "url": "https://github.com/LorenHan/LqCompare/issues/228",
+      "title": "文件掩码语法与解析器",
+      "module": "过滤规则",
+      "priority": "P1"
+    },
+    "FILT-002": {
+      "number": 229,
+      "url": "https://github.com/LorenHan/LqCompare/issues/229",
+      "title": "名称过滤器（正则与实体名）",
+      "module": "过滤规则",
+      "priority": "P1"
+    },
+    "FILT-003": {
+      "number": 230,
+      "url": "https://github.com/LorenHan/LqCompare/issues/230",
+      "title": "属性过滤（大小 / 时间 / 属性位）",
+      "module": "过滤规则",
+      "priority": "P1"
+    },
+    "FILT-004": {
+      "number": 231,
+      "url": "https://github.com/LorenHan/LqCompare/issues/231",
+      "title": "内容过滤器（行过滤与关键字节）",
+      "module": "过滤规则",
+      "priority": "P1"
+    },
+    "FILT-005": {
+      "number": 233,
+      "url": "https://github.com/LorenHan/LqCompare/issues/233",
+      "title": "过滤器的层级与作用域",
+      "module": "过滤规则",
+      "priority": "P1"
+    },
+    "FILT-006": {
+      "number": 232,
+      "url": "https://github.com/LorenHan/LqCompare/issues/232",
+      "title": "过滤结果的可见性与批量操作安全",
+      "module": "过滤规则",
+      "priority": "P1"
+    },
+    "FILT-007": {
+      "number": 234,
+      "url": "https://github.com/LorenHan/LqCompare/issues/234",
+      "title": "掩码与过滤器预设库",
+      "module": "过滤规则",
+      "priority": "P1"
+    },
+    "FILT-008": {
+      "number": 235,
+      "url": "https://github.com/LorenHan/LqCompare/issues/235",
+      "title": "临时过滤与快速排除",
+      "module": "过滤规则",
+      "priority": "P1"
+    },
+    "FILT-009": {
+      "number": 236,
+      "url": "https://github.com/LorenHan/LqCompare/issues/236",
+      "title": "过滤的性能与索引",
+      "module": "过滤规则",
+      "priority": "P1"
+    },
+    "FILT-010": {
+      "number": 237,
+      "url": "https://github.com/LorenHan/LqCompare/issues/237",
+      "title": "子目录级别的过滤与展开排除",
+      "module": "过滤规则",
+      "priority": "P1"
+    },
+    "FILT-011": {
+      "number": 238,
+      "url": "https://github.com/LorenHan/LqCompare/issues/238",
+      "title": "掩码语法与过滤行为的文档与帮助",
+      "module": "过滤规则",
+      "priority": "P1"
+    },
+    "FILT-012": {
+      "number": 239,
+      "url": "https://github.com/LorenHan/LqCompare/issues/239",
+      "title": "过滤规则的测试语料",
+      "module": "过滤规则",
+      "priority": "P1"
+    },
+    "FMT-001": {
+      "number": 240,
+      "url": "https://github.com/LorenHan/LqCompare/issues/240",
+      "title": "文件格式定义模型与存储",
+      "module": "文件格式",
+      "priority": "P0"
+    },
+    "FMT-002": {
+      "number": 360,
+      "url": "https://github.com/LorenHan/LqCompare/issues/360",
+      "title": "格式管理界面",
+      "module": "文件格式",
+      "priority": "P0"
+    },
+    "FMT-003": {
+      "number": 361,
+      "url": "https://github.com/LorenHan/LqCompare/issues/361",
+      "title": "文本格式：语法定义",
+      "module": "文件格式",
+      "priority": "P1"
+    },
+    "FMT-004": {
+      "number": 363,
+      "url": "https://github.com/LorenHan/LqCompare/issues/363",
+      "title": "文本格式：转换（比较前的文本预处理）",
+      "module": "文件格式",
+      "priority": "P1"
+    },
+    "FMT-005": {
+      "number": 362,
+      "url": "https://github.com/LorenHan/LqCompare/issues/362",
+      "title": "数据格式与表格列定义",
+      "module": "文件格式",
+      "priority": "P1"
+    },
+    "FMT-006": {
+      "number": 241,
+      "url": "https://github.com/LorenHan/LqCompare/issues/241",
+      "title": "图片格式定义",
+      "module": "文件格式",
+      "priority": "P1"
+    },
+    "FMT-007": {
+      "number": 242,
+      "url": "https://github.com/LorenHan/LqCompare/issues/242",
+      "title": "归档格式定义的识别与处理",
+      "module": "文件格式",
+      "priority": "P1"
+    },
+    "FMT-008": {
+      "number": 244,
+      "url": "https://github.com/LorenHan/LqCompare/issues/244",
+      "title": "格式关联覆盖（Association Override）",
+      "module": "文件格式",
+      "priority": "P1"
+    },
+    "FMT-009": {
+      "number": 243,
+      "url": "https://github.com/LorenHan/LqCompare/issues/243",
+      "title": "未知扩展名的兜底策略",
+      "module": "文件格式",
+      "priority": "P1"
+    },
+    "FMT-010": {
+      "number": 245,
+      "url": "https://github.com/LorenHan/LqCompare/issues/245",
+      "title": "格式定义的内置库",
+      "module": "文件格式",
+      "priority": "P1"
+    },
+    "FMT-011": {
+      "number": 246,
+      "url": "https://github.com/LorenHan/LqCompare/issues/246",
+      "title": "格式定义的导入导出与共享",
+      "module": "文件格式",
+      "priority": "P1"
+    },
+    "FMT-012": {
+      "number": 247,
+      "url": "https://github.com/LorenHan/LqCompare/issues/247",
+      "title": "格式定义引擎的测试",
+      "module": "文件格式",
+      "priority": "P1"
+    },
+    "RPT-001": {
+      "number": 248,
+      "url": "https://github.com/LorenHan/LqCompare/issues/248",
+      "title": "报表引擎与布局模型",
+      "module": "报表导出",
+      "priority": "P1"
+    },
+    "RPT-002": {
+      "number": 249,
+      "url": "https://github.com/LorenHan/LqCompare/issues/249",
+      "title": "报表输出目标",
+      "module": "报表导出",
+      "priority": "P1"
+    },
+    "RPT-003": {
+      "number": 250,
+      "url": "https://github.com/LorenHan/LqCompare/issues/250",
+      "title": "报表选项（包含范围与显示项）",
+      "module": "报表导出",
+      "priority": "P1"
+    },
+    "RPT-004": {
+      "number": 251,
+      "url": "https://github.com/LorenHan/LqCompare/issues/251",
+      "title": "打印与页面设置",
+      "module": "报表导出",
+      "priority": "P1"
+    },
+    "RPT-005": {
+      "number": 252,
+      "url": "https://github.com/LorenHan/LqCompare/issues/252",
+      "title": "统计类报表",
+      "module": "报表导出",
+      "priority": "P1"
+    },
+    "RPT-006": {
+      "number": 253,
+      "url": "https://github.com/LorenHan/LqCompare/issues/253",
+      "title": "差异摘要报表（可读性优先）",
+      "module": "报表导出",
+      "priority": "P1"
+    },
+    "RPT-007": {
+      "number": 254,
+      "url": "https://github.com/LorenHan/LqCompare/issues/254",
+      "title": "HTML 报表的交互能力",
+      "module": "报表导出",
+      "priority": "P1"
+    },
+    "RPT-008": {
+      "number": 257,
+      "url": "https://github.com/LorenHan/LqCompare/issues/257",
+      "title": "报表的编码与本地化",
+      "module": "报表导出",
+      "priority": "P1"
+    },
+    "RPT-009": {
+      "number": 255,
+      "url": "https://github.com/LorenHan/LqCompare/issues/255",
+      "title": "报表的性能与流式生成",
+      "module": "报表导出",
+      "priority": "P1"
+    },
+    "RPT-010": {
+      "number": 256,
+      "url": "https://github.com/LorenHan/LqCompare/issues/256",
+      "title": "报表的自动化调用",
+      "module": "报表导出",
+      "priority": "P1"
+    },
+    "RPT-011": {
+      "number": 258,
+      "url": "https://github.com/LorenHan/LqCompare/issues/258",
+      "title": "报表模板与自定义",
+      "module": "报表导出",
+      "priority": "P1"
+    },
+    "RPT-012": {
+      "number": 261,
+      "url": "https://github.com/LorenHan/LqCompare/issues/261",
+      "title": "报表模块的测试",
+      "module": "报表导出",
+      "priority": "P1"
+    },
+    "PAT-001": {
+      "number": 259,
+      "url": "https://github.com/LorenHan/LqCompare/issues/259",
+      "title": "补丁生成（diff 输出）",
+      "module": "补丁",
+      "priority": "P1"
+    },
+    "PAT-002": {
+      "number": 260,
+      "url": "https://github.com/LorenHan/LqCompare/issues/260",
+      "title": "补丁应用（视角为「应用」而非「查看」）",
+      "module": "补丁",
+      "priority": "P1"
+    },
+    "PAT-003": {
+      "number": 262,
+      "url": "https://github.com/LorenHan/LqCompare/issues/262",
+      "title": "补丁格式兼容性",
+      "module": "补丁",
+      "priority": "P1"
+    },
+    "PAT-004": {
+      "number": 263,
+      "url": "https://github.com/LorenHan/LqCompare/issues/263",
+      "title": "补丁与版本控制系统集成",
+      "module": "补丁",
+      "priority": "P1"
+    },
+    "PAT-005": {
+      "number": 264,
+      "url": "https://github.com/LorenHan/LqCompare/issues/264",
+      "title": "补丁相关的安全与确认",
+      "module": "补丁",
+      "priority": "P1"
+    },
+    "PAT-006": {
+      "number": 265,
+      "url": "https://github.com/LorenHan/LqCompare/issues/265",
+      "title": "补丁模块的测试",
+      "module": "补丁",
+      "priority": "P1"
+    },
+    "SNAP-001": {
+      "number": 266,
+      "url": "https://github.com/LorenHan/LqCompare/issues/266",
+      "title": "快照生成与存储",
+      "module": "快照",
+      "priority": "P1"
+    },
+    "SNAP-002": {
+      "number": 268,
+      "url": "https://github.com/LorenHan/LqCompare/issues/268",
+      "title": "快照作为比较数据源",
+      "module": "快照",
+      "priority": "P1"
+    },
+    "SNAP-003": {
+      "number": 267,
+      "url": "https://github.com/LorenHan/LqCompare/issues/267",
+      "title": "快照对比与差异报告",
+      "module": "快照",
+      "priority": "P1"
+    },
+    "SNAP-004": {
+      "number": 269,
+      "url": "https://github.com/LorenHan/LqCompare/issues/269",
+      "title": "快照管理",
+      "module": "快照",
+      "priority": "P1"
+    },
+    "SNAP-005": {
+      "number": 270,
+      "url": "https://github.com/LorenHan/LqCompare/issues/270",
+      "title": "快照驱动的同步基线（与 SYNC 联动）",
+      "module": "快照",
+      "priority": "P1"
+    },
+    "SNAP-006": {
+      "number": 271,
+      "url": "https://github.com/LorenHan/LqCompare/issues/271",
+      "title": "快照模块的测试",
+      "module": "快照",
+      "priority": "P1"
+    },
+    "VCS-001": {
+      "number": 272,
+      "url": "https://github.com/LorenHan/LqCompare/issues/272",
+      "title": "版本控制后端抽象层",
+      "module": "版本控制",
+      "priority": "P0"
+    },
+    "VCS-002": {
+      "number": 274,
+      "url": "https://github.com/LorenHan/LqCompare/issues/274",
+      "title": "与 HEAD 比对",
+      "module": "版本控制",
+      "priority": "P0"
+    },
+    "VCS-003": {
+      "number": 273,
+      "url": "https://github.com/LorenHan/LqCompare/issues/273",
+      "title": "比较两个修订",
+      "module": "版本控制",
+      "priority": "P1"
+    },
+    "VCS-004": {
+      "number": 276,
+      "url": "https://github.com/LorenHan/LqCompare/issues/276",
+      "title": "比较两个分支或标签",
+      "module": "版本控制",
+      "priority": "P1"
+    },
+    "VCS-005": {
+      "number": 275,
+      "url": "https://github.com/LorenHan/LqCompare/issues/275",
+      "title": "工作副本状态列",
+      "module": "版本控制",
+      "priority": "P1"
+    },
+    "VCS-006": {
+      "number": 277,
+      "url": "https://github.com/LorenHan/LqCompare/issues/277",
+      "title": "提交日志对话框",
+      "module": "版本控制",
+      "priority": "P1"
+    },
+    "VCS-007": {
+      "number": 278,
+      "url": "https://github.com/LorenHan/LqCompare/issues/278",
+      "title": "日志的图形列与引用徽标",
+      "module": "版本控制",
+      "priority": "P1"
+    },
+    "VCS-008": {
+      "number": 279,
+      "url": "https://github.com/LorenHan/LqCompare/issues/279",
+      "title": "日志过滤与搜索",
+      "module": "版本控制",
+      "priority": "P1"
+    },
+    "VCS-009": {
+      "number": 280,
+      "url": "https://github.com/LorenHan/LqCompare/issues/280",
+      "title": "日志中的变更文件列表",
+      "module": "版本控制",
+      "priority": "P1"
+    },
+    "VCS-010": {
+      "number": 281,
+      "url": "https://github.com/LorenHan/LqCompare/issues/281",
+      "title": "从日志打开比对",
+      "module": "版本控制",
+      "priority": "P1"
+    },
+    "VCS-011": {
+      "number": 282,
+      "url": "https://github.com/LorenHan/LqCompare/issues/282",
+      "title": "修订图（Revision Graph）",
+      "module": "版本控制",
+      "priority": "P1"
+    },
+    "VCS-012": {
+      "number": 283,
+      "url": "https://github.com/LorenHan/LqCompare/issues/283",
+      "title": "逐行追溯（Blame）",
+      "module": "版本控制",
+      "priority": "P1"
+    },
+    "VCS-013": {
+      "number": 284,
+      "url": "https://github.com/LorenHan/LqCompare/issues/284",
+      "title": "追溯视图的着色与交互",
+      "module": "版本控制",
+      "priority": "P1"
+    },
+    "VCS-014": {
+      "number": 285,
+      "url": "https://github.com/LorenHan/LqCompare/issues/285",
+      "title": "提交对话框的文件列表与差异预览",
+      "module": "版本控制",
+      "priority": "P1"
+    },
+    "VCS-015": {
+      "number": 286,
+      "url": "https://github.com/LorenHan/LqCompare/issues/286",
+      "title": "冲突解决工作流",
+      "module": "版本控制",
+      "priority": "P1"
+    },
+    "VCS-016": {
+      "number": 287,
+      "url": "https://github.com/LorenHan/LqCompare/issues/287",
+      "title": "外部版本控制工具的协作",
+      "module": "版本控制",
+      "priority": "P1"
+    },
+    "VCS-017": {
+      "number": 288,
+      "url": "https://github.com/LorenHan/LqCompare/issues/288",
+      "title": "多仓库、子模块与工作树",
+      "module": "版本控制",
+      "priority": "P1"
+    },
+    "VCS-018": {
+      "number": 289,
+      "url": "https://github.com/LorenHan/LqCompare/issues/289",
+      "title": "版本控制集成的配置与降级",
+      "module": "版本控制",
+      "priority": "P1"
+    },
+    "VCS-019": {
+      "number": 291,
+      "url": "https://github.com/LorenHan/LqCompare/issues/291",
+      "title": "版本控制模块的测试",
+      "module": "版本控制",
+      "priority": "P1"
+    },
+    "CLI-001": {
+      "number": 290,
+      "url": "https://github.com/LorenHan/LqCompare/issues/290",
+      "title": "命令行入口与参数解析",
+      "module": "命令行",
+      "priority": "P1"
+    },
+    "CLI-002": {
+      "number": 292,
+      "url": "https://github.com/LorenHan/LqCompare/issues/292",
+      "title": "会话类型与视图选择开关",
+      "module": "命令行",
+      "priority": "P1"
+    },
+    "CLI-003": {
+      "number": 293,
+      "url": "https://github.com/LorenHan/LqCompare/issues/293",
+      "title": "比较规则与选项的命令行覆盖",
+      "module": "命令行",
+      "priority": "P1"
+    },
+    "CLI-004": {
+      "number": 295,
+      "url": "https://github.com/LorenHan/LqCompare/issues/295",
+      "title": "静默模式与返回码语义",
+      "module": "命令行",
+      "priority": "P1"
+    },
+    "CLI-005": {
+      "number": 294,
+      "url": "https://github.com/LorenHan/LqCompare/issues/294",
+      "title": "只读与只写侧控制",
+      "module": "命令行",
+      "priority": "P1"
+    },
+    "CLI-006": {
+      "number": 296,
+      "url": "https://github.com/LorenHan/LqCompare/issues/296",
+      "title": "输出重定向与日志",
+      "module": "命令行",
+      "priority": "P1"
+    },
+    "CLI-007": {
+      "number": 297,
+      "url": "https://github.com/LorenHan/LqCompare/issues/297",
+      "title": "命令行调用已运行实例",
+      "module": "命令行",
+      "priority": "P1"
+    },
+    "CLI-008": {
+      "number": 299,
+      "url": "https://github.com/LorenHan/LqCompare/issues/299",
+      "title": "命令行报表生成",
+      "module": "命令行",
+      "priority": "P1"
+    },
+    "CLI-009": {
+      "number": 298,
+      "url": "https://github.com/LorenHan/LqCompare/issues/298",
+      "title": "脚本文件引用",
+      "module": "命令行",
+      "priority": "P1"
+    },
+    "CLI-010": {
+      "number": 300,
+      "url": "https://github.com/LorenHan/LqCompare/issues/300",
+      "title": "路径参数与通配展开",
+      "module": "命令行",
+      "priority": "P1"
+    },
+    "CLI-011": {
+      "number": 301,
+      "url": "https://github.com/LorenHan/LqCompare/issues/301",
+      "title": "命令行的帮助与发现能力",
+      "module": "命令行",
+      "priority": "P1"
+    },
+    "CLI-012": {
+      "number": 303,
+      "url": "https://github.com/LorenHan/LqCompare/issues/303",
+      "title": "命令行模块的测试",
+      "module": "命令行",
+      "priority": "P1"
+    },
+    "SCR-001": {
+      "number": 302,
+      "url": "https://github.com/LorenHan/LqCompare/issues/302",
+      "title": "脚本引擎与脚本语法",
+      "module": "脚本自动化",
+      "priority": "P1"
+    },
+    "SCR-002": {
+      "number": 304,
+      "url": "https://github.com/LorenHan/LqCompare/issues/304",
+      "title": "脚本命令：数据源与比较",
+      "module": "脚本自动化",
+      "priority": "P1"
+    },
+    "SCR-003": {
+      "number": 305,
+      "url": "https://github.com/LorenHan/LqCompare/issues/305",
+      "title": "脚本命令：文件操作与同步",
+      "module": "脚本自动化",
+      "priority": "P1"
+    },
+    "SCR-004": {
+      "number": 306,
+      "url": "https://github.com/LorenHan/LqCompare/issues/306",
+      "title": "脚本变量与参数",
+      "module": "脚本自动化",
+      "priority": "P1"
+    },
+    "SCR-005": {
+      "number": 309,
+      "url": "https://github.com/LorenHan/LqCompare/issues/309",
+      "title": "脚本控制流与条件",
+      "module": "脚本自动化",
+      "priority": "P1"
+    },
+    "SCR-006": {
+      "number": 307,
+      "url": "https://github.com/LorenHan/LqCompare/issues/307",
+      "title": "脚本错误处理与返回码",
+      "module": "脚本自动化",
+      "priority": "P1"
+    },
+    "SCR-007": {
+      "number": 308,
+      "url": "https://github.com/LorenHan/LqCompare/issues/308",
+      "title": "脚本的日志与审计",
+      "module": "脚本自动化",
+      "priority": "P1"
+    },
+    "SCR-008": {
+      "number": 310,
+      "url": "https://github.com/LorenHan/LqCompare/issues/310",
+      "title": "脚本调度与定时执行",
+      "module": "脚本自动化",
+      "priority": "P1"
+    },
+    "SCR-009": {
+      "number": 311,
+      "url": "https://github.com/LorenHan/LqCompare/issues/311",
+      "title": "脚本的录制与生成（辅助能力）",
+      "module": "脚本自动化",
+      "priority": "P1"
+    },
+    "SCR-010": {
+      "number": 312,
+      "url": "https://github.com/LorenHan/LqCompare/issues/312",
+      "title": "脚本模块的测试",
+      "module": "脚本自动化",
+      "priority": "P1"
+    },
+    "OPT-001": {
+      "number": 313,
+      "url": "https://github.com/LorenHan/LqCompare/issues/313",
+      "title": "程序选项对话框框架",
+      "module": "选项外观",
+      "priority": "P1"
+    },
+    "OPT-002": {
+      "number": 314,
+      "url": "https://github.com/LorenHan/LqCompare/issues/314",
+      "title": "常规选项",
+      "module": "选项外观",
+      "priority": "P1"
+    },
+    "OPT-003": {
+      "number": 315,
+      "url": "https://github.com/LorenHan/LqCompare/issues/315",
+      "title": "比较规则的默认值选项",
+      "module": "选项外观",
+      "priority": "P1"
+    },
+    "OPT-004": {
+      "number": 316,
+      "url": "https://github.com/LorenHan/LqCompare/issues/316",
+      "title": "显示与外观选项",
+      "module": "选项外观",
+      "priority": "P1"
+    },
+    "OPT-005": {
+      "number": 317,
+      "url": "https://github.com/LorenHan/LqCompare/issues/317",
+      "title": "文件操作选项",
+      "module": "选项外观",
+      "priority": "P1"
+    },
+    "OPT-006": {
+      "number": 318,
+      "url": "https://github.com/LorenHan/LqCompare/issues/318",
+      "title": "文件夹视图选项",
+      "module": "选项外观",
+      "priority": "P1"
+    },
+    "OPT-007": {
+      "number": 319,
+      "url": "https://github.com/LorenHan/LqCompare/issues/319",
+      "title": "文本编辑与视图选项",
+      "module": "选项外观",
+      "priority": "P1"
+    },
+    "OPT-008": {
+      "number": 320,
+      "url": "https://github.com/LorenHan/LqCompare/issues/320",
+      "title": "报表与打印选项",
+      "module": "选项外观",
+      "priority": "P1"
+    },
+    "OPT-009": {
+      "number": 364,
+      "url": "https://github.com/LorenHan/LqCompare/issues/364",
+      "title": "网络与连接配置选项",
+      "module": "选项外观",
+      "priority": "P1"
+    },
+    "OPT-010": {
+      "number": 365,
+      "url": "https://github.com/LorenHan/LqCompare/issues/365",
+      "title": "日志与诊断选项",
+      "module": "选项外观",
+      "priority": "P1"
+    },
+    "OPT-011": {
+      "number": 367,
+      "url": "https://github.com/LorenHan/LqCompare/issues/367",
+      "title": "自定义命令与快捷键管理界面",
+      "module": "选项外观",
+      "priority": "P1"
+    },
+    "OPT-012": {
+      "number": 366,
+      "url": "https://github.com/LorenHan/LqCompare/issues/366",
+      "title": "设置存储、便携模式与重置",
+      "module": "选项外观",
+      "priority": "P1"
+    },
+    "OPT-013": {
+      "number": 321,
+      "url": "https://github.com/LorenHan/LqCompare/issues/321",
+      "title": "全局设置的导入与导出",
+      "module": "选项外观",
+      "priority": "P1"
+    },
+    "OPT-014": {
+      "number": 323,
+      "url": "https://github.com/LorenHan/LqCompare/issues/323",
+      "title": "选项模块的测试",
+      "module": "选项外观",
+      "priority": "P1"
+    },
+    "PLAT-001": {
+      "number": 322,
+      "url": "https://github.com/LorenHan/LqCompare/issues/322",
+      "title": "构建系统与多平台编译",
+      "module": "平台性能",
+      "priority": "P0"
+    },
+    "PLAT-002": {
+      "number": 325,
+      "url": "https://github.com/LorenHan/LqCompare/issues/325",
+      "title": "文件系统服务抽象层",
+      "module": "平台性能",
+      "priority": "P0"
+    },
+    "PLAT-003": {
+      "number": 324,
+      "url": "https://github.com/LorenHan/LqCompare/issues/324",
+      "title": "回收站与可逆删除服务",
+      "module": "平台性能",
+      "priority": "P1"
+    },
+    "PLAT-004": {
+      "number": 329,
+      "url": "https://github.com/LorenHan/LqCompare/issues/329",
+      "title": "系统图标与文件类型识别服务",
+      "module": "平台性能",
+      "priority": "P1"
+    },
+    "PLAT-005": {
+      "number": 326,
+      "url": "https://github.com/LorenHan/LqCompare/issues/326",
+      "title": "Shell 集成（右键菜单与文件关联）",
+      "module": "平台性能",
+      "priority": "P1"
+    },
+    "PLAT-006": {
+      "number": 327,
+      "url": "https://github.com/LorenHan/LqCompare/issues/327",
+      "title": "单实例与进程间通信",
+      "module": "平台性能",
+      "priority": "P1"
+    },
+    "PLAT-007": {
+      "number": 328,
+      "url": "https://github.com/LorenHan/LqCompare/issues/328",
+      "title": "Unicode、长路径与特殊文件名",
+      "module": "平台性能",
+      "priority": "P1"
+    },
+    "PLAT-008": {
+      "number": 330,
+      "url": "https://github.com/LorenHan/LqCompare/issues/330",
+      "title": "权限、只读与文件占用处理",
+      "module": "平台性能",
+      "priority": "P1"
+    },
+    "PLAT-009": {
+      "number": 331,
+      "url": "https://github.com/LorenHan/LqCompare/issues/331",
+      "title": "性能基准与回归护栏",
+      "module": "平台性能",
+      "priority": "P1"
+    },
+    "PLAT-010": {
+      "number": 332,
+      "url": "https://github.com/LorenHan/LqCompare/issues/332",
+      "title": "平台差异的测试矩阵",
+      "module": "平台性能",
+      "priority": "P1"
+    },
+    "ENG-001": {
+      "number": 333,
+      "url": "https://github.com/LorenHan/LqCompare/issues/333",
+      "title": "工程骨架与分层依赖校验",
+      "module": "工程质量",
+      "priority": "P0"
+    },
+    "ENG-002": {
+      "number": 334,
+      "url": "https://github.com/LorenHan/LqCompare/issues/334",
+      "title": "模块化构建与依赖守卫",
+      "module": "工程质量",
+      "priority": "P0"
+    },
+    "ENG-003": {
+      "number": 335,
+      "url": "https://github.com/LorenHan/LqCompare/issues/335",
+      "title": "测试框架与测试运行器",
+      "module": "工程质量",
+      "priority": "P0"
+    },
+    "ENG-004": {
+      "number": 336,
+      "url": "https://github.com/LorenHan/LqCompare/issues/336",
+      "title": "持续集成流水线",
+      "module": "工程质量",
+      "priority": "P0"
+    },
+    "ENG-005": {
+      "number": 337,
+      "url": "https://github.com/LorenHan/LqCompare/issues/337",
+      "title": "代码风格与静态分析",
+      "module": "工程质量",
+      "priority": "P1"
+    },
+    "ENG-006": {
+      "number": 338,
+      "url": "https://github.com/LorenHan/LqCompare/issues/338",
+      "title": "日志与诊断基础设施",
+      "module": "工程质量",
+      "priority": "P1"
+    },
+    "ENG-007": {
+      "number": 339,
+      "url": "https://github.com/LorenHan/LqCompare/issues/339",
+      "title": "崩溃捕获与最小复现机制",
+      "module": "工程质量",
+      "priority": "P1"
+    },
+    "ENG-008": {
+      "number": 341,
+      "url": "https://github.com/LorenHan/LqCompare/issues/341",
+      "title": "国际化提取与校验流水线",
+      "module": "工程质量",
+      "priority": "P1"
+    },
+    "ENG-009": {
+      "number": 340,
+      "url": "https://github.com/LorenHan/LqCompare/issues/340",
+      "title": "图标与资源校验流水线",
+      "module": "工程质量",
+      "priority": "P1"
+    },
+    "ENG-010": {
+      "number": 342,
+      "url": "https://github.com/LorenHan/LqCompare/issues/342",
+      "title": "测试覆盖率与关键路径护栏",
+      "module": "工程质量",
+      "priority": "P1"
+    },
+    "ENG-011": {
+      "number": 343,
+      "url": "https://github.com/LorenHan/LqCompare/issues/343",
+      "title": "交付打包与分发",
+      "module": "工程质量",
+      "priority": "P1"
+    },
+    "ENG-012": {
+      "number": 344,
+      "url": "https://github.com/LorenHan/LqCompare/issues/344",
+      "title": "版本号、构建信息与更新检查",
+      "module": "工程质量",
+      "priority": "P1"
+    },
+    "ENG-013": {
+      "number": 345,
+      "url": "https://github.com/LorenHan/LqCompare/issues/345",
+      "title": "第三方依赖与许可证合规",
+      "module": "工程质量",
+      "priority": "P1"
+    },
+    "ENG-014": {
+      "number": 368,
+      "url": "https://github.com/LorenHan/LqCompare/issues/368",
+      "title": "规格数据层与 issue 发布链路",
+      "module": "工程质量",
+      "priority": "P1"
+    },
+    "ENG-015": {
+      "number": 369,
+      "url": "https://github.com/LorenHan/LqCompare/issues/369",
+      "title": "Issue 模板与规格状态标签工作流",
+      "module": "工程质量",
+      "priority": "P1"
+    },
+    "DOC-001": {
+      "number": 346,
+      "url": "https://github.com/LorenHan/LqCompare/issues/346",
+      "title": "用户手册",
+      "module": "文档",
+      "priority": "P0"
+    },
+    "DOC-002": {
+      "number": 347,
+      "url": "https://github.com/LorenHan/LqCompare/issues/347",
+      "title": "命令行与脚本参考",
+      "module": "文档",
+      "priority": "P1"
+    },
+    "DOC-003": {
+      "number": 348,
+      "url": "https://github.com/LorenHan/LqCompare/issues/348",
+      "title": "架构与开发文档",
+      "module": "文档",
+      "priority": "P1"
+    },
+    "DOC-004": {
+      "number": 349,
+      "url": "https://github.com/LorenHan/LqCompare/issues/349",
+      "title": "快捷键、掩码与语法速查表",
+      "module": "文档",
+      "priority": "P1"
+    },
+    "DOC-005": {
+      "number": 350,
+      "url": "https://github.com/LorenHan/LqCompare/issues/350",
+      "title": "变更日志与发布说明",
+      "module": "文档",
+      "priority": "P1"
+    },
+    "DOC-006": {
+      "number": 351,
+      "url": "https://github.com/LorenHan/LqCompare/issues/351",
+      "title": "与竞品的对标差异文档",
+      "module": "文档",
+      "priority": "P1"
+    }
+  }
+}
