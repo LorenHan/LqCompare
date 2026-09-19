@@ -9,7 +9,7 @@
 
 ### 新增
 
-- **产品规格**：367 个条目，覆盖 27 个功能域，全部发布为 GitHub issue（DOC-005 / `docs/PRD-actions.md`）
+- **产品规格**：369 个条目，覆盖 27 个功能域，全部发布为 GitHub issue（DOC-005 / `docs/PRD-actions.md`）
 - **竞品测绘**：Beyond Compare 5（38 个功能域 / 1682 个功能点）与 TortoiseGit（1166 个功能点）两份对标文档（DOC-006 / `docs/research/`）
 - **工程骨架**：Qt 5.15.2 + C++17 + qmake，`App → Views → Services` 分层，首次 clone 即可编译运行（ENG-001、ENG-002、PLAT-001）
 - **Ribbon 界面**：10 个页面 / 45 个分组 / 169 个按钮，由声明表驱动构建；未实现的命令点击后显示其 ACTION-ID（UI-007 ~ UI-024）

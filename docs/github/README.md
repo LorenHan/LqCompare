@@ -4,7 +4,7 @@
 
 | 核对项 | 结果 |
 | --- | --- |
-| 规格条目 / 已发布 issue | 367 / 见 [prd-issues.json](prd-issues.json) |
+| 规格条目 / 已发布 issue | 369 个条目，全部已发布（见 [prd-issues.json](prd-issues.json)） |
 | 逐条链接索引 | [issue-index.md](issue-index.md) |
 | 状态标签 | 全部条目为「需求 + 待实现」 |
 | 模块标签 | 27 个功能域各一 |

@@ -15,10 +15,11 @@ Qt 5.15.2 / C++17 的**文件与文件夹比对工具**。功能面以 **Beyond 
 
 | 文档 | 内容 |
 | --- | --- |
-| [docs/PRD-actions.md](docs/PRD-actions.md) | **产品规格正文**。367 个条目，每条都有入口/作用对象/行为边界与可核对的完成标准 |
+| [docs/PRD-actions.md](docs/PRD-actions.md) | **产品规格正文**。369 个条目，每条都有入口/作用对象/行为边界与可核对的完成标准 |
 | [docs/github/issue-index.md](docs/github/issue-index.md) | 全部条目对应的 GitHub issue 索引（按功能域分组） |
 | [docs/research/beyondcompare-features.md](docs/research/beyondcompare-features.md) | Beyond Compare 5 全功能测绘（38 个功能域、1682 个功能点） |
 | [docs/research/tortoisegit-diff-features.md](docs/research/tortoisegit-diff-features.md) | TortoiseGit 比对/合并界面与客户端入口测绘（含 10 页 · 44 组 · 195 按钮的 Ribbon 建议） |
+| [docs/research/reference-projects.md](docs/research/reference-projects.md) | 同类开源实现（kdiff3 / WinMerge / meld）的设计借鉴与许可证红线 |
 | [docs/design/architecture.md](docs/design/architecture.md) | 代码架构、分层规则与目录清单 |
 | [docs/development/current-handoff.md](docs/development/current-handoff.md) | **当前进度与接手说明**（并行开发从这里开始） |
 | [docs/development/parallel-workstreams.md](docs/development/parallel-workstreams.md) | 并行开发工作流划分：谁能改哪些文件、依赖顺序 |
@@ -130,8 +131,8 @@ python3 tools/publish_issues.py all        # 全流程
 | 脚本自动化 | 10 | SCR |
 | 选项外观 | 14 | OPT |
 | 平台性能 | 10 | PLAT |
-| 工程质量 | 13 | ENG |
+| 工程质量 | 15 | ENG |
 | 文档 | 6 | DOC |
-| **合计** | **367** | 27 个前缀 |
+| **合计** | **369** | 27 个前缀 |
 
 完整的逐条说明见 [docs/PRD-actions.md](docs/PRD-actions.md)。

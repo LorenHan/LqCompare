@@ -1,6 +1,6 @@
 # LqCompare 产品说明
 
-> 条目级的规格在 [PRD-actions.md](PRD-actions.md)（367 条）。本文只讲**定位、范围与取舍**。
+> 条目级的规格在 [PRD-actions.md](PRD-actions.md)（369 条）。本文只讲**定位、范围与取舍**。
 
 ## 1. 定位
 

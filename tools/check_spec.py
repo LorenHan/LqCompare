@@ -2,13 +2,14 @@
 # -*- coding: utf-8 -*-
 """规格数据自检（PRD: UI-024、DOC-005）。
 
-检查六件事：
+检查七件事：
 1. `tools/spec/` 的数据本身合法（ID 唯一、前缀与功能域一致、字段非空）；
 2. `docs/PRD-actions.md` 与规格数据一致（重新生成后逐字节相同）；
 3. `docs/github/prd-issues.json` 覆盖全部条目且链接格式合法；
 4. 每个条目都有竞品对标出处或明确标注为超越性补充；
 5. PRD 的功能域统计表与条目总数一致；
-6. 优先级策略（`P0_RANGES`）里的前缀都能真的选中条目。
+6. 优先级策略（`P0_RANGES`）里的前缀都能真的选中条目；
+7. 手写文档里写的条目数与真实条目数一致（生成物不会漂移，手写的会）。
 
 第 2 条是最重要的：PRD 是生成物，一旦有人手工改过 PRD（而不是改数据），
 下一次重新生成就会把他的手改冲掉。宁可让 CI 在这里报错。
@@ -159,6 +160,54 @@ def git_tracked_prd() -> list[str]:
     return problems
 
 
+def check_doc_counts(actions) -> list[str]:
+    """手写文档里写的条目数必须与真实条目数一致。
+
+    生成物（PRD-actions.md、issue-index.md）不会漂移，但 README、CHANGELOG、
+    交接文档里的数字是人手写的。加两条条目前后这些数字就会过期，而
+    「文档说 367、实际 369」这种偏差没有任何机制会主动发现——只能靠某个
+    读者碰巧核对。所以在这里核对。
+    """
+    # 只扫「我们的条目数」，因此排除两份竞品测绘文档（那里的数字是竞品的功能点数）。
+    skip_prefixes = ("docs/research/beyondcompare-features.md",
+                     "docs/research/tortoisegit-diff-features.md")
+    generated = {"docs/PRD-actions.md", "docs/github/issue-index.md"}
+
+    patterns = [
+        re.compile(r"(\d+)\s*个条目"),
+        re.compile(r"(\d+)\s*条规格"),
+        re.compile(r"（(\d+)\s*条）"),
+        re.compile(r"（(\d+)\s*条，"),
+        re.compile(r"\*\*合计\*\*\s*\|\s*\*\*(\d+)\*\*"),
+    ]
+
+    expected = len(actions)
+    problems: list[str] = []
+    for root, dirs, files in os.walk(REPO_ROOT):
+        dirs[:] = [d for d in dirs if d not in (".git", "dist", "_references")]
+        for name in files:
+            if not name.endswith(".md"):
+                continue
+            path = os.path.join(root, name)
+            rel = os.path.relpath(path, REPO_ROOT)
+            if rel in generated or rel.startswith(skip_prefixes):
+                continue
+            try:
+                with open(path, encoding="utf-8") as handle:
+                    text = handle.read()
+            except OSError:
+                continue
+            for line_number, line in enumerate(text.splitlines(), 1):
+                for pattern in patterns:
+                    for found in pattern.findall(line):
+                        if int(found) != expected:
+                            problems.append(
+                                "%s:%d 写着 %s，实际规格条目数为 %d"
+                                % (rel, line_number, found, expected)
+                            )
+    return problems
+
+
 def main() -> int:
     actions = load_actions()
     problems: list[str] = []
@@ -167,6 +216,7 @@ def main() -> int:
     problems += check_issue_map(actions)
     problems += check_prd_module_table(actions)
     problems += check_priority_policy(actions)
+    problems += check_doc_counts(actions)
     problems += git_tracked_prd()
 
     p0 = sum(1 for a in actions if priority_of(a["id"]) == "P0")
