@@ -7,6 +7,10 @@
 | --- | --- | --- | --- |
 | [beyondcompare-features.md](beyondcompare-features.md) | Beyond Compare 5（Scooter Software） | 38 个功能域 / 1682 个功能点 | **功能面的主要依据** |
 | [tortoisegit-diff-features.md](tortoisegit-diff-features.md) | TortoiseGit 比对/合并界面与客户端 | 1166 个功能点 | Ribbon 布局与交互参考 |
+| [reference-projects.md](reference-projects.md) | kdiff3 / WinMerge / meld 等开源实现 | 4 个实现 | 算法、数据结构与测试方法的借鉴（**含许可证红线**） |
+
+前两份回答「要做什么」，第三份回答「别人怎么做的」。注意第三份里的一条硬约束：
+参考实现全部是 GPL，**只能读不能抄**，细节见该文档第 1 节。
 
 ## 两者的关系与裁决规则
 
@@ -31,7 +35,7 @@
 ## 一份功能点 ≠ 一个 issue
 
 测绘文档追求「不漏」，因此粒度很细（1682 + 1166 个点）。规格书把它们收敛为
-**367 个可独立实现与验收的条目**：一个条目内部可以包含若干紧密相关的功能点
+**369 个可独立实现与验收的条目**：一个条目内部可以包含若干紧密相关的功能点
 （例如「编码探测与手动指定编码」），否则 issue 会碎到无法评审。
 
 收敛过程保留在每个条目的「竞品对标出处」字段里，可逐条回溯到测绘文档的原始条目。
