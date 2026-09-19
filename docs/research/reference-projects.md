@@ -137,8 +137,31 @@ Python / GTK，Linux 桌面为主。定位与我们的三方合并（`MRG-*`）�
 mkdir -p ../_references && cd ../_references
 git clone --depth 1 https://github.com/KDE/kdiff3.git          kdiff3
 git clone --depth 1 https://github.com/WinMerge/winmerge.git   winmerge
-git clone --depth 1 https://gitlab.gnome.org/GNOME/meld.git    meld
+git clone --depth 1 https://github.com/GNOME/meld.git          meld   # 官方在 gitlab.gnome.org，这是 GitHub 镜像
 ```
 
 `_references/` 在本仓库之外，不会被提交。若需要长期保留，建议放在工作区同级目录而不是
 仓库内，避免有人误把 GPL 源码提交进来。
+
+### 6.1 实测结果（网络受限环境下）
+
+当前网络需要经代理访问公网，实测**只有 kdiff3 能完整克隆**（12 MB）：
+
+| 仓库 | 结果 |
+| --- | --- |
+| kdiff3 | ✅ 成功 |
+| WinMerge | ❌ `RPC failed; curl 16 Error in the HTTP2 framing layer`（仓库较大，传输中断） |
+| meld | ❌ `CONNECT tunnel failed, response 502`（代理隧道不通） |
+| FreeFileSync | ❌ 同上；且官方仓库不在 GitHub，无需拉取 |
+
+因此本文中 WinMerge、meld 的技术栈与许可证事实是**通过 GitHub API 核实**的
+（`gh api repos/<owner>/<repo>`），不是从本地源码读出来的。kdiff3 的结论则来自
+实际阅读其源码与 `test/` 目录。
+
+两个建议：
+
+- 需要拉大仓库时先降低传输量：`git clone --depth 1 --single-branch --filter=blob:none`。
+- 网络不畅时改用 API 取关键事实（许可证、语言、目录清单）比克隆更可靠，
+  例如 `gh api repos/KDE/kdiff3/contents/src --jq '.[].name'`。
+
+如果只是要核对某一处实现细节，用 API 读单文件即可，不必为看一眼拉整个仓库。
