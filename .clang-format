@@ -1,0 +1,45 @@
+# LqCompare 代码风格（与 Ailecium / Qt Coding Style 保持一致）
+#
+# 用法：
+#   clang-format -i <文件>                 就地格式化
+#   clang-format --dry-run -Werror <文件>  CI 中检查（不通过则构建失败）
+#
+# 第三方目录（Code/ThirdParty）不参与格式化。
+---
+Language: Cpp
+BasedOnStyle: LLVM
+
+Standard: c++17
+
+# 4 空格缩进，不使用制表符
+IndentWidth: 4
+TabWidth: 4
+UseTab: Never
+AccessModifierOffset: -4
+
+# 每行上限 100 列（与 Ailecium 已有的长函数签名风格兼容）
+ColumnLimit: 100
+
+# 左花括号不换行；函数定义同样不换行
+BreakBeforeBraces: Attach
+AllowShortFunctionsOnASingleLine: Inline
+AllowShortIfStatementsOnASingleLine: false
+AllowShortLoopsOnASingleLine: false
+AllowShortBlocksOnASingleLine: Empty
+
+# 指针与引号靠左
+PointerAlignment: Left
+ReferenceAlignment: Left
+
+# 命名空间内容不缩进
+NamespaceIndentation: None
+
+# include 排序：主头文件优先，然后按类别分组
+SortIncludes: CaseSensitive
+IncludeBlocks: Preserve
+
+# 版本相关
+AlignAfterOpenBracket: Align
+BinPackArguments: true
+BinPackParameters: true
+...

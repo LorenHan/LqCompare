@@ -1,0 +1,31 @@
+<RCC>
+  <qresource prefix="/Pictures">
+    <file>ribbon_about.svg</file>
+    <file>ribbon_browse.svg</file>
+    <file>ribbon_close.svg</file>
+    <file>ribbon_edit.svg</file>
+    <file>ribbon_exit.svg</file>
+    <file>ribbon_gotoline.svg</file>
+    <file>ribbon_log.svg</file>
+    <file>ribbon_manual.svg</file>
+    <file>ribbon_minimize.svg</file>
+    <file>ribbon_new.svg</file>
+    <file>ribbon_next.svg</file>
+    <file>ribbon_next_conflict.svg</file>
+    <file>ribbon_open.svg</file>
+    <file>ribbon_options.svg</file>
+    <file>ribbon_output.svg</file>
+    <file>ribbon_prev.svg</file>
+    <file>ribbon_prev_conflict.svg</file>
+    <file>ribbon_recent.svg</file>
+    <file>ribbon_redo.svg</file>
+    <file>ribbon_reference.svg</file>
+    <file>ribbon_reload.svg</file>
+    <file>ribbon_reset.svg</file>
+    <file>ribbon_save.svg</file>
+    <file>ribbon_saveas.svg</file>
+    <file>ribbon_search.svg</file>
+    <file>ribbon_undo.svg</file>
+    <file>ribbon_validate.svg</file>
+  </qresource>
+</RCC>

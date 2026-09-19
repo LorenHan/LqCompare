@@ -1,0 +1,27 @@
+# 统一行尾与文本属性，避免跨平台协作时产生整文件 diff。
+* text=auto eol=lf
+
+# Windows 专属脚本保持 CRLF，否则 cmd 解析会出问题
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# 二进制资源不做行尾转换
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.qm binary
+*.exe binary
+*.dll binary
+
+# SVG 是文本，参与 diff 便于审图
+*.svg text eol=lf
+
+# 会话文件与格式定义是可读文本，值得进 diff
+*.lqc text eol=lf
+
+# 让 GitHub 识别生成物
+docs/PRD-actions.md linguist-generated=true
+docs/github/prd-issues.json linguist-generated=true
