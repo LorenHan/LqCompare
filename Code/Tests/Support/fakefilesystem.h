@@ -33,8 +33,11 @@ namespace Test {
 ///   - **不模拟真实文件内容**。本工具只需要元数据（大小、时间、属性），
 ///     加内容支持只会让假实现变复杂，而没人会用它测内容比对。
 ///   - **记录调用**。这样测试可以断言「调用了什么、没调用什么」，
-///     尤其是断言「没有任何永久删除发生」。
-///   - **删除到回收站不真删**，只记录。这正是要验证的契约。
+///     尤其是断言「在报错前没有多走一步」。
+///
+/// 回收站不在这个替身的职责范围内：删除要走 TrashService（见 trash.h 的说明），
+/// 相应的替身是 faketrashservice.h。这里刻意不提供 deleteToTrash，
+/// 因为「删除只有一条入口」本身就是一条要被结构保证的约束。
 ///
 class FakeFileSystem : public FileSystem
 {
@@ -49,7 +52,6 @@ public:
         Enumerate,
         SetTimes,
         SetAttributes,
-        DeleteToTrash,
     };
 
     FakeFileSystem();
@@ -100,13 +102,6 @@ public:
     /// 某个操作的总调用次数。
     int callCount(Operation operation) const;
 
-    /// 删除到回收站被请求删除的路径（按调用顺序）。
-    QStringList trashedPaths() const { return m_trashedPaths; }
-
-    /// 被**永久删除**的路径。这里永远是空的——如果哪天它不为空，
-    /// 说明有代码绕过了「删除必须可逆」的约束。
-    QStringList permanentlyDeletedPaths() const { return m_permanentlyDeleted; }
-
     /// 清空调用记录（不清空文件树与故障注入）。
     void clearCallLog();
 
@@ -128,7 +123,6 @@ public:
                   FileSystemError *error) const override;
     bool setAttributes(const QString &path, FileAttributes attributes,
                        FileSystemError *error) const override;
-    bool deleteToTrash(const QStringList &paths, FileSystemError *error) const override;
     QString platformName() const override;
 
     /// 稳定标识，用于错误信息与测试名称。
@@ -160,8 +154,6 @@ private:
     // 这些字段在 const 方法里也要写，因此标为 mutable。
     // 调用记录属于「观测副产品」，不改变文件系统状态，不影响 const 语义。
     mutable QStringList m_callLog;
-    mutable QStringList m_trashedPaths;
-    mutable QStringList m_permanentlyDeleted;
 
     PathUtils::Style m_style;
     Qt::CaseSensitivity m_caseSensitivity = Qt::CaseSensitive;

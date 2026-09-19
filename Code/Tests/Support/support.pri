@@ -8,5 +8,10 @@
 # 复制一份，然后两份各自演化——这正是护栏类代码最容易发生的腐化。
 INCLUDEPATH += $$PWD
 
-HEADERS += $$PWD/fakefilesystem.h
-SOURCES += $$PWD/fakefilesystem.cpp
+HEADERS += \
+    $$PWD/fakefilesystem.h \
+    $$PWD/faketrashservice.h
+
+SOURCES += \
+    $$PWD/fakefilesystem.cpp \
+    $$PWD/faketrashservice.cpp

@@ -663,39 +663,6 @@ void TstFileSystem::fakeReproducesHeldFileScenario()
     QVERIFY(isRetryable(error));
 }
 
-void TstFileSystem::fakeTrashNeverPermanentlyDeletes()
-{
-    Test::FakeFileSystem fileSystem;
-    fileSystem.addFile(QStringLiteral("/work/temp1.txt"));
-    fileSystem.addFile(QStringLiteral("/work/temp2.txt"));
-
-    FileSystemError error = FileSystemError::None;
-    const QStringList targets = {QStringLiteral("/work/temp1.txt"),
-                                 QStringLiteral("/work/temp2.txt")};
-    QVERIFY(fileSystem.deleteToTrash(targets, &error));
-    QCOMPARE(error, FileSystemError::None);
-
-    QCOMPARE(fileSystem.trashedPaths().size(), 2);
-    // 最关键的一条断言：没有任何路径被永久删除。
-    // 这个列表永远必须为空——它一旦不为空，就说明「删除必须可逆」被破坏了。
-    QVERIFY2(fileSystem.permanentlyDeletedPaths().isEmpty(),
-             "存在被永久删除的路径：删除的可逆性被破坏");
-
-    // 逐个检查故障：第一个失败就不应该动第二个。
-    Test::FakeFileSystem partial;
-    partial.addFile(QStringLiteral("/work/a.txt"));
-    partial.addFile(QStringLiteral("/work/b.txt"));
-    partial.fail(Test::FakeFileSystem::Operation::DeleteToTrash, QStringLiteral("/work/a.txt"),
-                 FileSystemError::PermissionDenied);
-
-    const QStringList both = {QStringLiteral("/work/a.txt"), QStringLiteral("/work/b.txt")};
-    QVERIFY(!partial.deleteToTrash(both, &error));
-    QCOMPARE(error, FileSystemError::PermissionDenied);
-    QVERIFY(partial.trashedPaths().isEmpty());
-    FileSystemError stillThere = FileSystemError::None;
-    QVERIFY(partial.stat(QStringLiteral("/work/b.txt"), &stillThere).exists);
-}
-
 void TstFileSystem::fakeAddDirectoryBuildsAncestors()
 {
     Test::FakeFileSystem fileSystem;
@@ -805,33 +772,6 @@ void TstFileSystem::nativeFileSystemReadsRealDirectory()
     // 对文件调用枚举要明确报 NotDirectory。
     QCOMPARE(fileSystem->enumerateDirectory(root + QStringLiteral("/hello.txt"), &error).size(), 0);
     QCOMPARE(error, FileSystemError::NotDirectory);
-}
-
-void TstFileSystem::nativeFileSystemTrashIsNotSilentlyPermanent()
-{
-    // PLAT-003 尚未实现，因此当前必须明确返回「不支持」。
-    //
-    // 这条断言的作用是**锁住契约**：将来 PLAT-003 接上真实回收站时，
-    // 这个用例会失败并提醒改它——那是有意的。而如果哪天有人为了「让删除先能用」
-    // 在基类里塞一个真删的实现，这个用例也会失败。
-    // 它守的是「删除必须可逆」这条对用户的基本承诺。
-    const std::unique_ptr<FileSystem> fileSystem(createNativeFileSystem());
-
-    QTemporaryDir temporaryDir;
-    QVERIFY(temporaryDir.isValid());
-    const QString victim = temporaryDir.path() + QStringLiteral("/victim.txt");
-    QFile file(victim);
-    QVERIFY(file.open(QIODevice::WriteOnly));
-    file.write("do not delete me permanently");
-    file.close();
-
-    FileSystemError error = FileSystemError::None;
-    const bool ok = fileSystem->deleteToTrash(QStringList{victim}, &error);
-    QVERIFY(!ok);
-    QCOMPARE(error, FileSystemError::NotSupported);
-
-    // 关键：文件必须还在。如果这条断言失败，说明发生了静默的永久删除。
-    QVERIFY2(QFile::exists(victim), "文件被删掉了：删除到回收站的契约被破坏");
 }
 
 // Q_OBJECT 声明在头文件里，因此这里不需要 #include "xxx.moc"：

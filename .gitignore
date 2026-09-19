@@ -8,6 +8,9 @@ Makefile
 Makefile.*
 build-*/
 *-build/
+# 上面两条覆盖 build-xxx/ 与 xxx-build/（含 _test-build/），
+# 但覆盖不到 _build-xxx/（前缀下划线 + 中间连字符），因此单列一条。
+/_build-*/
 debug/
 release/
 .qmake.cache

@@ -274,6 +274,38 @@ FileSystemError classifyWindowsErrorCode(unsigned long code)
     return FileSystemError::Unknown;
 }
 
+FileSystemError classifyCocoaError(long code)
+{
+    using namespace CocoaError;
+
+    if (code == 0)
+        return FileSystemError::None;
+    if (code == NoSuchFile)
+        return FileSystemError::NotFound;
+
+    // 读/写无权限合成一类：对用户而言「能做什么」是一样的（去改权限），
+    // 分成两类只会让提示文案多一份而没有信息量。
+    if (code == ReadNoPermission || code == WriteNoPermission)
+        return FileSystemError::PermissionDenied;
+
+    if (code == WriteVolumeReadOnly)
+        return FileSystemError::ReadOnlyFileSystem;
+    if (code == WriteOutOfSpace)
+        return FileSystemError::NoSpace;
+    if (code == WriteInvalidFileName)
+        return FileSystemError::InvalidName;
+    if (code == WriteFileExists)
+        return FileSystemError::AlreadyExists;
+
+    // FileLocking 与 ManagerUnmountBusy 都归 Busy，因为二者都有同一个可处置的
+    // 特征——**等一会儿重试可能就成功了**。这正是 isRetryable() 判断的依据，
+    // 也是它们不能落到 Unknown 的原因（Unknown 不可重试）。
+    if (code == FileLocking || code == ManagerUnmountBusy)
+        return FileSystemError::Busy;
+
+    return FileSystemError::Unknown;
+}
+
 #ifdef Q_OS_WIN
 // 在 Windows 上编译时，把手写的常量值与 <windows.h> 的真实常量逐个核对。
 // 写错任何一个都会在**编译期**失败，而不是运行期静默错判——
@@ -297,22 +329,6 @@ static_assert(Win32Error::DirectoryNotEmpty == ERROR_DIR_NOT_EMPTY, "Win32 错�
 // -----------------------------------------------------------------------------
 
 FileSystem::~FileSystem() = default;
-
-bool FileSystem::deleteToTrash(const QStringList &paths, FileSystemError *error) const
-{
-    Q_UNUSED(paths);
-
-    // 基类刻意**不**提供任何实现，哪怕只是「直接删掉」这种看起来能用的兜底。
-    //
-    // 原因是「删除必须可逆」是本工具对用户的基本承诺。如果这里提供一个会真删的
-    // 默认实现，某个平台实现忘记覆写时，用户的文件就被永久删除了，而且不会有
-    // 任何迹象表明「回收站其实没生效」。
-    //
-    // 宁可让所有平台实现都必须显式覆写（真实实现见 PLAT-003）。
-    if (error)
-        *error = FileSystemError::NotSupported;
-    return false;
-}
 
 // -----------------------------------------------------------------------------
 // 平台实现的分发

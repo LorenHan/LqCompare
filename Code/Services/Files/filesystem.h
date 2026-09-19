@@ -97,6 +97,37 @@ constexpr unsigned long DirectoryNotEmpty = 145;       ///< ERROR_DIR_NOT_EMPTY
 FileSystemError classifyWindowsErrorCode(unsigned long code);
 
 ///
+/// \brief macOS 的 Cocoa 错误码（`NSCocoaErrorDomain` 的取值）。
+///
+/// 与 Win32Error 完全对称：常量与映射函数都放在平台无关层，因此**在 macOS 上
+/// 就能被覆盖**——回收站删除（PLAT-003）最需要验证的恰恰是错误分类这一段。
+/// 编译期校验放在 trash_mac.mm 里：那里能同时看到 Foundation 的真实常量与
+/// 这些手写常量，写错就是编译失败，而不是运行期把「没有权限」误判成别的。
+///
+/// 为什么不能只靠 errno
+/// -------------------
+/// `NSError` 有两个域。POSIX 域的错误可以走 classifySystemError()，
+/// 但 Cocoa 域的错误码与 errno 完全不同：「文件已存在」在 POSIX 是 EEXIST=17，
+/// 在 Cocoa 是 516；「磁盘满」在 POSIX 是 ENOSPC=28，在 Cocoa 是 640。
+/// 只认 errno 会让回收站删不进去时全部落到 Unknown，用户拿到一句
+/// 「未知错误」——等于没提示。
+///
+namespace CocoaError {
+constexpr long NoSuchFile = 4;              ///< NSFileNoSuchFileError
+constexpr long FileLocking = 255;           ///< NSFileLockingError
+constexpr long ReadNoPermission = 257;      ///< NSFileReadNoPermissionError
+constexpr long WriteNoPermission = 513;     ///< NSFileWriteNoPermissionError
+constexpr long WriteInvalidFileName = 514;  ///< NSFileWriteInvalidFileNameError
+constexpr long WriteFileExists = 516;       ///< NSFileWriteFileExistsError
+constexpr long WriteOutOfSpace = 640;       ///< NSFileWriteOutOfSpaceError
+constexpr long WriteVolumeReadOnly = 642;   ///< NSFileWriteVolumeReadOnlyError
+constexpr long ManagerUnmountBusy = 769;    ///< NSFileManagerUnmountBusyError
+} // namespace CocoaError
+
+/// 把 Cocoa 错误码归类。POSIX 域的错误码请走 classifySystemError()。
+FileSystemError classifyCocoaError(long code);
+
+///
 /// \brief 时间戳：内部统一为「UTC 纪元起的纳秒数」（PRD: PLAT-002）。
 ///
 /// 内部一律 UTC，显示层再用 toLocalDateTime() 转本地时间。这样做的原因是
@@ -275,13 +306,17 @@ public:
     virtual bool setAttributes(const QString &path, FileAttributes attributes,
                                FileSystemError *error = nullptr) const = 0;
 
-    /// 删除到回收站（PRD: PLAT-003 提供真实实现）。
-    ///
-    /// 接口在这里定义是因为「所有删除都必须可逆」是上层的基本假设；
-    /// 但真正的回收站行为（各平台机制、配额、不可用时的用户选择）属 PLAT-003。
-    /// 基类实现返回 NotSupported，PLAT-003 之前调用方得到的是一句明确的
-    /// 「不支持」而不是静默的永久删除。
-    virtual bool deleteToTrash(const QStringList &paths, FileSystemError *error = nullptr) const;
+    // 说明：这里曾经有一个 deleteToTrash()。PLAT-003 落地时它被移到了
+    // TrashService（见 trash.h），而不是留在这里转发。
+    //
+    // 移走的理由是它当时有个不被注意的缺陷：FileSystem 是无状态的，
+    // 而「撤销上一次删除」需要一个长期存在的撤销点。若在这里保留便捷转发，
+    // 实现必然是「每次调用现场 new 一个 TrashService」——于是撤销点随对象一起
+    // 被丢掉，用户点撤销永远报「没有可还原的删除」。那种失败还很难查：
+    // 删除本身是成功的，只有撤销不工作。
+    //
+    // 所以删除只有一条入口：TrashService。它由调用方持有，生命周期跨越
+    // 「删除」与「撤销」两次操作。
 
     /// 平台名称，用于日志与测试断言（"windows" / "macos" / "linux"）。
     virtual QString platformName() const = 0;

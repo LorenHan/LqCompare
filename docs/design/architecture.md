@@ -72,24 +72,34 @@ LqCompare 是 Qt 5.15.2 / C++17、qmake 构建的文件与文件夹比对工具�
 | --- | --- | --- | --- |
 | `Command/` | `commandregistry.{h,cpp}` | 全量命令的注册、查询、执行与自检（UI-023 ~ UI-025） | `command.pri` |
 | `Log/` | `logging.{h,cpp}` | 分级日志，级别未启用时参数不求值（ENG-006） | `log.pri` |
-| `Files/` | `filesystem.{h,cpp}`、`pathutils.{h,cpp}`、`filesystem_posix.cpp`、`filesystem_win.cpp` | 文件系统服务抽象层：路径规范化、元数据、枚举、时间戳、属性、可逆删除（PLAT-002 ~ PLAT-003） | `files.pri` |
+| `Files/` | `filesystem.{h,cpp}`、`pathutils.{h,cpp}`、`trash.{h,cpp}`、`filesystem_<平台>.cpp`、`trash_<平台>.<ext>` | 文件系统服务抽象层（路径、元数据、枚举、时间戳、属性）与回收站服务（可逆删除、撤销）（PLAT-002 ~ PLAT-003） | `files.pri` |
 
-### 3.4 Files/ 的三段式结构
+### 3.4 Files/ 的四段式结构
 
-`Services/Files/` 刻意拆成三段，对应三种「可验证程度」不同的代码：
+`Services/Files/` 刻意拆成四段，对应三种「可验证程度」不同的代码：
 
 | 这一段 | 内容 | 在哪能被验证 |
 | --- | --- | --- |
-| `filesystem.h/.cpp` | 接口、`FileTime`、错误分类与映射、平台工厂 | 任意平台（纯逻辑） |
+| `filesystem.h/.cpp` | 接口、`FileTime`、错误分类与映射（含 Win32 与 Cocoa 两套常量）、平台工厂 | 任意平台（纯逻辑） |
 | `pathutils.h/.cpp` | 路径规则：分隔符、`.与..`、盘符、UNC、长路径前缀 | **任意平台**——Windows 规则也在这里被真实执行 |
-| `filesystem_<平台>.cpp` | 真正调用 `lstat`/`FindFirstFileW` 等系统 API 的薄层 | 只有对应平台 |
+| `trash.h/.cpp` | 回收站：可用性状态、删除前的决策与文案、删除报告、XDG 路径与 `.trashinfo` 格式 | **任意平台**——Linux 的回收站规则也在这里被真实执行 |
+| `filesystem_<平台>.cpp`、`trash_<平台>.<ext>` | 真正调用 `lstat`/`FindFirstFileW`/`NSFileManager`/`SHFileOperation` 的薄层 | 只有对应平台 |
 
 这样分的原因是一条踩过的教训：写在 `#ifdef Q_OS_WIN` 里的逻辑在开发机（macOS）
 上一次都不会执行，等拿到 Windows 上才第一次运行。把规则抽成接受 `Style` 参数的
-纯函数之后，Windows 的路径规则可以在 macOS 上被单元测试覆盖；
-Win32 错误码常量则在 Windows 编译时用 `static_assert` 与 `<windows.h>` 比对。
+纯函数之后，Windows 的路径规则可以在 macOS 上被单元测试覆盖；同理，
+把 XDG 的「该用哪个废纸篓目录」与 `.trashinfo` 的编码格式抽成纯函数之后，
+Linux 的回收站规则也能在 macOS 上被覆盖。
+
+平台错误码常量则在对应平台编译时用 `static_assert` 与系统头文件比对
+（Win32 对 `<windows.h>`、Cocoa 对 `<Foundation/Foundation.h>`）。
+这条护栏在 PLAT-003 里立刻见效了：`NSFileManagerUnmountBusyError` 一度被写成
+768，而真实值是 769，768 是含义完全不同的 `NSFileManagerUnmountUnknownError`——
+错误在编译期就被拦下，没有留到运行期变成一次误判。
 
 剩下的系统调用薄层无法用这个办法规避，只能靠 PLAT-010 的双平台测试矩阵。
+但 `trash_mac.mm` 是个例外：macOS 就是本机，因此它的往返行为
+（真的移进废纸篓、再真的还原回来）是被真实执行过的，不是「写了但没跑过」。
 
 ### 3.5 其它目录
 
@@ -110,6 +120,9 @@ Win32 错误码常量则在 Windows 编译时用 `static_assert` 与 `<windows.h
 | **PRD 是生成物，`tools/spec/` 是数据** | 369 条规格与 369 个 issue 由同一份数据生成，不会漂移；`check_spec.py` 阻止手改生成物 | DOC-005 |
 | **交付目录不进 git** | 任何 checkout 都不应该把用户手上的可执行文件打回旧构建 | ENG-011 |
 | **日志宏不命名形参为 `level`** | 宏形参参与全宏体令牌替换，会连带替换掉 `LqCompare::Log::level()`，导致编译失败。踩过一次，写在这里避免重犯 | ENG-006 |
+| **删除只有一条入口：`TrashService`** | 删除必须可逆。而「撤销最近一次删除」需要一个长期存在的撤销点，`FileSystem` 是无状态的，在那里留便捷转发必然导致撤销点随对象一起丢掉。两个入口还会让「该走哪条路」有第二个事实来源 | PLAT-003 |
+| **回收站不可用的判定必须发生在删除之前** | 有些平台在无回收站的位置上不会失败，而是**静默永久删除**（Windows 的 `FOF_ALLOWUNDO` 在网络盘上被忽略、且返回成功）。因此「能不能进回收站」是一个独立的一等查询，而不是从失败里反推 | PLAT-003 |
+| **「不可用就不动手」冻结在基类的模板方法里** | 平台实现只写「真正搬移」那一步，可用性检查与撤销点记录写在基类。这样任何平台实现都不可能不小心跳过检查——它的代码根本不在那条路径上。对应测试断言的也是「搬移函数一次都没被调用」，而不只是「返回了失败」 | PLAT-003 |
 
 ## 5. 装配流程
 

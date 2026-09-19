@@ -14,7 +14,6 @@ const char *FakeFileSystem::operationIdentifier(Operation operation)
     case Operation::Enumerate:      return "enumerate";
     case Operation::SetTimes:       return "set-times";
     case Operation::SetAttributes:  return "set-attributes";
-    case Operation::DeleteToTrash:  return "delete-to-trash";
     }
     return "unknown";
 }
@@ -216,8 +215,6 @@ int FakeFileSystem::callCount(Operation operation) const
 void FakeFileSystem::clearCallLog()
 {
     m_callLog.clear();
-    m_trashedPaths.clear();
-    m_permanentlyDeleted.clear();
 }
 
 // -----------------------------------------------------------------------------
@@ -415,38 +412,6 @@ bool FakeFileSystem::setAttributes(const QString &path, FileAttributes attribute
     current &= ~mutableAttributes;
     current |= (attributes & mutableAttributes);
     it->attributes = current;
-
-    if (error)
-        *error = FileSystemError::None;
-    return true;
-}
-
-bool FakeFileSystem::deleteToTrash(const QStringList &paths, FileSystemError *error) const
-{
-    // 逐个检查故障，语义与真实实现一致：任何一个条目失败都不算整体成功。
-    for (const QString &path : paths) {
-        if (intercept(Operation::DeleteToTrash, path, error))
-            return false;
-    }
-
-    for (const QString &path : paths) {
-        const QString normalized = PathUtils::normalize(path, m_style);
-        if (!m_entries.contains(normalized)) {
-            if (error)
-                *error = FileSystemError::NotFound;
-            return false;
-        }
-    }
-
-    for (const QString &path : paths) {
-        const QString normalized = PathUtils::normalize(path, m_style);
-        // 记录到 trashed，并从内存树里移除——模拟「移入回收站」。
-        // 关键点：**绝不写入 m_permanentlyDeleted**。这个列表永远是空的，
-        // 一旦哪个实现往里写了东西，测试会立刻失败——那正是「静默永久删除」。
-        m_trashedPaths.append(normalized);
-        m_entries.remove(normalized);
-        m_linkTargets.remove(normalized);
-    }
 
     if (error)
         *error = FileSystemError::None;

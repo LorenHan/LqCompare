@@ -76,14 +76,21 @@ private slots:
     void fakeSetTimesLeavesUnspecifiedTimestampAlone();
     void fakeChecksCaseInsensitivityUnderWindowsSemantics();
     void fakeReproducesHeldFileScenario();
-    void fakeTrashNeverPermanentlyDeletes();
     void fakeAddDirectoryBuildsAncestors();
     void fakeEnumerateListsOnlyDirectChildren();
 
     // --- 真实实现（本机平台）----------------------------------------------
     void nativeFileSystemReportsItsPlatform();
     void nativeFileSystemReadsRealDirectory();
-    void nativeFileSystemTrashIsNotSilentlyPermanent();
 };
+
+// 回收站（PLAT-003）的用例在 Code/Tests/Trash 里。
+//
+// 原先这里有两条「deleteToTrash 必须返回 NotSupported」的用例，作用是锁住
+// 「删除必须可逆」这个契约、等 PLAT-003 接上真实实现时失败以提醒改它。
+// PLAT-003 落地时这两条连同 FileSystem::deleteToTrash 一起去掉了：
+// 现在删除只有 TrashService 一条入口，契约由 Trash 套件用真实往返验证
+// （删到废纸篓 → 断言文件确实在废纸篓里 → 还原 → 断言回到原处），
+// 比原来那句「必须返回不支持」更有力。
 
 #endif // LQCOMPARE_TST_FILESYSTEM_H
