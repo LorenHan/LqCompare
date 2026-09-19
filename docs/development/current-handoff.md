@@ -6,8 +6,19 @@
 ## 1. 一句话现状
 
 规格（369 条）与 GitHub issue 已全部铺好；Qt 工程骨架已在 macOS 上编译通过、
-主程序可启动、测试全绿。**功能实现尚未开始**——界面上 169 个按钮里只有 31 条命令带处理器
-（文件/会话/导航/编辑/视图/工具/帮助的基础骨架动作），其余点击后会提示它对应的 ACTION-ID。
+主程序可启动、测试全绿。**服务层开始有真实功能**：文件系统抽象层（PLAT-002）已落地，
+界面上仍是 169 个按钮里 31 条带处理器，其余点击后提示对应 ACTION-ID。
+
+## 1.1 已落地的服务层模块
+
+| 模块 | 条目 | 状态 | 测试 |
+| --- | --- | --- | --- |
+| `Services/Command/` | UI-024 | 骨架 | `Tests/CommandRegistry`（14 用例） |
+| `Services/Log/` | ENG-006 | 骨架 | — |
+| `Services/Files/` | PLAT-002 | **部分完成**（Windows 实现未编译验证） | `Tests/FileSystem`（52 用例） |
+
+PLAT-002 的详细说明与其「第 2 条完成标准为何不勾选」见
+[issue #325](https://github.com/LorenHan/LqCompare/issues/325)。
 
 ## 2. 已验证的事实（不用再花时间确认）
 
@@ -15,7 +26,9 @@
 | --- | --- | --- |
 | 构建 | Qt 5.15.2 clang_64 上 qmake + make 通过，产出 `dist/macos/LqCompare.app` | `qmake && make -j8` |
 | 运行 | 主程序离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
-| 测试 | `CommandRegistryTests` 14 passed / 0 failed | `Code/Tests/run-tests.sh CommandRegistry` |
+| 测试 | `CommandRegistryTests` 14 passed / 0 failed | `Code/Tests/run-tests.sh` |
+| 测试（全量） | **66 passed / 0 failed**（FileSystem 52 + CommandRegistry 14） | `Code/Tests/run-tests.sh` |
+| 文件系统抽象层 | 49 个纯逻辑用例 + 3 个真实文件系统用例全通过；其中 20 个覆盖 **Windows** 路径规则（盘符 / UNC / 长路径前缀 / 大小写），在 macOS 上真实执行 | `Code/Tests/run-tests.sh FileSystem` |
 | 分层检查 | 通过（Services 未反向依赖界面） | `python3 tools/check_layering.py` |
 | 图标检查 | 通过（27 个图标，声明/引用/文件三者一致） | `python3 tools/check_icons.py` |
 | 规格自检 | 通过（369 条，P0 59 条，PRD 与数据同步） | `python3 tools/check_spec.py` |
@@ -43,10 +56,14 @@ Code/
 ├── Services/
 │   ├── Command/                  commandregistry（命令注册中心）
 │   ├── Log/                      logging（分级日志）
-│   ├── command.pri / log.pri / services.pri
+│   ├── Files/                    filesystem（抽象层）、pathutils（路径规则）、
+│   │                             filesystem_posix / filesystem_win（平台实现）
+│   ├── command.pri / log.pri / files.pri / services.pri
 ├── Pictures/                     27 个 SVG 图标 + Pictures.qrc
 ├── Tests/
+│   ├── Support/                  fakefilesystem（可注入故障的内存文件系统，多套件共用）
 │   ├── CommandRegistry/          tst_commandregistry + .pro
+│   ├── FileSystem/               tst_filesystem + .pro（52 用例）
 │   └── run-tests.sh              统一测试运行器
 └── ThirdParty/                   myclasspath.pri（定位 LqRibbon）、lqribbon.pri
 
@@ -94,16 +111,27 @@ git push git@github.com:LorenHan/LqCompare.git main
 
 ## 4. 下一步该做什么
 
-按 [parallel-workstreams.md](parallel-workstreams.md) 的第一波开工。**推荐同时开 3 个对话**：
-
 | 对话 | 工作流 | 从哪条 issue 开始 | 交付什么 |
 | --- | --- | --- | --- |
-| 对话 1 | **A 平台底座** | `PLAT-001`（构建系统）→ `PLAT-002`（文件系统抽象）→ `PLAT-003`（回收站） | `Services/Platform/`、`Services/Files/`，含测试 |
-| 对话 2 | **B 会话框架** | `SESS-001`（会话基类）→ `SESS-002`（类型注册表）→ `SESS-006`（设置对话框框架） | `Services/Session/`、`Views/Session/`，含测试 |
-| 对话 3 | **N Ribbon 深化** | `UI-017`（页面可见性）→ `UI-018`（收缩策略）→ `UI-019`~`UI-021`（复合控件） | `Views/Page/`、`Services/Command/` 的深化 |
+| **A 平台底座** | 继续 | `PLAT-003`（回收站，**接口已就位、只差平台实现**）→ `PLAT-007`（Unicode 与长路径）→ `PLAT-008`（权限/只读/占用） | 在 `Services/Files/` 内新增文件；`files.pri` 已在 `services.pri` 里接好 |
+| **B 会话框架** | 新开 | `SESS-001`（会话基类）→ `SESS-002`（类型注册表）→ `SESS-006`（设置框架） | `Services/Session/`、`Views/Session/`，含测试 |
+| **H 过滤与格式** | 新开 | `FILT-001`（掩码解析器，纯算法、最容易写出完整测试） | `Services/Filter/`、`Services/Format/` |
 
-第三个对话也可换成 **H 过滤与格式**（`FILT-001` 掩码解析器起步，纯算法、最容易写出完整测试）
-或 **O 工程与文档**（`ENG-002` 模块构建守卫、`DOC-001` 用户手册）。
+三个工作流的目录互不重叠，`services.pri` 的 include 已一次加齐（`exists()` 保护），
+因此三方都不需要改共享文件。详见 [parallel-workstreams.md](parallel-workstreams.md) §1。
+
+**A 工作流的两件要紧事：**
+
+1. `PLAT-003` 直接在 `Files/` 内落地即可——`deleteToTrash()` 接口已经定义好，
+   基类当前返回 `NotSupported`，`Tests/FileSystem` 里有一条用例专门断言
+   「此时文件必须还在」。接上真实实现时那条用例会失败，提醒你改成真实断言
+   （这是刻意的，见 `tst_filesystem.cpp` 的说明）。
+2. `filesystem_win.cpp` 需要在 Windows 上首次构建并修正。它是本轮唯一
+   **从未被编译过**的代码，PLAT-002 的第 2 条完成标准因此未勾选。
+
+三个并行对话不是硬性数量，也可以只开两个（A + B），或把 B 换成 **O 工程与文档**
+（`ENG-002` 模块构建守卫、`DOC-001` 用户手册）。**H 建议早做**：掩码解析器是纯算法，
+输入输出都是字符串，不需要任何平台能力就能写出完整测试，是性价比最高的一块。
 
 ## 5. 接手时必须遵守的约定
 
@@ -134,3 +162,9 @@ git push git@github.com:LorenHan/LqCompare.git main
 | 脚本用 GNU sed 的 `\+` | BSD sed 不支持，解析**静默失败**：每行显示「14 passed」而合计是 0，看起来还挺正常 | 改用 `[0-9][0-9]*`；这是最危险的一类——不报错，只给错数字 |
 | 测试过滤器无匹配时仍报「全部套件通过」 | 套件改名或过滤器拼错 → CI 绿，但 0 个用例执行 | 无匹配视为失败并 `exit 2` |
 | CI 只跑 Linux，却声称支持三平台 | bash 4 内建与 GNU 扩展在 Ubuntu 上全绿、到 macOS 崩，CI 发现不了 | 新增 `tools/check_shell.py` 静态护栏并接入 CI；`build.yml` 里写明这个覆盖盲区 |
+| macOS 与 Linux 的 `stat` 时间字段名不同 | macOS 是 `st_mtimespec` / `st_atimespec`，Linux 是 `st_mtim` / `st_atim`。写 `st_mtim` 在 macOS 上编译失败 | 在 `filesystem_posix.cpp` 里用条件编译分别取名；**不要**用自定义映射抹平，那会变成「看起来一样、实际只有一边被测到」 |
+| `AT_FDCWD` / `AT_SYMLINK_NOFOLLOW` 未声明 | 忘了 `#include <fcntl.h>`，只引 `<sys/stat.h>` 不够 | 补 `<fcntl.h>`；用 `utimensat` 时它和 `<sys/stat.h>` 都要引 |
+| `QFile::decodeName` 没有 `(const char*, int)` 重载 | 从 `readlink` 的缓冲解码时报「no matching function」 | 先构造 `QByteArray(ptr, len)` 再传。**必须按实际长度截断**——`readlink` 不写结尾 `'\0'`，直接解整个缓冲会把未初始化内容读进来 |
+| 把 `C:` 当成根目录 | `isRootPath("C:")` 写成期望 true，被用例纠正：`C:` 是「C 盘当前目录」，属**驱动器相对**路径；根是 `C:\` | 判根时必须要求盘符后跟分隔符。当成根会让「向上递归到根」提前停下，操作作用到完全不同的位置 |
+| 接口把写操作标 `const`，实现却没标 | 派生类的非 const 方法与基类 const 声明不匹配，报「does not override」 | `setTimes` / `setAttributes` / `deleteToTrash` 在基类与所有实现里统一标 `const`——它们改的是**文件系统**这个外部状态，不是对象自身 |
+| 测试替身要在 `const` 方法里改数据 | `const` 方法中 `QHash::find` 返回 const_iterator，赋值编译失败 | 把容器标为 `mutable`（与调用日志同理），并提供单个返回 `FileInfo*` 的 `findEntry() const` |

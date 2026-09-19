@@ -72,16 +72,31 @@ LqCompare 是 Qt 5.15.2 / C++17、qmake 构建的文件与文件夹比对工具�
 | --- | --- | --- | --- |
 | `Command/` | `commandregistry.{h,cpp}` | 全量命令的注册、查询、执行与自检（UI-023 ~ UI-025） | `command.pri` |
 | `Log/` | `logging.{h,cpp}` | 分级日志，级别未启用时参数不求值（ENG-006） | `log.pri` |
+| `Files/` | `filesystem.{h,cpp}`、`pathutils.{h,cpp}`、`filesystem_posix.cpp`、`filesystem_win.cpp` | 文件系统服务抽象层：路径规范化、元数据、枚举、时间戳、属性、可逆删除（PLAT-002 ~ PLAT-003） | `files.pri` |
 
-后续按 PRD 的功能域新增模块（`Session/`、`Text/`、`Folder/`、`Filter/`、`Format/`、
-`Report/`、`Vcs/`、`Platform/` 等），每个模块一个 `.pri`。
+### 3.4 Files/ 的三段式结构
 
-### 3.4 其它目录
+`Services/Files/` 刻意拆成三段，对应三种「可验证程度」不同的代码：
+
+| 这一段 | 内容 | 在哪能被验证 |
+| --- | --- | --- |
+| `filesystem.h/.cpp` | 接口、`FileTime`、错误分类与映射、平台工厂 | 任意平台（纯逻辑） |
+| `pathutils.h/.cpp` | 路径规则：分隔符、`.与..`、盘符、UNC、长路径前缀 | **任意平台**——Windows 规则也在这里被真实执行 |
+| `filesystem_<平台>.cpp` | 真正调用 `lstat`/`FindFirstFileW` 等系统 API 的薄层 | 只有对应平台 |
+
+这样分的原因是一条踩过的教训：写在 `#ifdef Q_OS_WIN` 里的逻辑在开发机（macOS）
+上一次都不会执行，等拿到 Windows 上才第一次运行。把规则抽成接受 `Style` 参数的
+纯函数之后，Windows 的路径规则可以在 macOS 上被单元测试覆盖；
+Win32 错误码常量则在 Windows 编译时用 `static_assert` 与 `<windows.h>` 比对。
+
+剩下的系统调用薄层无法用这个办法规避，只能靠 PLAT-010 的双平台测试矩阵。
+
+### 3.5 其它目录
 
 | 目录 | 内容 |
 | --- | --- |
 | `Pictures/` | 图标资源（SVG）与 `Pictures.qrc`。图标由 `tools/generate_icons.py` 生成 |
-| `Tests/` | 每个测试套件一个子目录 + 一个 `.pro`；`run-tests.sh` 是统一运行器 |
+| `Tests/` | 每个测试套件一个子目录 + 一个 `.pro`；`run-tests.sh` 是统一运行器。`Support/` 放多个套件共用的测试替身（如内存文件系统） |
 | `ThirdParty/` | `myclasspath.pri`（定位 LqRibbon）与 `lqribbon.pri`（引入） |
 
 ## 4. 关键设计决策
