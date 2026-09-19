@@ -1,0 +1,58 @@
+name: Build and test
+
+# 每次提交都验证：分层依赖、图标一致性、规格与 PRD 同步、构建、测试。
+# 这些检查都很便宜，但能挡住「加一行 include 破坏可测性」「手改 PRD 被冲掉」
+# 这类要过很久才暴露的问题。
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  checks:
+    name: Repository checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: 分层依赖检查（ENG-001）
+        run: python3 tools/check_layering.py
+      - name: 图标一致性检查（ENG-009 / UI-025）
+        run: python3 tools/check_icons.py
+      - name: 规格数据自检（UI-024 / DOC-005）
+        run: python3 tools/check_spec.py
+
+  build-and-test:
+    name: Build and test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            qt: "5.15.2"
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - name: 安装 Qt
+        uses: jurplel/install-qt-action@v4
+        with:
+          version: ${{ matrix.qt }}
+          cache: true
+      - name: 获取 LqRibbon 依赖
+        run: |
+          # LqRibbon 位于 MyClass 仓库；CI 中以只读方式取入同级目录。
+          git clone --depth 1 https://github.com/LorenHan/MyClass.git ../MyClass
+      - name: 构建主程序
+        run: |
+          mkdir -p ../build
+          cd ../build
+          qmake "$GITHUB_WORKSPACE/Code/LqCompare.pro"
+          make -j"$(nproc)"
+      - name: 运行测试套件
+        run: bash Code/Tests/run-tests.sh

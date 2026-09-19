@@ -1,0 +1,44 @@
+name: Bug 报告
+description: 报告一个可复现的缺陷
+title: "[Bug] "
+labels: ["bug", "待审核"]
+body:
+  - type: textarea
+    id: symptom
+    attributes:
+      label: 现象
+      description: 你看到了什么。请附上截图或日志片段，不要只写「不能用」。
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: 从启动开始的逐步操作。若能用命令行复现，请给出完整命令。
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望行为
+      description: 参照 Beyond Compare / TortoiseGit 应有怎样的行为（若适用）。
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 环境
+      description: 版本、平台与架构。可在 Help → About 中复制版本信息。
+      placeholder: "0.1.0 · Windows 11 24H2 x86 · Qt 5.15.2 MinGW 32-bit"
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 取证材料
+      description: 日志（--log-level debug）、最小复现用例、截图。缺少取证时请说明。
+  - type: textarea
+    id: workaround
+    attributes:
+      label: 绕行方案
+      description: 如果有临时规避办法，写在这里；没有就写「无」。

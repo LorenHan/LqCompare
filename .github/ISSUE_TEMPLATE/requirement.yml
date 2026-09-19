@@ -1,0 +1,72 @@
+name: PRD 需求
+description: 按一条 PRD Action 定义一个小任务（一个可独立实现、可独立验收的条目）
+title: "[ACTION-ID] "
+labels: ["需求", "待实现"]
+body:
+  - type: input
+    id: action
+    attributes:
+      label: PRD Action ID
+      description: 使用 docs/PRD-actions.md 中的唯一 ID（形如 TXT-022）。规格数据在 tools/spec/，新功能先补规格。
+      placeholder: "TXT-022"
+    validations:
+      required: true
+  - type: dropdown
+    id: module
+    attributes:
+      label: 功能域
+      description: 与 docs/PRD-actions.md 的功能域一致；同时请打上对应的模块标签。
+      options:
+        - 界面
+        - 会话
+        - 文本比对
+        - 三方合并
+        - 文件夹比对
+        - 文件夹同步
+        - 文件夹合并
+        - 十六进制
+        - 表格比对
+        - 图片比对
+        - 媒体比对
+        - 注册表
+        - 版本比对
+        - 压缩包
+        - 编辑视图
+        - 过滤规则
+        - 文件格式
+        - 报表导出
+        - 补丁
+        - 快照
+        - 版本控制
+        - 命令行
+        - 脚本自动化
+        - 选项外观
+        - 平台性能
+        - 工程质量
+        - 文档
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: 入口、作用对象与行为边界
+      description: 明确入口、作用对象，以及成功、取消、禁用、失败与多区域/多选时的行为。
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: 完成标准
+      description: 写清可核对的结果、需要新增的测试用例，以及前置依赖。
+    validations:
+      required: true
+  - type: textarea
+    id: reference
+    attributes:
+      label: 竞品对标出处
+      description: 引用 docs/research/ 中的条目；两者行为冲突时以 Beyond Compare 为准。
+  - type: textarea
+    id: commits
+    attributes:
+      label: 实现与关联提交
+      description: 每个小功能单独 commit，提交消息包含本 Issue 号；已有提交在评论中追加链接。

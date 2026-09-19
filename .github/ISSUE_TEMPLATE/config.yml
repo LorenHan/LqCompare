@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 产品规格（PRD-actions）
+    url: https://github.com/LorenHan/LqCompare/blob/main/docs/PRD-actions.md
+    about: 全部功能条目的权威说明。提需求前请先确认对应 ACTION-ID。
+  - name: 竞品功能测绘
+    url: https://github.com/LorenHan/LqCompare/tree/main/docs/research
+    about: Beyond Compare 5 与 TortoiseGit 的全功能测绘，用于确认「应该做成什么样」。

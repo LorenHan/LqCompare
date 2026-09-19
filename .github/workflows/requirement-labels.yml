@@ -1,0 +1,63 @@
+name: Requirement completion labels
+
+# 与 Ailecium 同一套需求状态机：关闭 issue 时自动把状态标签同步为「已完成」或「已取消」。
+# 合法状态取值见 tools/spec/__init__.py 的 STATE_LABELS 与 docs/PRD-actions.md 第 5 节。
+on:
+  issues:
+    types: [closed, reopened]
+
+permissions:
+  issues: write
+
+jobs:
+  synchronize:
+    if: contains(github.event.issue.labels.*.name, '需求')
+    concurrency:
+      group: requirement-label-${{ github.event.issue.number }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    steps:
+      - name: 同步需求完成或取消标签
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: python
+        run: |
+          import json
+          import os
+          import urllib.parse
+          import urllib.request
+
+          with open(os.environ['GITHUB_EVENT_PATH'], encoding='utf-8') as source:
+              event = json.load(source)
+          issue = event['issue']
+          # 按远端当前状态处理，避免快速重开时较早的事件留下错误标签。
+          headers = {
+              'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+              'Accept': 'application/vnd.github+json',
+              'X-GitHub-Api-Version': '2022-11-28',
+          }
+          endpoint = os.environ['GITHUB_API_URL'] + '/repos/' + os.environ['GITHUB_REPOSITORY']
+          endpoint += '/issues/' + str(issue['number'])
+
+          def request(method, url, value=None):
+              payload = None if value is None else json.dumps(value).encode('utf-8')
+              req = urllib.request.Request(url, data=payload, headers=headers, method=method)
+              with urllib.request.urlopen(req) as response:
+                  body = response.read()
+                  return json.loads(body) if body else None
+
+          current = request('GET', endpoint)
+          labels = {item['name'] for item in current['labels']}
+          if '需求' not in labels:
+              raise SystemExit(0)
+          states = {'待实现', '进行中', '部分完成', '待审核', '待定', '已完成', '已取消'}
+          if current['state'] == 'closed':
+              target = '已取消' if current.get('state_reason') == 'not_planned' else '已完成'
+          else:
+              active = labels & (states - {'已完成', '已取消'})
+              target = next(iter(active)) if len(active) == 1 else '待实现'
+          # 只改本流程的状态标签，保留其他人添加的模块、优先级等标签。
+          for label in sorted((labels & states) - {target}):
+              request('DELETE', endpoint + '/labels/' + urllib.parse.quote(label, safe=''))
+          if target not in labels:
+              request('POST', endpoint + '/labels', {'labels': [target]})
