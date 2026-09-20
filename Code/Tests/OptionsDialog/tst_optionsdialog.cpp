@@ -68,7 +68,7 @@ private slots:
         Settings::OptionsRepository repository({temp.path(), false});
         QVERIFY(repository.load().ok);
         ProbeDialog dialog(&repository);
-        QCOMPARE(dialog.categories().size(), 4);
+        QCOMPARE(dialog.categories().size(), 5);
         for (const auto &definition : Settings::OptionsRepository::definitions()) {
             QVERIFY2(dialog.editorFor(definition.key), qPrintable(definition.key));
             QVERIFY(dialog.editorFor(definition.key)->toolTip().contains(QStringLiteral("默认值")));
@@ -317,6 +317,55 @@ private slots:
         QVERIFY(runtime.applyCurrent());
         QCOMPARE(Log::logFile(), desiredPath);
         QVERIFY(runtime.lastError().isEmpty());
+    }
+    void fileOperationPageWarnsAboutIrreversibleChoices() {
+        QTemporaryDir temp;
+        Settings::OptionsRepository repository({temp.path(), false});
+        ProbeDialog dialog(&repository);
+        QCOMPARE(dialog.categories().size(), 5);
+        QVERIFY(dialog.categories().contains(QStringLiteral("fileops")));
+        QVERIFY(dialog.selectCategory(QStringLiteral("fileops")));
+
+        auto *hint = dialog.findChild<QLabel *>(QStringLiteral("optionsFileOpsSafety"));
+        QVERIFY(hint);
+        // 默认必须说明「进回收站、可还原」——只有永久删除那一侧才该出现不可恢复的字样。
+        QVERIFY2(hint->text().contains(QStringLiteral("回收站")), qPrintable(hint->text()));
+        QVERIFY2(!hint->text().contains(QStringLiteral("不可恢复")), qPrintable(hint->text()));
+        QVERIFY2(hint->text().contains(QStringLiteral("逐个询问")), qPrintable(hint->text()));
+        QVERIFY2(!hint->text().contains(QStringLiteral("直接覆盖")), qPrintable(hint->text()));
+
+        // 提示必须跟着草稿走：改了选项而提示不变，用户只会以为提示与选项无关。
+        QVERIFY(dialog.setDraftValue(QStringLiteral("fileops.deleteMode"), QStringLiteral("permanent")));
+        QVERIFY2(hint->text().contains(QStringLiteral("不可恢复")), qPrintable(hint->text()));
+        QVERIFY(dialog.setDraftValue(QStringLiteral("fileops.overwritePolicy"), QStringLiteral("overwrite")));
+        QVERIFY2(hint->text().contains(QStringLiteral("直接覆盖")), qPrintable(hint->text()));
+        QVERIFY2(hint->text().contains(QStringLiteral("较新")), qPrintable(hint->text()));
+
+        // 下拉项的中文标签取自服务层，不在这张全局标签表里再写一份。
+        auto *mode = qobject_cast<QComboBox *>(dialog.editorFor(QStringLiteral("fileops.deleteMode")));
+        QVERIFY(mode);
+        // 上面刚把草稿改成了永久删除，所以当前选中项就是它；两个选项的中文
+        // 标签都由服务层给出（不在这张全局标签表里再写一份）。
+        QCOMPARE(mode->currentData().toString(), QStringLiteral("permanent"));
+        const int trashIndex = mode->findData(QStringLiteral("trash"));
+        const int permanentIndex = mode->findData(QStringLiteral("permanent"));
+        QVERIFY(trashIndex >= 0 && permanentIndex >= 0);
+        QCOMPARE(mode->itemText(trashIndex), QStringLiteral("移入回收站"));
+        QCOMPARE(mode->itemText(permanentIndex), QStringLiteral("永久删除"));
+
+        // 数字项的单位来自定义表。曾经界面写死「 pt」，于是兆字节阈值会显示成
+        // 「100 pt」——数字对、单位错，而没有任何断言会失败。
+        auto *megabytes = qobject_cast<QSpinBox *>(dialog.editorFor(QStringLiteral("fileops.largeFileConfirmMegabytes")));
+        QVERIFY(megabytes);
+        QCOMPARE(megabytes->suffix(), QStringLiteral(" MB"));
+        QCOMPARE(megabytes->value(), 100);
+        auto *count = qobject_cast<QSpinBox *>(dialog.editorFor(QStringLiteral("fileops.batchDeleteConfirmCount")));
+        QVERIFY(count);
+        QCOMPARE(count->suffix(), QStringLiteral(" 个"));
+        QCOMPARE(count->value(), 20);
+        auto *fontSize = qobject_cast<QSpinBox *>(dialog.editorFor(QStringLiteral("display.contentFontSize")));
+        QVERIFY(fontSize);
+        QCOMPARE(fontSize->suffix(), QStringLiteral(" pt"));
     }
     void saveReviewScreenshots() {
         QTemporaryDir temp;

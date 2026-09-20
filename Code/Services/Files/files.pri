@@ -6,6 +6,8 @@
 #   pathname.{h,cpp}         —— 路径名称的字节保真、Unicode 规范化与安全显示（平台无关）
 #   trash.{h,cpp}            —— 回收站服务接口 + XDG 路径规则（平台无关部分）
 #   batch.{h,cpp}            —— 批量操作的失败清单、重试与进度（平台无关）
+#   fileopsoptions.{h,cpp}   —— 文件操作的默认行为：删除方式 / 覆盖策略 /
+#                              保留的元数据项 / 两个确认阈值 / 校验方式（OPT-005）
 #   filesystem_<平台>.cpp    —— 真正调用系统 API 的薄层
 #   trash_<平台>.<ext>       —— 回收站的平台搬移实现
 #
@@ -20,14 +22,16 @@ HEADERS += \
     $$PWD/pathutils.h \
     $$PWD/pathname.h \
     $$PWD/trash.h \
-    $$PWD/batch.h
+    $$PWD/batch.h \
+    $$PWD/fileopsoptions.h
 
 SOURCES += \
     $$PWD/filesystem.cpp \
     $$PWD/pathutils.cpp \
     $$PWD/pathname.cpp \
     $$PWD/trash.cpp \
-    $$PWD/batch.cpp
+    $$PWD/batch.cpp \
+    $$PWD/fileopsoptions.cpp
 
 # 平台实现按平台三选一：各自调用平台独有的头文件，无法同时编译。
 #

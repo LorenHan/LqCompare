@@ -61,6 +61,10 @@ private:
     void writeEditor(const Settings::OptionDefinition &definition, const QVariant &value);
     void refreshEditors();
     void refreshState();
+    // 「文件操作」页的安全提示随草稿变化：选了永久删除就必须当场看见「不可恢复」。
+    // 静态放一段说明做不到这件事——用户改完选项、提示不变，他只会以为提示
+    // 与选项无关。
+    void updateFileOpsHint();
     void setStatus(const QString &message, bool error = false);
     bool resolvePending(const QString &destination);
     bool finishOperation(const Settings::OperationResult &result, const QString &success);
@@ -77,6 +81,7 @@ private:
     QStackedWidget *m_stack = nullptr;
     QLineEdit *m_search = nullptr;
     QLabel *m_status = nullptr;
+    QLabel *m_fileOpsHint = nullptr;
     QDialogButtonBox *m_buttons = nullptr;
     QString m_category;
     QString m_lastError;

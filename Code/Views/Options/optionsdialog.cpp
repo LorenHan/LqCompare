@@ -1,5 +1,6 @@
 #include "optionsdialog.h"
 
+#include "fileopsoptions.h"
 #include "logging.h"
 
 #include <QApplication>
@@ -34,8 +35,29 @@ QString categoryTitle(const QString &category)
     if (category == QStringLiteral("general")) return QStringLiteral("常规");
     if (category == QStringLiteral("display")) return QStringLiteral("显示与外观");
     if (category == QStringLiteral("logging")) return QStringLiteral("日志与诊断");
+    if (category == QStringLiteral("fileops")) return QStringLiteral("文件操作");
     if (category == QStringLiteral("storage")) return QStringLiteral("存储与迁移");
     return category;
+}
+
+// 文件操作那几个下拉项的中文标签取自**服务层**（`Files::*Label()`），
+// 不在这张全局标签表里再写一份。写两份的代价在这里尤其明显：
+// 「permanent」显示成「永久删除」这件事与「选它就是永久删除」是同一条事实，
+// 分家之后界面上会出现一个说不清自己在干什么的选项。
+QString fileOpsChoiceLabel(const QString &key, const QString &identifier)
+{
+    if (key == QStringLiteral("fileops.deleteMode")) {
+        Files::DeleteMode mode;
+        if (Files::deleteModeFromIdentifier(identifier, &mode)) return Files::deleteModeLabel(mode);
+    } else if (key == QStringLiteral("fileops.overwritePolicy")) {
+        Files::OverwritePolicy policy;
+        if (Files::overwritePolicyFromIdentifier(identifier, &policy))
+            return Files::overwritePolicyLabel(policy);
+    } else if (key == QStringLiteral("fileops.verifyAfterCopy")) {
+        Files::VerifyMode mode;
+        if (Files::verifyModeFromIdentifier(identifier, &mode)) return Files::verifyModeLabel(mode);
+    }
+    return QString();
 }
 
 QString displayValue(const QString &key, const QVariant &value)
@@ -43,6 +65,8 @@ QString displayValue(const QString &key, const QVariant &value)
     if (value.type() == QVariant::Bool)
         return value.toBool() ? QStringLiteral("开启") : QStringLiteral("关闭");
     const QString text = value.toString();
+    const QString fileOpsLabel = fileOpsChoiceLabel(key, text);
+    if (!fileOpsLabel.isEmpty()) return fileOpsLabel;
     if (text.isEmpty()) {
         if (key == QStringLiteral("display.contentFontFamily")) return QStringLiteral("系统等宽字体");
         if (key == QStringLiteral("logging.filePath")) return QStringLiteral("配置目录下 logs/lqcompare.log");
@@ -157,7 +181,8 @@ OptionsDialog::OptionsDialog(Settings::OptionsRepository *repository, QWidget *p
 QStringList OptionsDialog::categories() const
 {
     return {QStringLiteral("general"), QStringLiteral("display"),
-            QStringLiteral("logging"), QStringLiteral("storage")};
+            QStringLiteral("fileops"), QStringLiteral("logging"),
+            QStringLiteral("storage")};
 }
 
 QWidget *OptionsDialog::buildPage(const QString &category)
@@ -205,6 +230,11 @@ QWidget *OptionsDialog::buildPage(const QString &category)
         layout->addWidget(noteLabel(QStringLiteral("当前启动时打开 Home 页。记忆上次会话、指定工作区、系统自启动、文件关联和多语言切换尚未实现。"), page));
     } else if (category == QStringLiteral("display")) {
         layout->addWidget(noteLabel(QStringLiteral("应用后立即更新界面主题和字体；内容字体作用于已接入的比较视图。系统默认使用启动时的系统外观，尚未实现运行中跟随系统主题变化。差异颜色、语法颜色和图标风格的自定义尚未实现。"), page));
+    } else if (category == QStringLiteral("fileops")) {
+        m_fileOpsHint = noteLabel(QString(), page);
+        m_fileOpsHint->setObjectName(QStringLiteral("optionsFileOpsSafety"));
+        layout->addWidget(m_fileOpsHint);
+        layout->addWidget(noteLabel(QStringLiteral("这些默认值只在调用方没有单独指定时生效。体积与条数确认是「达到就确认」；回收站可用性在执行那一刻单独探测，不在这里预设。尚未实现：复制/移动的默认冲突处理界面、操作后校验的执行路径、按卷记录不同的删除方式。"), page));
     } else if (category == QStringLiteral("logging")) {
         auto *open = new QPushButton(QStringLiteral("打开当前日志目录"), page);
         open->setObjectName(QStringLiteral("optionsOpenLogDirectory"));
@@ -297,7 +327,7 @@ QWidget *OptionsDialog::buildEditor(const Settings::OptionDefinition &definition
             // 5 is a UI-only sentinel: arrows jump directly from system to 6 pt.
             spin->setMinimum(5);
             spin->setSpecialValueText(QStringLiteral("系统默认"));
-        } else spin->setSuffix(QStringLiteral(" pt"));
+        } else spin->setSuffix(definition.unit);
         connect(spin, qOverload<int>(&QSpinBox::valueChanged), this, edited);
         editor = spin;
     } else {
@@ -385,6 +415,37 @@ void OptionsDialog::refreshState()
         font.setBold(dirty);
         item->setFont(0, font);
     }
+    updateFileOpsHint();
+}
+
+void OptionsDialog::updateFileOpsHint()
+{
+    if (!m_fileOpsHint) return;
+    const Files::FileOperationPolicy policy = Files::FileOperationPolicy::fromValues(m_draft);
+    QStringList lines;
+    // 只有永久删除才换文案：走回收站时写一句「删除可以撤销」，
+    // 而不是把警告去掉留一行空白——用户要能看出这两者的区别在哪。
+    lines.append(QStringLiteral("删除方式「%1」：%2")
+                         .arg(Files::deleteModeLabel(policy.deleteMode),
+                              policy.deleteWarning().isEmpty()
+                                      ? QStringLiteral("删除的文件进入回收站，可以还原。")
+                                      : policy.deleteWarning()));
+    // 「文件较新」这一条必须现出：它是这批默认值里唯一会造成真正数据丢失的情况。
+    lines.append(QStringLiteral("覆盖策略「%1」：%2")
+                         .arg(Files::overwritePolicyLabel(policy.overwritePolicy),
+                              policy.overwriteDecision(Files::OverwriteSituation::TargetNewer).notice));
+    lines.append(QStringLiteral("确认阈值：大文件 %1，批量删除 %2 条；复制后校验：%3。")
+                         .arg(policy.largeFileConfirmBytes > 0
+                                      ? QStringLiteral("%1 MB").arg(policy.largeFileConfirmBytes / (1024 * 1024))
+                                      : QStringLiteral("已关闭"),
+                              policy.batchDeleteConfirmCount > 0
+                                      ? QString::number(policy.batchDeleteConfirmCount)
+                                      : QStringLiteral("已关闭"),
+                              Files::verifyModeLabel(policy.verifyMode)));
+    const QStringList problems = policy.validate();
+    if (!problems.isEmpty())
+        lines.append(QStringLiteral("注意：%1").arg(problems.join(QStringLiteral("；"))));
+    m_fileOpsHint->setText(lines.join(QLatin1Char('\n')));
 }
 
 void OptionsDialog::setStatus(const QString &message, bool error)

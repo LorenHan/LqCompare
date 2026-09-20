@@ -30,6 +30,16 @@ struct OptionDefinition {
     int maximum = 0;
     bool machineSpecific = false;
     bool restartRequired = false;
+
+    // 数字项的单位后缀（" pt" / " MB" / " 个"）。
+    //
+    // 为什么放在**最后**：定义表是按位置初始化的，把新字段插在中间会让所有
+    // 只写到 `maximum` 的行整体错位一格——`false` 会被塞给 `unit`，
+    // 报错是一句「no matching constructor for QVector<OptionDefinition>」，
+    // 指不到任何一行。追加在末尾则老行仍然合法（未提供的成员走默认值）。
+    // 顺带一提，末位成员**必须**有默认值：否则每个老行都会触发
+    // `-Wmissing-field-initializers`，本仓「0 warning」就保不住了。
+    QString unit = QString();
 };
 
 struct OperationResult {

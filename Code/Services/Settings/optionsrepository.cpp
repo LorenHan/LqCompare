@@ -224,7 +224,8 @@ const QVector<OptionDefinition> &OptionsRepository::definitions()
         {QStringLiteral("display.contentFontFamily"), QStringLiteral("display"),
          QStringLiteral("内容字体"), QStringLiteral("供文本比较视图使用。留空使用系统等宽字体。"), QString(), {}},
         {QStringLiteral("display.contentFontSize"), QStringLiteral("display"),
-         QStringLiteral("内容字号"), QStringLiteral("文本内容的字号，单位为点，范围 6–72。"), 12, {}, 6, 72},
+         QStringLiteral("内容字号"), QStringLiteral("文本内容的字号，单位为点，范围 6–72。"), 12, {}, 6, 72, false, false,
+         QStringLiteral(" pt")},
         {QStringLiteral("logging.level"), QStringLiteral("logging"),
          QStringLiteral("日志级别"), QStringLiteral("仅记录所选严重性及以上的日志；调试会包含更多诊断信息。"),
          QStringLiteral("warning"), {QStringLiteral("error"), QStringLiteral("warning"), QStringLiteral("info"), QStringLiteral("debug")}},
@@ -232,7 +233,39 @@ const QVector<OptionDefinition> &OptionsRepository::definitions()
          QStringLiteral("写入日志文件"), QStringLiteral("关闭时仍保留界面输出和控制台日志。"), true, {}},
         {QStringLiteral("logging.filePath"), QStringLiteral("logging"),
          QStringLiteral("日志文件位置"), QStringLiteral("绝对路径；留空自动使用配置目录下 logs/lqcompare.log。默认导出不包含此机器路径。"),
-         QString(), {}, 0, 0, true}
+         QString(), {}, 0, 0, true},
+
+        // 文件操作的默认行为（OPT-005）。
+        //
+        // 这批键的「契约」不止是「存一个值」：规格的边界条款要求安全相关的
+        // 默认值必须保守（默认走回收站、默认不覆盖）。把这条契约放在文档里
+        // 会过期，因此它另有一份可执行的副本——`Files::FileOperationPolicy`
+        // 的 `safetyContractViolations()`，`Tests/FileOpsOptions` 的 A 组
+        // 拿它钉住下面这些出厂值。改任何一个默认值之前先看那条用例。
+        {QStringLiteral("fileops.deleteMode"), QStringLiteral("fileops"),
+         QStringLiteral("删除方式"), QStringLiteral("默认走回收站；选择永久删除时每次删除前都会提示不可恢复。"),
+         QStringLiteral("trash"), {QStringLiteral("trash"), QStringLiteral("permanent")}},
+        {QStringLiteral("fileops.overwritePolicy"), QStringLiteral("fileops"),
+         QStringLiteral("覆盖策略"), QStringLiteral("目标已存在时逐个询问（默认）、直接覆盖或跳过；目标文件较新时另行提示。"),
+         QStringLiteral("ask"), {QStringLiteral("ask"), QStringLiteral("overwrite"), QStringLiteral("skip")}},
+        {QStringLiteral("fileops.preserveTimestamps"), QStringLiteral("fileops"),
+         QStringLiteral("复制时保留修改时间"), QStringLiteral("关闭后复制出来的文件修改时间会变成复制的那一刻。"), true, {}},
+        {QStringLiteral("fileops.preserveAttributes"), QStringLiteral("fileops"),
+         QStringLiteral("复制时保留属性位"), QStringLiteral("如只读、隐藏等标记。"), true, {}},
+        {QStringLiteral("fileops.preservePermissions"), QStringLiteral("fileops"),
+         QStringLiteral("复制时保留权限"), QStringLiteral("Unix 权限位；Windows 上无对应项时自动忽略。"), true, {}},
+        {QStringLiteral("fileops.largeFileConfirmMegabytes"), QStringLiteral("fileops"),
+         QStringLiteral("大文件操作确认阈值"),
+         QStringLiteral("体积达到该值的复制/移动/删除前先确认。单位为兆字节，0 表示关闭确认。"),
+         100, {}, 0, 102400, false, false, QStringLiteral(" MB")},
+        {QStringLiteral("fileops.batchDeleteConfirmCount"), QStringLiteral("fileops"),
+         QStringLiteral("批量删除确认条数"),
+         QStringLiteral("一次删除的条目数达到该值前先确认。0 表示关闭确认。"),
+         20, {}, 0, 100000, false, false, QStringLiteral(" 个")},
+        {QStringLiteral("fileops.verifyAfterCopy"), QStringLiteral("fileops"),
+         QStringLiteral("操作后校验方式"),
+         QStringLiteral("不校验（默认）、比对大小或比对 CRC；CRC 需要读回全部内容。"),
+         QStringLiteral("none"), {QStringLiteral("none"), QStringLiteral("size"), QStringLiteral("crc")}}
     };
     return items;
 }

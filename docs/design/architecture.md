@@ -81,16 +81,16 @@ LqCompare 是 Qt 5.15.2 / C++17、qmake 构建的文件与文件夹比对工具�
 | `Log/` | `logging.{h,cpp}` | 分级日志：级别过滤（宏与直接调用同一套判断）、带线程 id 的定宽文本格式、三个输出目标（控制台 / 文件 / 任意接收者如界面输出面板）、记录经过的结构化载体 `Record`、RAII 的耗时辅助 `Stopwatch`（ENG-006） | `log.pri` |
 | `Session/` | `session.{h,cpp}`、`sessiontype.{h,cpp}`、`settingschema.{h,cpp}`、`settingscope.{h,cpp}` | 会话设置的抽象接口 `SessionSettings` 与一个内存实现 `MemorySessionSettings`（SESS-001 契约里的 `sessionSettings`）；会话类型描述子 `SessionType` 与注册表 `SessionTypeRegistry`——内置 14 种类型的 ID、显示名、英文原名、图标键、默认文件掩码、分组、版本归属（Pro / Standard）、平台限定，以及按掩码的注册顺序优先查询（SESS-002）；**设置项的声明模型**（`SettingItem` / `SettingGroup` / `SettingsTab` / `SettingsSchema`，含标题、说明、控件类型、默认值、校验规则）、**设置草稿**（`SettingsDraft`：读写、脏判定、全有或全无的应用、恢复默认）、**未保存改动的询问策略**（`inquiryForUnsavedChanges`）与**声明目录**（`SessionSettingsCatalog`）（SESS-006）；**三层作用域的覆盖链与写入路由**（`ScopedSessionSettings`：视图 → 会话 → 类型 → 出厂默认的解析、只落目标层的写入、切换作用域与关闭标签的提示文案）（SESS-007）。设置落盘留给 SESS-008 | `session.pri` |
 | `Filter/` | `mask.{h,cpp}`、`maskfilter.{h,cpp}`、`attributefilter.{h,cpp}`、`filterstack.{h,cpp}`、`namefilter.{h,cpp}`、`contentfilter.{h,cpp}` | 掩码语言（`*` / `?` / `[...]` / `**` 的解析与匹配、转义、语法速查）与过滤声明（包含/排除的叠加、排除优先、大小写策略、预览计数）（FILT-001）；**属性条件**（大小范围 / 修改时间范围 / 属性位 / 所有者与组、条目元数据快照 `EntryMetadata`、条件表自检、`decideEntry()` 把名称侧与属性侧合成**与**）（FILT-003）；**名称过滤**（精确名 / 通配符 / 正则三种模式、包含任一 / 不包含任何 / 全部满足三种组合语义、实时校验、正则的静态回溯预检 + 超时保护 + 断路器、具名预设的可移植文本往返）（FILT-002）；**内容过滤**（行过滤器：按整行 / 通配 / 正则排除行，三态结论与「说不清的放行」；关键字节：`\xHH` 解码、任一/全部两种组合方式、文本输入判「不适用」；两条与忽略规则的先后顺序；显式启用与性能提示文案）（FILT-004） | `filter.pri` |
-| `Files/` | `filesystem.{h,cpp}`、`pathutils.{h,cpp}`、`pathname.{h,cpp}`、`trash.{h,cpp}`、`batch.{h,cpp}`、`filesystem_<平台>.cpp`、`trash_<平台>.<ext>` | 文件系统服务抽象层（路径、名称、元数据、枚举、时间戳、属性）、错误携带（分类 + 原始系统码）、回收站服务（可逆删除、撤销）、批量操作的失败清单与重试（PLAT-002 ~ PLAT-003、PLAT-007 ~ PLAT-008） | `files.pri` |
+| `Files/` | `filesystem.{h,cpp}`、`pathutils.{h,cpp}`、`pathname.{h,cpp}`、`trash.{h,cpp}`、`batch.{h,cpp}`、`fileopsoptions.{h,cpp}`、`filesystem_<平台>.cpp`、`trash_<平台>.<ext>` | 文件系统服务抽象层（路径、名称、元数据、枚举、时间戳、属性）、错误携带（分类 + 原始系统码）、回收站服务（可逆删除、撤销）、批量操作的失败清单与重试（PLAT-002 ~ PLAT-003、PLAT-007 ~ PLAT-008）；**文件操作的默认行为**（`FileOperationPolicy`：删除方式 / 覆盖策略 / 保留的元数据项 / 两个确认阈值 / 校验方式，以及「默认值必须保守」这条契约的机器可读形式）（OPT-005） | `files.pri` |
 | `Platform/` | `iconkey.{h,cpp}`、`iconcache.{h,cpp}`、`iconservice.{h,cpp}`、`registrystore.{h,cpp}`、`registrystore_<平台>.<ext>`、`shellintegration.{h,cpp}`、`iconservice_<平台>.<ext>`、`instanceprotocol.{h,cpp}`、`singleinstance.{h,cpp}` | 平台集成：缓存键与尺寸规则、按类型的图标缓存与请求去重、系统图标解析与回退（PLAT-004）；注册表存储抽象与 Shell 集成（右键菜单、文件关联、安装/卸载/校验/残留检查）（PLAT-005）；**单实例**：标识符规则（端点名 / 共享内存键的合成与净化）、线协议的编解码与分帧、转发退出码表、命令行开关表、窗口置前判定（`instanceprotocol`），以及共享内存占标识 + `QLocalServer` 收参数的实做与超时降级（`singleinstance`）（PLAT-006） | `platform.pri` |
 | `Report/` | `report.{h,cpp}` | 比较结果出报表：HTML（离线单文件、全部非信任字段 HTML 转义、内嵌 CSP、分组与折叠、固定脚本只用于搜索/状态过滤/分组）与纯文本两种格式，并排 / 交错 / 摘要 / 统计四种布局；`writeFile` 走 `QSaveFile` 原子保存、默认拒绝覆盖并额外拒绝覆盖比较源；`write(QIODevice*)` 分块渲染（单次设备写入 ≤ 64 KiB，支持短写重试） | `report.pri` |
 | `Patch/` | `patch.{h,cpp}`、`patchapply.{h,cpp}` | unified 补丁的生成（多文件对、可选上下文、路径前缀、无末尾换行标记）、解析（Git/SVN/Hg 前导元数据、引号与八进制路径、CRLF、一基错误行号）与**只读预演**（反向、逐 hunk、唯一偏移匹配、路径安全校验）；以及**补丁应用**——预演→备份→暂存→提交→校验的事务，失败自动回滚、`RecoveryRequired` 如实上报、`ApplicationFailureInjector` 做测试缝。**边界是一个已存在普通文件的替换**：创建 / 删除 / 多目标在写盘前拒绝 | `patch.pri` |
 | `Vcs/` | `vcsbackend.{h,cpp}` | 只读版本控制后端：从文件或目录向上识别所属仓库（含嵌套仓库、worktree 的独立 git dir 与 shared common dir）、工作副本 / HEAD / 任意修订 / 索引 stage 0 / 冲突三阶段（base / ours / theirs）读取、变更列表（含重命名与未跟踪）、日志分页与过滤、引用、blame、修订图数据。`GitBackend` 通过用户安装的 Git 执行，安全独立参数 + `GIT_*` 环境清洗 + 超时与输出上限，比较两侧落在 `QTemporaryDir` 的只读快照里 | `vcs.pri` |
 | （夜间新增的其余服务模块） | `Text/`、`Folder/`、`Merge/`、`Special/`、`Table/`、`Sync/`、`Snapshot/`、`Format/`、`Version/`、`Media/`、`Registry/`、`FolderMerge/`、`Archive/`、`Cli/`、`Script/`、`Settings/` | 比对引擎与各专用类型后端、目录同步与快照、命令行与脚本、设置存储等。**逐条的公开接口与未覆盖范围见各自的 `docs/development/team-*.md`** | 各目录下的 `.pri` |
 
-### 3.4 Files/ 的五段式结构
+### 3.4 Files/ 的六段式结构
 
-`Services/Files/` 刻意拆成五段，对应三种「可验证程度」不同的代码：
+`Services/Files/` 刻意拆成六段，对应三种「可验证程度」不同的代码：
 
 | 这一段 | 内容 | 在哪能被验证 |
 | --- | --- | --- |
@@ -99,6 +99,7 @@ LqCompare 是 Qt 5.15.2 / C++17、qmake 构建的文件与文件夹比对工具�
 | `pathname.h/.cpp` | 名称的字节保真（无效 UTF-8 字节不丢）、Unicode 组合形式规范化、安全显示 | **任意平台**——包括只在 Linux 上才会出现的输入 |
 | `trash.h/.cpp` | 回收站：可用性状态、删除前的决策与文案、删除报告、XDG 路径与 `.trashinfo` 格式 | **任意平台**——Linux 的回收站规则也在这里被真实执行 |
 | `batch.h/.cpp` | 批量操作：失败清单按错误分类归并、逐条建议与原始码、「重试失败项」与「跳过并继续」两条出路、进度回调 | **任意平台**（纯逻辑 + 可注入的假文件系统） |
+| `fileopsoptions.h/.cpp` | 文件操作的**默认行为**：删除方式 / 覆盖策略 / 保留的三项元数据 / 大文件与批量删除两个确认阈值 / 覆盖后的校验方式；键表（唯一事实来源）、标识符与枚举的互转、「目标较新」的专门提示、「默认保守」契约的自检 | **任意平台**（纯数据；`Tests/FileOpsOptions` 因此可以 `QT -= gui`，且有一条源码级护栏钉住它不读文件、不认识设置仓库） |
 | `filesystem_<平台>.cpp`、`trash_<平台>.<ext>` | 真正调用 `lstat`/`FindFirstFileW`/`NSFileManager`/`SHFileOperation` 的薄层 | 只有对应平台 |
 
 这样分的原因是一条踩过的教训：写在 `#ifdef Q_OS_WIN` 里的逻辑在开发机（macOS）
@@ -410,7 +411,7 @@ SESS-003 的范围，本轮改了会与它撞车。另有一条用例对一段**
 | 目录 | 内容 |
 | --- | --- |
 | `Pictures/` | 图标资源（SVG）与 `Pictures.qrc`。图标由 `tools/generate_icons.py` 生成 |
-| `Tests/` | 每个测试套件一个子目录 + 一个 `.pro`；`run-tests.sh` 是统一运行器（**64 个套件 / 3393 条**，2026-09-21）。`Support/` 放多个套件共用的测试替身（如内存文件系统）。**刻意不链接 QtGui 的套件**（`Tests/Filter`、`Tests/AttributeFilter`、`Tests/FilterStack`、`Tests/NameFilter`、`Tests/ContentFilter`、`Tests/Logging`、`Tests/SessionType`、`Tests/Settings`、`Tests/SettingsScope`、`Tests/PatchApply`）兼作「服务层不依赖界面」的编译期护栏；**链接 QtWidgets 的套件**（`Tests/Session`、`Tests/SettingsDialog`、`Tests/VcsView`、`Tests/VcsBlameView` 等）跑在 offscreen 平台上。新套件必须自己 `QTEST_MAIN`，否则链接报 `_main` 未定义 |
+| `Tests/` | 每个测试套件一个子目录 + 一个 `.pro`；`run-tests.sh` 是统一运行器（**65 个套件 / 3487 条**，2026-09-21）。`Support/` 放多个套件共用的测试替身（如内存文件系统）。**刻意不链接 QtGui 的套件**（`Tests/Filter`、`Tests/AttributeFilter`、`Tests/FilterStack`、`Tests/NameFilter`、`Tests/ContentFilter`、`Tests/FileOpsOptions`、`Tests/Logging`、`Tests/SessionType`、`Tests/Settings`、`Tests/SettingsScope`、`Tests/PatchApply`）兼作「服务层不依赖界面」的编译期护栏；**链接 QtWidgets 的套件**（`Tests/Session`、`Tests/SettingsDialog`、`Tests/VcsView`、`Tests/VcsBlameView` 等）跑在 offscreen 平台上。新套件必须自己 `QTEST_MAIN`，否则链接报 `_main` 未定义。**`Tests/OptionsDialog` 的 `saveReviewScreenshots()` 会把对话框截图写到当前目录**（就是仓库根），因此 `.gitignore` 里有一条 `/options-*.png` |
 | `ThirdParty/` | `myclasspath.pri`（定位 LqRibbon）与 `lqribbon.pri`（引入） |
 
 ## 4. 关键设计决策
@@ -587,6 +588,12 @@ SESS-003 的范围，本轮改了会与它撞车。另有一条用例对一段**
 | **VCS 两侧一律是只读快照，快照寿命绑在接收会话上** | 直接拿工作副本当比较源，会被用户在比较过程中改掉，「看到的结果」于是不可复现。快照放进 `QTemporaryDir` 并把所有权延长到会话关闭，一次比较才有确定的输入。**物理只读权限不能替代接收视图的只读编辑约束**——用户仍然需要能选中、复制、滚动 | VCS-002 ~ VCS-010 |
 | **Git 一律走安全独立参数，并清洗继承的 `GIT_*` 环境** | 用 shell 拼命令会让「文件名带空格 / 换行 / 前导破折号 / 冒号」直接变成命令注入；而继承来的 `GIT_DIR` / `GIT_INDEX_FILE` 会让查询读到**另一个仓库**，症状是「结果莫名其妙」，与原因完全看不出关系。因此 `--literal-pathspecs`、`--end-of-options` 与环境清洗是必需项，不是优化 | VCS-001 |
 | **Blame 只读、后台算、关闭即取消；局部能力缺失要如实置灰** | 追溯一个几万行的文件必须离开 UI 线程，且关闭视图不能等后台任务（否则关标签卡住），所以回调进视图前要判代次与取消位。另外「忽略空白改动」「跨重命名追溯」在当前后端里**没有承载参数**——这种情况的正确做法是界面置灰并写明原因，而不是在视图层假装实现（那会让用户以为追溯结果包含了重命名历史） | VCS-012 |
+| **「默认值必须保守」写成可执行的契约（`safetyContractViolations()`），不是文档里的一句话** | 这份模块的三类默认值有一个共同点：**错的方向是不可逆的**（永久删除不进回收站、直接覆盖会盖掉较新的内容、不保留时间戳会让一次复制把整棵目录树的修改时间刷成今天）。写进文档的那条要求会过期，而下一个人读到它时已经晚了；写成 `QStringList safetyContractViolations()` 之后，出厂默认值上调用它必须为空，任何一处被改成不保守的方向都会指出来——`Tests/FileOpsOptions` 的 A 组就是拿它反向验证的。**注意「跳过已存在的目标」不算违反**：它虽然也不问，但不覆盖任何东西，把它算成违规会让这条契约退化成「必须等于 `Ask`」这个与安全性无关的同义反复 | OPT-005 |
+| **目标不存在时不问、也不给提示，与覆盖策略无关** | 少了这一条，默认的「逐个询问」策略会在一个**空目录**里逐条追问「要覆盖吗」——而那里根本没有东西可被覆盖。用户点几次就学会闭着眼睛确认，那时真正的「目标较新」提示也一起失效了。同一处还承担第二条职责：**「目标文件较新」必须单独说清代价**（「覆盖会丢掉目标文件里较新的内容」），因为只说「目标已存在」时用户会顺手点「全部覆盖」，而这一批里恰恰混着几个比源文件更新的目标——那是真正的数据丢失 | OPT-005 |
+| **「保留哪些元数据」是三个独立布尔项，不是一个集合类型的设置值** | 设置仓库的值模型只支持 布尔 / 整数 / 单值字符串，界面控件也是按这个模型一一对应的（勾选框 / 数字框 / 下拉框）。要表达多选集合就得给模型加第四种值类型，而那会同时牵动校验、导入导出、控件生成与往返测试四处——为一条设置项不值得。三个独立键逐项可测、导入导出免费可用，而「集合」这个概念由服务层的 `MetadataPreservation` 恢复。三项**默认全开**：保留是无损方向，关掉才会丢信息 | OPT-005 |
+| **阈值以「兆字节」存、以「字节」用，`0` 表示关闭确认** | 设置文件是可读 JSON、用户会自己打开看，`104857600` 与 `100` 相比后者一眼能对上界面上的数字。代价是两个单位并存，因此换算只留 `largeFileConfirmMegabytesToBytes()` / `largeFileConfirmBytesToMegabytes()` 一对函数，并有往返用例钉住。**`0` 必须是「关闭」而不是「0 字节以上都要确认」**：后者用户永远关不掉这个确认，只能把阈值设成一个天文数字。判定用 `>=` 而不是 `>`——用户设 100 MB 的意思是「碰到 100 MB 的先让我看一眼」 | OPT-005 |
+| **认不出的设置值回退到默认值，并把回退本身报出来** | 设置文件可以被用户手改。悄悄回退到默认值会让用户以为自己的设置生效了；而悄悄**采用**一个认不出的值（比如把 `Permanent` 当成 `permanent`）更糟——那是按用户没表达过的意图执行一次不可逆操作。因此 `fromValues()` 走 `fallbacks` 通道把每一次回退记下来，`validate()` 把它连同内部一致性问题（阈值不是整兆字节、为负）一起交出去；展示与否由调用方决定，但**丢不掉**。同理，`metadataItemLabel()` 对认不出的标识符返回空串，不编名字 | OPT-005 |
+| **数字项的单位后缀进定义表，不在界面按键名硬编码** | 界面曾经对所有整数项一律加 `" pt"`，于是新加一个「体积确认阈值（兆字节）」会显示成 **`100 pt`**——数字对、单位错，而没有任何断言会失败。把 `unit` 放进 `OptionDefinition` 之后，标签由数据推导，`Tests/OptionsDialog` 断言的是 `" MB"` / `" 个"` / `" pt"` 三种后缀各就各位。**新字段必须追加在结构体末尾**，理由见交接文档的坑表 | OPT-005 |
 
 ## 5. 装配流程
 
@@ -600,17 +607,29 @@ main.cpp
   │    ├─ buildRibbon()        RibbonLayout 按声明表建 10 页 / 45 组 / 169 个按钮
   │    ├─ setupDocks()         会话容器（中央）+ 输出面板（底部 dock）
   │    └─ setupStatusBar()     会话数 + 命令实现进度
-  ├─ 命令注册表自检（validate()）→ 问题写日志
-  ├─ 会话类型注册表 / 会话设置目录自检 → 问题写日志（SESS-002 / SESS-006）
-  ├─ 过滤层级表自检（validateFilterLayerTable）→ 问题写日志（FILT-005）
-  ├─ 属性条件表自检（validateAttributeConditionTable）→ 问题写日志（FILT-003）
-  ├─ 名称过滤表自检（validateNameFilterTables）+ 时间预算默认值核对 → 问题写日志（FILT-002）
+  ├─ 命令注册表自检（CommandRegistry::validate()）→ 问题写日志
+  ├─ MainWindow::setOptions()：设置仓库 + OptionsRuntime（主题 / 界面字体 / 内容字体 / 日志级别与目标）
   └─ show() + exec()
 ```
 
-那三条自检都是「表是数据、自检查表」的同一个手法，查的都是「手写那张表时容易写错、
-写错了也不影响别的」的几件事。它们同时也是这几个服务层模块在**生产代码里的调用点**——
-表本身由界面在各自的功能批次里取用，但自检从落地那一刻起就在跑。
+**⚠️ 这里曾经列着四条「启动时打印的表自检」，它们现在没有调用方了。** 2026-09-21 夜间的
+一次 `main.cpp` 重写带走了它们，而文档没有跟着改，于是文档与行为悄悄分家了一段时间。
+现状与决定如下（这条决定本身也是 §4.0 里那个待定事项的结论）：
+
+| 自检 | 生产调用点 | 决定 |
+| --- | --- | --- |
+| `CommandRegistry::validate()` | `main.cpp` 里仍在调用 | 保留 |
+| `validateSessionTypeTable()`（SESS-002）、`validateFilterLayerTable()`（FILT-005）、`validateAttributeConditionTable()`（FILT-003）、`validateNameFilterTables()`（FILT-002）、`validateContentFilterTables()`（FILT-004） | **没有**（`validateContentFilterTables()` 从落地起就没有） | **不把它们加回 `main.cpp`** |
+
+不加回去的理由：这些表都是**编译期常量**，一张写坏的表只可能来自一次错误的改动，
+而那次改动的产物在构建时就已经被单元测试逐条钉住了——每个套件都有一条拿**故意写坏的表**
+跑同一个判定、要求它必须报出条数的用例（`Tests/FilterStack` G 组、`Tests/AttributeFilter` H 组、
+`Tests/NameFilter` I 组、`Tests/ContentFilter` I 组、`Tests/FileOpsOptions` H 组）。
+相比之下启动时打印一遍只是噪声：它能发现的，单测已经发现；单测发现不了的，它也发现不了。
+四个函数与它们的用例都保留（它们**是**那道防线），只是不再冒充「启动时会跑」。
+
+于是「`Tests/` 里有没有一条会红的用例」成为这类护栏的唯一判据——
+这也是 §4 里「自检函数的数据来源必须是参数」那条决策存在的意义。
 
 Ribbon 的 169 个按钮里，只有注册表里登记并带处理器的命令才是「已实现」；
 其余点击后显示它对应的 ACTION-ID 与提示。状态栏常显「Commands N/M」，
