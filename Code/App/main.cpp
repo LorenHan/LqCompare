@@ -1,6 +1,7 @@
 #include "MainWindow.h"
 
 #include "commandregistry.h"
+#include "attributefilter.h"
 #include "filterstack.h"
 #include "logging.h"
 #include "mask.h"
@@ -167,6 +168,37 @@ int main(int argc, char *argv[])
                            .arg(LqCompare::Filter::filterLayerTable().size())
                            .arg(filterLayerProblems.size())
                            .arg(emptyKeepsEverything ? QStringLiteral("是") : QStringLiteral("否")));
+
+    // 属性条件表自检（FILT-003）：标识与声明键是否重复、以及**有没有哪一类条件
+    // 被改成「要去读条目内容」**。最后一条单独列出来，因为它是本条目边界条款
+    // （属性过滤与内容比对解耦）唯一能被自动化盯住的地方：一旦某一类属性条件
+    // 去读文件内容，「扫描阶段早期生效」这条性能要求会从根上落空，
+    // 而现象只是「打开大目录时变慢」，没人会想到是过滤顺序的问题。
+    //
+    // 与上面几条自检同一个手法：表是**数据**，自检查的是「手写那张表时容易写错、
+    // 写错了也不影响别的」的几件事。眼下的调用点只有这一处与 Tests/AttributeFilter
+    // ——属性过滤真正接进界面属 OPT-* 与视图批次。
+    const QStringList attributeProblems = LqCompare::Filter::validateAttributeConditionTable(
+        LqCompare::Filter::attributeConditionTable());
+    for (const QString &problem : attributeProblems) {
+        LQCOMPARE_ERROR("filter", problem);
+    }
+    LqCompare::Filter::AttributeFilter emptyAttributeFilter;
+    // 空过滤器必须「全部保留」：没有任何条件时结论恒为放行。
+    // 它要是坏了，用户什么都还没设就看不到文件了——与空的三层过滤同一条理由。
+    const bool emptyAttributesKeepEverything =
+        emptyAttributeFilter.accepts(LqCompare::Filter::EntryMetadata::forName(
+            QStringLiteral("probe.txt")));
+    if (!emptyAttributesKeepEverything) {
+        LQCOMPARE_ERROR("filter",
+                        QStringLiteral("空的属性过滤拒绝了条目——没有配置条件时应当全部保留"));
+    }
+    LQCOMPARE_INFO("filter",
+                   QStringLiteral("属性过滤：%1 类条件，%2 项问题；空过滤器保留条目=%3")
+                           .arg(LqCompare::Filter::attributeConditionTable().size())
+                           .arg(attributeProblems.size())
+                           .arg(emptyAttributesKeepEverything ? QStringLiteral("是")
+                                                              : QStringLiteral("否")));
 
     window.resize(1280, 820);
     window.show();

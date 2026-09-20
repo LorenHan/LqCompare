@@ -5,16 +5,13 @@ namespace Filter {
 
 namespace {
 
-/// 声明文本切行。三种行尾都要认：`\n`、`\r\n`、`\r`。
-///
-/// 为什么不能简单 `split('\n')`：预设库（FILT-007）要能导出给团队共享，
-/// 而在 Windows 上编辑过的文本文件是 CRLF 行尾。只按 `\n` 切的话，每一行末尾
-/// 会多出一个 `\r`——它跟在掩码后面，于是 `*.tmp` 变成 `*.tmp\r`，
-/// **静静地对不上任何文件**。用户看到的现象是「导入的预设完全不起作用」，
-/// 而掩码本身看起来完美无缺。这类问题在界面上几乎无法自查，所以在这里就切干净。
-///
-/// 单独一个 `\r` 也当换行（老式 Mac 行尾），成本是几行代码，好处是不必再解释
-/// 「为什么这个文件读进来只有一个超长掩码」。
+bool isLineSpace(QChar c)
+{
+    return c == QLatin1Char(' ') || c == QLatin1Char('\t');
+}
+
+} // namespace
+
 QStringList splitDeclarationLines(const QString &declaration)
 {
     QStringList lines;
@@ -42,13 +39,6 @@ QStringList splitDeclarationLines(const QString &declaration)
     lines.append(current);
     return lines;
 }
-
-bool isLineSpace(QChar c)
-{
-    return c == QLatin1Char(' ') || c == QLatin1Char('\t');
-}
-
-} // namespace
 
 // -----------------------------------------------------------------------------
 // 标签
