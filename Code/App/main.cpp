@@ -5,6 +5,7 @@
 #include "filterstack.h"
 #include "logging.h"
 #include "mask.h"
+#include "namefilter.h"
 #include "settingschema.h"
 #include "sessiontype.h"
 
@@ -199,6 +200,52 @@ int main(int argc, char *argv[])
                            .arg(attributeProblems.size())
                            .arg(emptyAttributesKeepEverything ? QStringLiteral("是")
                                                               : QStringLiteral("否")));
+
+    // 名称过滤表自检（FILT-002）：模式前缀是否重复、有没有模式漏登记、
+    // 三种组合语义是否各有各的解释。最后一条单独列出来，因为它是本条目里最
+    // 容易写错又完全没有运行期现象的一处：两种语义共用一句解释时，界面照常
+    // 显示，用户看到的却是**另一条语义**的说明，于是他按提示去改、越改越不对。
+    //
+    // 与上面几条自检同一个手法：两张表都当**参数**传进来，因此用例能拿一份
+    // 故意写坏的表证明它真的会报（一条永远不会红的护栏比没有护栏更糟）。
+    // 眼下的调用点只有这一处与 Tests/NameFilter——名称过滤真正接进界面
+    // （Filters 页的名称过滤输入框）属 OPT-* 与视图批次。
+    const QVector<QString> nameFilterProblems = LqCompare::Filter::validateNameFilterTables(
+        LqCompare::Filter::nameMatchModePrefixTable(), LqCompare::Filter::nameCombineModeTable());
+    for (const QString &problem : nameFilterProblems) {
+        LQCOMPARE_ERROR("filter", problem);
+    }
+    LqCompare::Filter::NameFilter emptyNameFilter;
+    // 空名称过滤器必须「全部保留」——与空的三层过滤、空属性过滤同一条理由：
+    // 它要是坏了，用户什么都还没设就看不到文件了。
+    const bool emptyNamesKeepEverything =
+        emptyNameFilter.accepts(QStringLiteral("probe.txt"));
+    if (!emptyNamesKeepEverything) {
+        LQCOMPARE_ERROR("filter",
+                        QStringLiteral("空的名称过滤拒绝了条目——没有配置表达式时应当全部保留"));
+    }
+    // 正则匹配的时间预算（200ms/条）是规格里写死的默认值，不是随手取的常数。
+    // 它被改小时会出现「一大批条目变成不确定」，改大时会出现「界面卡住」，
+    // 两种现象都不会有任何断言变红，因此在这里把默认值钉住。
+    const LqCompare::Filter::NameMatchBudget nameBudget = emptyNameFilter.matchBudget();
+    if (!nameBudget.isEnabled() || nameBudget.perEntryMs != 200
+        || !nameBudget.hasCircuitBreaker()) {
+        LQCOMPARE_ERROR("filter",
+                        QStringLiteral("名称过滤的时间预算默认值被改动了：perEntryMs=%1，"
+                                       "断路器阈值=%2")
+                            .arg(nameBudget.perEntryMs)
+                            .arg(nameBudget.consecutiveTimeoutLimit));
+    }
+    LQCOMPARE_INFO("filter",
+                   QStringLiteral("名称过滤：%1 种模式，%2 种组合语义，%3 项问题；"
+                                  "空过滤器保留条目=%4；时间预算=%5ms/条（断路器 %6 次）")
+                           .arg(LqCompare::Filter::allNameMatchModes().size())
+                           .arg(LqCompare::Filter::allNameCombineModes().size())
+                           .arg(nameFilterProblems.size())
+                           .arg(emptyNamesKeepEverything ? QStringLiteral("是")
+                                                        : QStringLiteral("否"))
+                           .arg(nameBudget.perEntryMs)
+                           .arg(nameBudget.consecutiveTimeoutLimit));
 
     window.resize(1280, 820);
     window.show();

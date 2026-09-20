@@ -1,12 +1,14 @@
-# 掩码与过滤规则（FILT-001、FILT-003、FILT-005）。
+# 掩码与过滤规则（FILT-001、FILT-002、FILT-003、FILT-005）。
 #
-# 本模块刻意分成四部分，一层一个文件：
+# 本模块刻意分成五部分，一层一个文件：
 #   mask.{h,cpp}            —— 掩码语言本身：语法、解析、匹配、语法速查（平台无关）
 #   maskfilter.{h,cpp}      —— 过滤声明：包含/排除如何叠加、大小写策略、预览计数（平台无关）
 #   filterstack.{h,cpp}     —— 三层叠加（格式 / 会话 / 视图）与各层的落点（FILT-005）
 #   attributefilter.{h,cpp} —— 属性过滤：大小 / 修改时间 / 属性位 / 所有者（FILT-003）
+#   namefilter.{h,cpp}      —— 名称过滤：精确名 / 通配符 / 正则，三种组合语义，
+#                              超时保护与静态回溯风险预检（FILT-002）
 #
-# 为什么四层要分开：
+# 为什么五层要分开：
 #   * `mask.h` 回答「这一段掩码命中这个条目吗」——失败是「你的掩码写错了」，
 #     界面要在输入框里标红那一段（所以错误带列号与长度）。
 #   * `maskfilter.h` 回答「整个声明叠加之后这个条目留不留」——失败是
@@ -16,8 +18,14 @@
 #   * `attributefilter.h` 回答「这个条目的元数据符合要求吗」——它与前三个是
 #     **正交**的一条轴（前三个只看名字与路径）。两者最终是**与**的关系，
 #     合成入口在 `decideEntry()` 里，理由写在 attributefilter.h 顶部。
+#   * `namefilter.h` 回答「一组高级表达式在某种组合语义下放不放行」——它与
+#     `maskfilter.h` 都看名字，但需求分属两个条目、界面上是两个输入框
+#     （`maskfilter` 带 `-` 排除前缀与「排除优先」，`namefilter` 没有前缀、
+#     排除语义由组合语义承担）。合成的代价是任何一处界面改动都会波及另一处，
+#     理由写在 namefilter.h 顶部。
 #
-# 本模块依赖 QtCore，另加 **Services/Session 的存储抽象**（只有 filterstack 用到）。
+# 本模块依赖 QtCore（namefilter 另用 QtCore 的线程原语），
+# 另加 **Services/Session 的存储抽象**（只有 filterstack 用到）。
 # 前者保证「三种平台的大小写规则都能在 macOS 上被真实执行」——这正是 FILT-001
 # 第 3 条完成标准要的东西。「Windows 默认不敏感」这条规则如果写成 `#ifdef Q_OS_WIN`，
 # 在开发机上就一次都不会执行到。
@@ -40,10 +48,12 @@ HEADERS += \
     $$PWD/mask.h \
     $$PWD/maskfilter.h \
     $$PWD/filterstack.h \
-    $$PWD/attributefilter.h
+    $$PWD/attributefilter.h \
+    $$PWD/namefilter.h
 
 SOURCES += \
     $$PWD/mask.cpp \
     $$PWD/maskfilter.cpp \
     $$PWD/filterstack.cpp \
-    $$PWD/attributefilter.cpp
+    $$PWD/attributefilter.cpp \
+    $$PWD/namefilter.cpp

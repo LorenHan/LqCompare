@@ -78,6 +78,22 @@ FILT-001 的「排除优先」。一句话概括取舍：并集的意思是「�
 并且**模块里没有任何读文件的代码**——这条约束由一条**读源码的护栏**钉住
 （出现 `QFile`/`readAll`/`QTextStream`/`QDataStream` 即红），因为「以后有人顺手加一读」
 正是这类约束的典型死法。它也有自己的条件表启动自检。
+**名称过滤器也定下来了（FILT-002）**：三种模式（精确 / 通配 / 正则，**由每条表达式的
+行首前缀 `=` / `*` / `~` 自己决定**，不是整个过滤器一个全局开关）、三种组合语义
+（任一命中即保留 / 不含任何一条 / 必须全部命中）、**三态结论**（命中 / 不命中 / 不确定），
+以及**默认 200ms/条的超时保护**。这里有一个 Qt 版本现实：`QRegularExpression` 直到
+Qt 6.0 才有 `setMatchTimeout()`，本仓钉在 5.15，因此超时是自己做的——把匹配放到一个
+工作线程上等截止时间，超时就把**整个线程丢弃换新的**（不用 `QThread::terminate()`，
+它会把互斥量留在未定义状态），同时把结论记成「不确定 + 一条超时问题」；连续超时
+达到阈值（默认 2）时断路器打开，后续条目直接按「不确定」放行、不再派活。
+**超时与元数据缺失一律放行、但必须被报出来**——这和 FILT-003 的取值方式同源：
+把「不知道」当成「不满足」，用户会看到文件凭空消失却查不到原因。另有两层更便宜的
+护栏在它前面：`analyzeRegexPatternRisk()` 在解析时就静态认出 `(a+)+$` 这类嵌套量词并
+给出警告（**只在确实会退化时报**——`(a{2})+` 与 `(a+){2}` 不报），避免把「可能很慢」
+变成「一写就被拦」。它同样是纯 QtCore 的（`Tests/NameFilter` 刻意 `QT -= gui`），
+并且**解析、界面的实时校验、复验共用同一个 `analyzeNameFilterLine()`**——
+有读源码的护栏钉住这条，防止将来有人为了「界面快一点」再写第二份解析。
+界面还没接：名称过滤框与错误就地标红要等设置页 `OPT-*`。
 
 ## 1.1 已落地的服务层模块
 
@@ -88,6 +104,7 @@ FILT-001 的「排除优先」。一句话概括取舍：并集的意思是「�
 | `Services/Filter/` | FILT-001 | **部分完成**（界面上的速查与实时预览尚未接线） | `Tests/Filter`（87 个用例函数）；`FILT-005` 另见下一行 |
 | `Services/Filter/`（三层叠加与落点） | FILT-005 | **部分完成**（第 1、4、5 条的服务层已完整落地并有启动自检；第 2、3 条的服务层部分——启用状态与四态文案、面板数据与全文——也已落地，**缺的只是显示控件**，住所是设置页 OPT-*） | `Tests/FilterStack`（84 个用例函数，**纯 QtCore**） |
 | `Services/Filter/`（属性条件） | FILT-003 | **部分完成**（第 1~4 条已落；第 5 条只落了能独立验证的那一半——「与内容比对解耦」由读源码的护栏钉住，「扫描阶段提前丢弃」要等 `Folder/` 扫描器） | `Tests/AttributeFilter`（89 个用例函数，**纯 QtCore**） |
+| `Services/Filter/`（名称过滤） | FILT-002 | **部分完成**（第 1~4 条已落；第 5 条只勾得动「命名 + 导出往返」这一半，「与界面上的名称过滤框共用一套解释」要等界面接入） | `Tests/NameFilter`（93 个用例函数，**纯 QtCore**） |
 | `Services/Files/`（文件系统） | PLAT-002 | **部分完成**（Windows 实现未编译验证） | `Tests/FileSystem`（50 用例） |
 | `Services/Files/`（回收站） | PLAT-003 | **部分完成**（Windows 实现未编译验证） | `Tests/Trash`（35 用例） |
 | `Services/Files/`（名称与 Unicode） | PLAT-007 | **部分完成**（长路径只写在 Windows 侧，未编译验证） | `Tests/PathName`（40 用例 + 1 个仅 Linux 执行） |
@@ -114,7 +131,8 @@ SESS-001 见 [issue #36](https://github.com/LorenHan/LqCompare/issues/36)；
 SESS-002 见 [issue #37](https://github.com/LorenHan/LqCompare/issues/37)；
 SESS-007 见 [issue #42](https://github.com/LorenHan/LqCompare/issues/42)；
 FILT-005 见 [issue #233](https://github.com/LorenHan/LqCompare/issues/233)；
-FILT-003 见 [issue #230](https://github.com/LorenHan/LqCompare/issues/230)。
+FILT-003 见 [issue #230](https://github.com/LorenHan/LqCompare/issues/230)；
+FILT-002 见 [issue #229](https://github.com/LorenHan/LqCompare/issues/229)。
 
 ### 1.2 回收站（PLAT-003）落地到了什么程度
 
@@ -526,12 +544,55 @@ FILT-005（三层叠加与作用域）与 FILT-003（属性过滤）已在后续
 - **只填日期的上限算到当天最后一刻**（`2026-09-10` 含 9 月 10 日一整天），
   且用同一天的 `23:59:59` 构造而不是 `addSecs(86399)`——夏令时那天有 25 小时。
 
+### 1.14 FILT-002 落地到了什么程度
+
+规格的五条完成标准对应到代码（模块在 `Services/Filter/namefilter.{h,cpp}`）：
+
+| 完成标准 | 落在哪里 | 状态 |
+| --- | --- | --- |
+| 支持通配符与正则两种写法 | `NameMatchMode::{Exact,Wildcard,Regex}`、`NameFilterExpression::mode`、`analyzeNameFilterLine()` 按行前缀判模式（`=` 精确 / `*` 通配 / `~` 正则） | **已落** |
+| 正则模式必须有超时保护（避免灾难性回溯卡死） | `NameMatchBudget`（默认 `perEntryMs=200`、`consecutiveTimeoutLimit=2`）+ `NameMatchRunner` 抽象 + `ThreadNameMatchRunner`（工作线程 + 截止时间）+ `analyzeRegexPatternRisk()` 静态预检 + 连续超时断路器 | **已落** |
+| 按名称过滤（支持包含 / 排除组合） | `NameCombineMode::{AnyOf,NoneOf,AllOf}`、`setCombineMode()`、`decide()` 的三态合成 | **已落** |
+| 过滤结果可保存为具名预设并导出 | `serializeNamedNameFilters()` / `parseNamedNameFilters()`、`NameFilterPreset`、`setName()/name()` | **已落** |
+| 名称过滤与界面上的名称过滤框共用同一套解释 | 只有「同一套解释」这一半——`analyzeNameFilterLine()` 是解析、实时校验、复验的**唯一实现**（由读源码的护栏钉住，见 `Tests/NameFilter` 的 J 组）；「界面上的名称过滤框」还没接线 | **部分落**（服务层一半已落） |
+
+**还没做的**：
+
+1. **界面的名称过滤框接入**（第 5 条的后半句）。输入框、实时标红、与 `NameFilter::parseDeclaration()`
+   的就地校验接线都属于界面批次；服务层已把 `NameFilterProblems`（带行号/列号/长度/严重度）
+   与 `toDeclarationText()` 准备好了。
+2. **扫描阶段真正用上名称预筛**。与 FILT-003 同理，`Folder/` 扫描器未落地，
+   「先用名称把条目丢掉、不进入内容比对」这条性能断言现在没有承接方。
+   落地方式同上：扫描器拿到名字后调 `decide()`，`NotMatched` 跳过、`Undecided` 照常进入。
+3. **运行期超时的平台侧验证**。真线程用例（E 组）在本机跑过，但「一台被别的进程压满的机器上
+   200ms 这个默认值够不够」需要在目标平台真跑一次性能基线才能定；现在这个值是可配的。
+
+**五条刻意的取舍**（改之前先读）：
+
+- **模式是每条表达式自己的，不是整个过滤器一个全局开关**。一个过滤器里同时写
+  `*.txt`（通配）和 `~(a+)+$`（正则）是常态；全局开关会逼用户把过滤器拆成两个。
+  前写入 `namefilter.h` 顶部。
+- **只有正则走超时保护，精确与通配不欠**。精确是 `QString` 比较，通配是线性回溯可控的
+  手写匹配；给它们也套线程只会平白多一次线程往返。理由写在 `NameMatchBudget` 的注释里。
+- **超时一律放行，并且必须被报出来**（`NameMatchOutcome::Undecided` + `NameFilterIssueKind::Timeout`）。
+  这与 FILT-003 的 `ConditionOutcome` 同源：把「不知道」当成「不满足」，用户会看到文件
+  凭空消失而查不到原因；放行 + 状态栏说明才是可理解的失败方式。
+- **超时后丢弃整个工作线程换新的**，不用 `QThread::terminate()`。Qt 5.15 没有 API 能安全地
+  中止一个正在跑 PCRE2 的线程；`terminate()` 会让互斥量与 `QMutex` 停在未定义状态。
+  丢弃（`deleteLater`）+ 重建是唯一不留隐患的走法，代价是每个被放弃的线程泄漏一次
+  线程栈——但达到断路器（默认连 2 次）就停止再派活，不会持续泄漏。
+- **Qt 5.15 的现实**：`QRegularExpression::setMatchTimeout()` / `matchTimeout()` 是 **Qt 6.0**
+  才有的。本仓既然钉在 5.15，超时只能自己做（已在
+  `~/Qt/5.15.2/clang_64/lib/QtCore.framework/Versions/5/Headers/qregularexpression.h`
+  逐字核对过没有这两个成员）。直调 PCRE2 match limit 需要把第三方库带进交付物，
+  与「一个 exe 分发」相冲，因此不采纳；相关理由与取舍已同时写进 `architecture.md` §4。
+
 ## 2. 已验证的事实（不用再花时间确认）
 | 项目 | 结论 | 验证方式 |
 | --- | --- | --- |
 | 构建 | Qt 5.15.2 clang_64 上 qmake + make 通过，产出 `dist/macos/LqCompare.app` | `qmake && make -j8` |
 | 运行 | 主程序离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
-| 测试（全量） | **885 passed / 0 failed / 1 skipped**（AttributeFilter 90 + Batch 36 + CommandRegistry 14 + FileSystem 50 + **Filter 89** + **FilterStack 84** + Logging 34 + PathName 40 + PlatformIcon 48 + Session 48 + SessionType 59 + Settings 71 + SettingsDialog 45 + SettingsScope 41 + ShellIntegration 101 + Trash 35）。本轮这 885 是**实测**，16 个套件逐个跑完 | `Code/Tests/run-tests.sh` |
+| 测试（全量） | **978 passed / 0 failed / 1 skipped**（AttributeFilter 90 + Batch 36 + CommandRegistry 14 + FileSystem 50 + **Filter 89** + **FilterStack 84** + Logging 34 + **NameFilter 93** + PathName 40 + PlatformIcon 48 + Session 48 + SessionType 59 + Settings 71 + SettingsDialog 45 + SettingsScope 41 + ShellIntegration 101 + Trash 35）。本轮这 978 是**实测**，17 个套件逐个跑完 | `Code/Tests/run-tests.sh` |
 | 三层过滤叠加与落点 | 84 个用例函数（QTest 合计 84），0 失败 0 跳过。分七组：A 层级与落点 8、B 三层叠加 20、C 启用与生效 14、D 表达式与面板 15、E 视图层不落盘 11、F 计数 6、G 层级表自检 8（含 6 条对**故意写坏**的表跑同一个判定，证明护栏不是恒真的）。这套件**刻意不链接 QtGui**，但**必须**链接 `Services/Session`——第 4 条要拿真正的 `SessionSettings` 存储来断言，测试替身会连「存到哪个存储」一起替掉 | `Code/Tests/run-tests.sh FilterStack` |
 | 三层过滤能反向验证 | 十六处变异逐一被拦下：视图层落点改成随会话保存 → 多条红；`active()` 只看启用标志 → 多条红；去掉层间的排除优先 → 多条红；排除集合用 AND 连接 → 表达式红；原子一律不加引号 → 引号用例红；表达式不去重 → 去重用例红；视图存储缺失时退而写入会话存储 → 「不许退而写入」红；会话层也从视图存储读 → 「按存储分别读」红；`loadInto` 整份替换状态（丢掉启用标志）→ 红；`setLayerState` 不按声明重新解析 → 红；大小写覆盖在重新解析后不再应用 → 红；不统计 `decided` → 面板与计数红；不计入逐层统计 → 红；自检去掉「视图层落点」这一条 → 红；自检不查顺序 → 红；汇总文案改成另一句 → 红。**16 处全部检出，0 处漏检** | 变异测试（结论写在 issue #233 的落地说明里） |
 | 会话设置声明与草稿 | 65 个用例函数（QTest 合计 71，含 `initTestCase` 与六种控件的 6 行数据）。分六组：A 声明与六种控件 17、B 自检 11、C 草稿读写与脏判定 13、D 应用与恢复默认 10、E 询问策略 6、F 声明目录与反向验证 8。这套件**刻意不链接 QtGui**（声明与草稿都是纯数据），因此「任一会话设置 Tab 均可无界面构造与读写」这条标准是靠构建配置 + 用例两边一起钉住的 | `Code/Tests/run-tests.sh Settings` |
@@ -543,8 +604,8 @@ FILT-005（三层叠加与作用域）与 FILT-003（属性过滤）已在后续
 | 名称与 Unicode | 40 个用例通过 + 1 个跳过（无效 UTF-8 名字的用例只在 Linux 上执行，CI 会跑）。覆盖字节保真往返、UTF-8 边界与过长编码、Unicode 组合形式、六类文件名问题的原因与位置 | `Code/Tests/run-tests.sh PathName` |
 | 错误携带与批量处置 | 36 个用例全通过。其中 9 个验证错误码在三种域下的携带与显示（含「未识别的码只给数字」）、11 个验证失败清单分组、12 个验证执行流程（含「重试只跑失败项」与「停止不移除已完成进度」）、4 个走真实文件系统做一次「设为只读 → 解除只读」往返 | `Code/Tests/run-tests.sh Batch` |
 | 系统图标 | 46 个用例函数（QTest 合计 48，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分四组：17 个验证缓存键与尺寸规则（扩展名折叠 7 + 键的合成与解析 5 + DPI 缩放 4 + Windows 档位收拢 1）、9 个验证有界 LRU 的淘汰与命中统计、6 个验证请求去重队列、11 个验证服务层（同步/异步/去重/回退/换比例清缓存）；另有 **3 个走真实系统图标源**（macOS 上真实执行：断言拿到非空像素、断言文字文件与文件夹的图确实不同） | `Code/Tests/run-tests.sh PlatformIcon` |
-| 主程序构建 | 通过，`iconservice_mac.mm`、`mask.cpp` / `maskfilter.cpp` / **`attributefilter.cpp`** / **`filterstack.cpp`**、`comparesession.cpp` / `session.cpp` / `sessiontype.cpp` / `settingschema.cpp` / `settingscope.cpp` 都编进主程序（链接行里能看到 `attributefilter.o`），**本仓库自己的代码 0 warning**。全部告警只有 1 条 `LqRibbon.cpp:569: unused function 'nativeWindowScaleFactor' [-Wunused-function]`——它属于 MyClass 那个仓库，不在本仓改动范围内 | `cd _build-lqcompare && ~/Qt/5.15.2/clang_64/bin/qmake ../Code/LqCompare.pro && make -j8` |
-| 主程序运行 | 离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」「会话类型注册表：14 个类型，0 项问题」「会话设置目录：0 个类型（含 无通用声明），0 项问题」「三层过滤：3 层，0 项问题；空栈保留条目=是」「属性过滤：4 类条件，0 项问题；空过滤器保留条目=是」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
+| 主程序构建 | 通过，`iconservice_mac.mm`、`mask.cpp` / `maskfilter.cpp` / **`attributefilter.cpp`** / **`filterstack.cpp`** / **`namefilter.cpp`**、`comparesession.cpp` / `session.cpp` / `sessiontype.cpp` / `settingschema.cpp` / `settingscope.cpp` 都编进主程序（链接行里能看到 `namefilter.o`），**本仓库自己的代码 0 warning**。全部告警只有 1 条 `LqRibbon.cpp:569: unused function 'nativeWindowScaleFactor' [-Wunused-function]`——它属于 MyClass 那个仓库，不在本仓改动范围内 | `cd _build-lqcompare && ~/Qt/5.15.2/clang_64/bin/qmake ../Code/LqCompare.pro && make -j8` |
+| 主程序运行 | 离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」「会话类型注册表：14 个类型，0 项问题」「会话设置目录：0 个类型（含 无通用声明），0 项问题」「三层过滤：3 层，0 项问题；空栈保留条目=是」「属性过滤：4 类条件，0 项问题；空过滤器保留条目=是」「名称过滤：3 种模式，3 种组合语义，0 项问题；空过滤器保留条目=是；时间预算=200ms/条（断路器 2 次）」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
 | Shell 集成 | 99 个用例函数（QTest 合计 101，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分十一组：A 动作与目标 14、B 选项 8、C 命令行引号 8、D 计划 13、E 安装 10、F 卸载与还原 9、G 校验 5、H 残留 6、I 能力 4、J 预演 3、K 命令行解析 9。**全部跑在功能完整的内存注册表上**，因此安装回滚与卸载还原是在本机真实执行的流程，不是桩 | `Code/Tests/run-tests.sh ShellIntegration` |
 | Shell 集成的命令行引号 | 用测试内置的 `CommandLineToArgvW` 参考实现做往返：`"C:\Program Files\…\LqCompare.exe" --shell-action=compare "%1"` 切回来必须还是两个原值，含「结尾反斜杠要翻倍」这条最容易写错的规则 | `Code/Tests/run-tests.sh ShellIntegration` |
 | 分级日志 | 32 个用例函数（QTest 合计 34，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分五组：A 级别与过滤 6、B 格式 4、C 输出目标 11、D 耗时辅助 6、E 级别名解析 4、以及 `initTestCase`/`cleanupTestCase`。这套件**刻意不链接 QtGui**：哪天有人往 `logging.cpp` 里加图形依赖，本工程会立刻构建失败 | `Code/Tests/run-tests.sh Logging` |
@@ -554,6 +615,9 @@ FILT-005（三层叠加与作用域）与 FILT-003（属性过滤）已在后续
 | 属性条件（FILT-003） | 89 个用例函数（QTest 合计 90，含 `initTestCase`）全通过、0 跳过。分九组：A 大小范围与单位 15、B 修改时间范围 14、C 属性位 10、D 所有者与组 9、E 与名称过滤的与关系 8、F 声明文本 13、G 缺失与写错 9、H 条件表自检 8、I 与内容解耦 2。这套件**刻意不链接 QtGui**（条件判定是纯数据），因此「属性过滤不依赖界面」也是靠构建配置钉住的 | `Code/Tests/run-tests.sh AttributeFilter` |
 | 属性条件能反向验证 | 十八处变异逐一被拦下（含把「与」改成「或」、把 `undecided` 当成 `accepted=false`、日期上限退回当天 `00:00`、1024 改成 1000、单位表去掉中文「字节」、`knownAttributeBits` 与 `attributeBits` 合并、大小写策略在所有者比较上失效、条件表自检不查顺序、声明切行只按 `\n` 切、畸形条件也去缩小结果集、`claimFamilyKey` 的重复键分支、互斥家族冲突不报错）。**18 处全部检出，0 处漏检** | 变异测试（结论写在 issue #230 的落地说明里） |
 | 属性过滤与内容比对解耦 | **读源码**的护栏：`Tests/AttributeFilter` 的 I 组直接读 `Services/Filter/attributefilter.{h,cpp}`，一旦出现 `QFile` / `readAll` / `QTextStream` / `QDataStream` / `readFileContents` 即红；另有一条用例对一段故意植入 `QFile(path).readAll()` 的源码跑同一流程，证明判定不是恒真 | `Code/Tests/run-tests.sh AttributeFilter` |
+| 名称过滤（FILT-002） | 93 个用例函数（QTest 合计 93）全通过、0 跳过。分**十组**：A 模式与模式前缀 12、B 通配与精确语义 11、C 组合语义（含 / 不含 / 全含）11、D 判定结论与放行 11、E 超时保护与断路器 12、F 静态风险预检 9、G 声明文本与实时校验 10、H 具名预设与导出往返 8、I 表自检 5、J 与界面共用同一套解释 4。这套件**刻意不链接 QtGui**（判定是纯数据），因此「名称过滤不依赖界面」也是靠构建配置钉住的 | `Code/Tests/run-tests.sh NameFilter` |
+| 名称过滤能反向验证 | **二十九处**变异逐一被拦下（含精确名忽略大小写、整名匹配退回 `match()` 的部分匹配、只用 `anchoredPattern()` 覆盖用户自己的锚点、断路器阈值 +1、超时后不清零连续计数、超时后不放行、超时结论不给 `Timeout` 问题、连字符类里的量词也当变量量词报、`(?…)` 分组修饰里的量词也报、`{2}` 定长量词误报、模式前缀按错的优先级解析、组合语义 `NoneOf` 用「任一命中即排除」而不是「全部命中才排除」、预设往返多出末尾空行、记录开始前的空行也进正文、`disabledExpressionCount` 数槽位数而不是真被停用的条数、`nameFilterDeclarationKey()` 改成别的字符串、自检不查模式表顺序、自检不查共用解释、大小写选项在正则上不生效…）。**29 处全部检出，0 处漏检** | 变异测试（结论写在 issue #229 的落地说明里） |
+| 名称过滤的 Qt 5.15 现实 | `QRegularExpression` 在 Qt 5.15 **没有** `setMatchTimeout()` / `matchTimeout()`（逐字核对 `~/Qt/5.15.2/clang_64/lib/QtCore.framework/Versions/5/Headers/qregularexpression.h` 确认；这两个成员是 Qt 6.0 才加的）。因此 200ms 超时**不能**靠 Qt API 实现，只能自己做（工作线程 + 截止时间）；也不引第三方 PCRE2——那与「一个 exe 分发」相冲 | 头文件核对 + 实测 |
 | 会话抽象基类 | 46 个用例函数（QTest 合计 48，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分七组：A 生命周期与状态迁移 19、B 视图契约 5、C 三个公共出口 7、D 设置接口 7、E 可扩展性 2、F 源码级护栏 2、G 与类型注册表的衔接 4。**这是本仓库第一个链接 QtWidgets 的测试套件**（基类的 `createWidget()` 返回 `QWidget*`），跑在 offscreen 平台上 | `Code/Tests/run-tests.sh Session` |
 | 会话类型注册表 | 57 个用例函数（QTest 合计 59，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分六组：A 条目字段齐备 13、B ID 稳定性与登记校验 11、C 按掩码查询与注册顺序 14、D 可枚举 7、E 按名字查 5、F 自检与两道源码级护栏 7。这套件**刻意不链接 QtGui**（注册表是纯逻辑）——它是本仓库第一次有「服务层的会话框架测试」 | `Code/Tests/run-tests.sh SessionType` |
 | 会话类型注册表能反向验证 | 六处变异逐一被拦下：对调 `text` 与 `table` 的登记顺序 → 快照、重叠结论与 Home 页一致性三条红；改掉 `homepage.cpp` 里一个类型 ID → Home 页一致性红；给表格类型多加一条与文本重叠的掩码 → `onlyHtmlOverlaps` 红；把一条内置掩码写成大写 → `validate` 两条红；让 `findByFileMask` 不跳过当前平台不可用的类型 → 该条红；`add()` 不再校验 ID 格式 / 不再拒绝重复 ID / 不保存传入的工厂 / `byGroup` 不按可用性过滤 → 各自对应的用例红。全部检出 | 变异测试（结论写在 issue #37 的落地说明里） |
@@ -573,6 +637,8 @@ FILT-005（三层叠加与作用域）与 FILT-003（属性过滤）已在后续
 | 会话设置目录自检 | 启动时 0 问题。目录当前是**空的**（框架刻意不含具体设置项），因此这一行眼下只会打印「0 个类型」；它的意义是把唯一的那个生产调用点摆好，各会话类型登记声明时立刻开始替它们把关 | 启动日志 |
 | 过滤层级表自检 | 启动时 0 问题，日志为「三层过滤：3 层，0 项问题；空栈保留条目=是」。查三件事：三层是否齐、顺序是否是规格顺序、以及**视图层的落点是否仍然是「仅当前视图」**（这一条错了没有任何运行期现象）。同时它也是 `FilterStack` 在**生产代码里的唯一调用点**——三层过滤真正接进界面属 OPT-* 与视图批次 | 启动日志 |
 | 属性条件表自检 | 启动时 0 问题，日志为「属性过滤：4 类条件，0 项问题；空过滤器保留条目=是」。查四件事：四类条件是否齐、顺序是否是规格顺序、标识符/声明键是否唯一且非空、以及**每一类是否都只依赖元数据**（`metadataOnly` 为假的条目会被报出来）。自检**把表当参数**，因此测试能拿一份故意写坏的表证明它真会报。后半句「空过滤器保留条目=是」是「写错/没写的条件不缩小结果集」在生产路径上的最小证据 | 启动日志 |
+| 名称过滤表自检 | 启动时 0 问题，日志为「名称过滤：3 种模式，3 种组合语义，0 项问题；空过滤器保留条目=是；时间预算=200ms/条（断路器 2 次）」。查四件事：模式表（3 种）与组合语义表（3 种）是否齐、顺序是否是规格顺序、前缀/标识符/解释是否唯一且非空、以及**每一行的「共用解释」是否与 `analyzeNameFilterLine()` 的行为一致**。自检**把两张表都当参数**（`validateNameFilterTables(modeTable, combineTable)`），因此测试能拿故意写坏的表证明它真会报——这一点是本轮**修出来的**：最初自检从内部表读，于是它永远不会红（见 §6） | 启动日志 |
+| 名称过滤的时间预算可读出来 | 空过滤器的 `matchBudget()` 必须是 `perEntryMs == 200` 且 `hasCircuitBreaker()` 为真（`consecutiveTimeoutLimit == 2`）；主程序启动时断言这两个值，日志里印出来。这条是「超时保护确实开着」在生产路径上的最小证据——否则一个被改成 0 的默认值会让保护静默消失 | 启动日志 + `Code/Tests/run-tests.sh NameFilter` |
 
 **已知未验证**：Windows MinGW 32 位构建未在本机验证（无该环境）；
 macOS 上只有 Qt 5.15.2 一套（用户机器上 6.11.0 已卸载）。
@@ -626,7 +692,12 @@ Code/
 │   │                             **模块内不读任何文件内容**）、
 │   │                             filterstack（三层叠加 / 每层启用状态 / 合并表达式 /
 │   │                             面板数据 / 落点路由与层级表自检；**唯一一处只给
-│   │                             `../Session` 搜索路径而不给源文件的模块依赖**）
+│   │                             `../Session` 搜索路径而不给源文件的模块依赖**）、
+│   │                             namefilter（三种模式 精确/通配/正则、三种组合语义
+│   │                             任一/不含/全含、三态结论与「不确定一律放行」、
+│   │                             200ms 超时保护（工作线程 + 截止时间）与连续超时
+│   │                             断路器、正则灾难性回溯静态预检、具名预设与导出
+│   │                             往返、两张表自检）
 │   ├── Files/                    filesystem（抽象层 + 错误携带）、pathutils（路径与名称规则）、
 │   │                             pathname（字节保真 / Unicode / 显示）、
 │   │                             trash（回收站服务 + XDG 规则）、
@@ -655,6 +726,10 @@ Code/
 │   │                             刻意不链接 QtGui；链接 Services/Session 以拿真正的
 │   │                             存储断言「视图临时过滤不写入会话」）
 │   ├── Logging/                  tst_logging + .pro（32 用例函数，刻意不链接 QtGui）
+│   ├── NameFilter/               tst_namefilter + .pro（93 用例函数，**纯 QtCore**，
+│   │                             刻意不链接 QtGui；十组 A~J，含用脚本替身
+│   │                             ScriptedRunner 覆盖超时策略、以及读源码钉住
+│   │                             「任务按值捕获」与「解析/校验/复验同源」两条不变式）
 │   ├── PathName/                 tst_pathname + .pro（40 用例 + 1 个仅 Linux）
 │   ├── Trash/                    tst_trash + .pro（35 用例）
 │   ├── Batch/                    tst_batch + .pro（36 用例）
@@ -782,22 +857,24 @@ git push --force-with-lease=main:<远端当前提交> \
 | 对话 | 工作流 | 从哪条 issue 开始 | 交付什么 |
 | --- | --- | --- | --- |
 | **B 会话框架** | 继续（**`SESS-001`、`SESS-002`、`SESS-006`、`SESS-007` 都已落地；SESS-007 剩下的全是「界面接通」，而界面要等第一个真正的会话类型**） | 先落一个具体会话类型（`TEXT-*` 或 `FOLD-*`），或改做 `SESS-008`（会话文件保存与加载） | 这里有一个**新产生的依赖链**：SESS-007 第 2、3 条被「第一个真正的会话类型」卡住（对话框要有设置目标才谈得上去向提示，标签要有持有设置的会话才谈得上关标签丢弃）。因此不要再往「框架」方向加条目 |
-| **H 过滤与格式** | 继续（同模块的自然延续） | `FILT-002`（名称过滤器：三种正则模式 / 组合语义 / 实时校验）——第 1、3、4 条是纯判定，本机可完整闭环；**第 2 条（200ms 超时保护）在 Qt 5.15 上要先决定绕道路线**，见 §4.1 的专门说明。`FILT-004` / `FILT-006` / `FILT-007` 都还缺别的模块 | 仍在 `Services/Filter/` 内，纯逻辑，且复用刚落的 `splitDeclarationLines()` 与条件表做法。若不想碰 Qt 5.15 的超时坑，同模块的 `FILT-004`（过滤预设的组织方式）也可以先看一遍 §4.1 确认阻塞点 |
-| **A 平台底座** | 继续 | `PLAT-006`（单实例与进程间通信）——但只能做第 1、2、4 条，见 §4.1 | 仍在 `Services/Platform/` 内；`platform.pri` 已接好 QtGui 与注册表相关的 `LIBS` |
+| **H 过滤与格式** | 继续（同模块的自然延续） | `FILT-004`（内容过滤器：行过滤与关键字节）——第 1、2 条是纯判定（给一段文本/字节，决定要不要排除），本机可完整闭环；**第 3、4、5 条缺承接方**（「忽略规则」的比对引擎、状态栏、文件格式定义），见 §4.1。`FILT-006` 第 4 条可做、`FILT-007` 仍缺别的模块 | 仍在 `Services/Filter/` 内，纯逻辑，复用 `splitDeclarationLines()` 与「表当参数的自检」这套做法 |
+| **A 平台底座** | 继续（**本轮把 `FILT-002` 闭掉之后，H 里再无「纯判定、本机可完整闭环」的条目**，因此转 A 工作流） | `PLAT-006` 第 1、2、4 条（跨平台单实例、参数转发与退出码、首个实例无响应时超时降级）——**这一条能完整闭环并测试**（共享内存 + `QLocalServer` 在 macOS 上真跑），第 3、5 条见 §4.1 | 新增 `Services/Platform/` 下的单实例模块；需给 `platform.pri` 接上 `QtNetwork` |
 
-**为什么 H 的下一步是 `FILT-002` 而不是「先接 FILT-005 / FILT-003 的界面」**：这两条
-的服务层都已经落地（三层叠加、启用状态、合并表达式、面板数据、落点路由，以及大小/时间/
-属性位/所有者四类条件与三态结论），但它们剩下的全都是**界面接通**（设置页的过滤 Tab、
-Filters 页、面板的控件宿主、属性条件的输入框），而这些住所是设置页 `OPT-*`。
-`FILT-002` 的三条完成标准是正则匹配与**组合语义**的纯判定，输入是名字、输出是是否保留，
-不需要任何界面与平台能力就能写出完整测试；它的组合语义还要和刚落地的那套
-「名称过滤 ∧ 属性条件」拼在一起，正好接着上一轮的结论往下走。
-先落它，等 `OPT-*` 落地时界面那一次能一次接完三件事。
+**为什么 H 的下一步不再是「先接 FILT-005 / FILT-003 / FILT-002 的界面」**：这三条的
+服务层都已经落地（三层叠加、启用状态、合并表达式、面板数据、落点路由；大小/时间/
+属性位/所有者四类条件与三态结论；名称侧的模式/组合语义/超时保护），但它们剩下的
+全都是**界面接通**（设置页的过滤 Tab、Filters 页、面板的控件宿主、属性条件与名称
+过滤的输入框），而这些住所是设置页 `OPT-*`。`OPT-*` 一天不落地，这三件事一天接不上，
+再往 `Services/Filter/` 里加条目也只是继续攒界面接口。因此转 A 工作流。
 
-**`FILT-002` 开工前必须先决定的一件事**：第 2 条「正则匹配有超时保护（默认 200ms/条）」
-在 Qt 5.15 上没有现成的 API（`QRegularExpression::setMatchTimeout()` 是 Qt 6.0 才有），
-两条路（工作线程 + 截止时间 / 直调 PCRE2 match limit）的代价见 §4.1 末尾的专门说明。
-**不要把这一条当成「顺手加个参数」**；先把路线定下来再动手，或者先只落第 1、3、4 条。
+**为什么 A 的下一步是 `PLAT-006` 的第 1、2、4 条**：这一条的三条完成标准
+（跨平台单实例、参数转发与退出码、首个实例无响应时超时降级）**只依赖本机就能真跑的东西**
+——`QSharedMemory` 与 `QLocalServer` / `QLocalSocket` 在 macOS 上都是真可用的，
+测试可以起一个真的本地套接字服务器做握手与超时用例，不必假装。它不依赖 `OPT-*`（第 5 条
+才依赖），也不依赖第一个真正的会话类型（第 3 条才依赖），因此是本轮之后唯一一条
+**能整条闭环并勾完成标准**的候选。同模块的 H 剩下 `FILT-004`（第 1、2 条可做，第 3、4、5 条
+缺比对引擎/状态栏/文件格式定义）与 `FILT-006`（第 4 条可做，其余要扫描器），
+都只能落在半截上，因此排在 `PLAT-006` 之后。
 
 **FILT-005 留下的确切接口**：`FilterStack` 收三层声明（`setDeclaration`）与启用标志
 （`setLayerEnabled`），`decide()` / `accepts()` 出结论，`combinedExpression()` /
@@ -821,6 +898,21 @@ Filters 页、面板的控件宿主、属性条件的输入框），而这些住
 接扫描器时注意两条：**`hasSize` / `hasLastModified` / `knownAttributeBits` 要如实填**，
 「不知道」与「是 0」在判定上完全不同（前者放行并报 `undecided`）；以及
 **`TimeCondition::referenceTime()` 必须由调用方设置**，模块自己不取当前时间。
+
+**FILT-002 留下的确切接口**：`NameFilter::parseDeclaration(text)` 把一段声明文本
+（一行一条表达式、`#` 注释、`\n`/`\r\n`/`\r` 都认）解析成表达式对象 + 问题清单；
+每条表达式的模式由**行首前缀**决定（`=` 精确 / `*` 通配 / `~` 正则，无前缀默认按通配），
+组合语义用 `setCombineMode(NameCombineMode::{AnyOf,NoneOf,AllOf})` 设定。
+`NameFilterProblems` 带 `line` / `column` / `length` / `severity` / `kind`，界面据此就地标红；
+`toDeclarationText()` 是它的逆（往返逐字一致，可以直接写回设置项）；
+`nameFilterDeclarationKey()` 返回 `"name-filter"`，是它将来在设置里占的键名。
+判定入口是 `NameFilter::decide(const QString &name)`，返回 `NameFilterDecision`
+（`outcome` 是**三态** `Matched` / `NotMatched` / `Undecided`）。接的时候注意三条：
+**`Undecided` 一律按放行处理但必须报出来**（`problems()` 里会有 `Timeout` 条目），
+不要把它当 `NotMatched`；**超时保护默认是开着的**（`matchBudget().perEntryMs == 200`、
+`consecutiveTimeoutLimit == 2`，可用 `setMatchBudget()` 调），它只保护正则模式，
+精确与通配不走线程；**`analyzeNameFilterLine()` 是解析、实时校验、复验的唯一实现**——
+界面的实时校验必须调它，不要再写第二份正则去解析同一行（这一点有读源码的护栏钉住）。
 
 **为什么下一步是 `SESS-007` 而不是各会话类型**：`SESS-001` 定下了「会话」这个概念
 （契约、状态机、三个出口、设置接口），`SESS-002` 定下了「会话类型」的登记方式
@@ -881,17 +973,22 @@ Filters 页、面板的控件宿主、属性条件的输入框），而这些住
 | ~~`FILT-001` 掩码解析器~~ | **已落地**（提交见 §3.1，issue #228） | 已完成，其余 FILT 条目都复用它 |
 | `FILT-005` 过滤器的层级与作用域 | **已落地**（提交见 §3.1，issue #233） | 第 1、4、5 条已勾；第 2、3 条的服务层部分（启用状态与四态文案、面板数据与全文）已落地并被测试，**缺的是显示控件**——两者的住所都是设置页（`OPT-*`），因此标签是「部分完成」。它**解除了一处阻塞**：`FILT-003` 第 4 条（「与名称过滤构成整体的与关系」）现在有一张三层的表可以挂。它**没有**解除任何「界面接入」类条目——那需要设置页 |
 | ~~`FILT-003` 属性过滤~~ | **已落地**（提交见 §3.1，issue #230） | 第 1~4 条已勾；第 5 条只勾得动一半——「与内容比对解耦」由 `Tests/AttributeFilter` 的读源码护栏钉住了，「扫描阶段提前丢弃」那半句要等 `Folder/` 的扫描器，因此标签是「部分完成」，理由与接手方式写在 §1.13。它**为 `Folder/` 的扫描器留好了接口**：扫描器拿到 `EntryMetadata` 后调 `decideEntry()`，`accepted == false` 直接跳过 |
-| `FILT-002` 名称过滤器（正则与超时保护） | **不是被别的模块阻塞，而是被 Qt 版本卡住**——见下面的专门说明 | 第 1、3、4 条可做（三种模式、组合语义、实时校验）；**第 2 条（200ms 超时）在 Qt 5.15 上需要绕道**。FILT-003 落地后它是 H 工作流里最后一条「纯判定、本机可完整闭环」的 FILT 条目（`FILT-004`/`FILT-006`/`FILT-007` 都缺别的模块） |
+| ~~`FILT-002` 名称过滤器（正则与超时保护）~~ | **已落地**（提交见 §3.1，issue #229） | 第 1~4 条已勾（三种模式、组合语义、**200ms 超时保护 + 连续超时断路器**、具名预设与导出往返）；第 5 条只勾得动「同一套解释」这一半，另一半（界面的名称过滤框）要等 `OPT-*`，因此标签是「部分完成」，理由与接手方式写在 §1.14。它**解除了「Qt 版本卡住」这处阻塞**：超时走的是自建的工作线程 + 截止时间，不依赖任何 Qt 6 API。它**为 `Folder/` 的扫描器留好了接口**：扫描器拿到名字后调 `decide()`，`NotMatched` 跳过、`Undecided` 照常进入 |
+| `FILT-004` 内容过滤器（行过滤与关键字节） | 部分阻塞：第 3、4、5 条缺承接方 | 第 1 条（行过滤器：给一段文本，排除匹配模式的行）与第 2 条（关键字节：给一段字节，判断是否含指定序列）是**纯判定**，本机可完整闭环与测试；第 3 条（先过滤行再应用忽略规则，且顺序有测试）需要**比对引擎**里的忽略规则那一步，第 4 条（状态栏提示）要状态栏，第 5 条（存为文件格式定义的一部分）要文件格式定义模块。参照 FILT-003 的做法：只落能独立验证的部分，把依赖写清 |
+| `FILT-006` 过滤结果的可见性与批量操作安全 | 第 4 条可做；其余要扫描器/状态栏 | 第 4 条（构造隐藏条目并断言两个选项下的行为差异）是纯逻辑，可做；「当前可见项」这类数量来源要等 `Folder/` 扫描器，状态栏常显要界面 |
 | `CLI-001` 起的命令行条目 | `SESS-002` 已落地，但**内置类型都没有工厂** | 解析部分可做（`ShellIntegration::parseShellInvocation()` 已是例子）；`--list-session-types` 这类**列出**类型的子命令现在也可做（注册表可枚举）。「执行」（真造出会话）仍要等第一个真正的会话类型 |
 
-**`FILT-002` 第 2 条的专门说明（省得下一轮白做半截）**：那条要求
+**`FILT-002` 第 2 条当时为什么需要先决策（已被解决，留作记录）**：那条要求
 「正则匹配有超时保护（默认 200ms/条），超时记录为错误条目并继续」。但
 **Qt 5.15 的 `QRegularExpression` 没有匹配超时**——`setMatchTimeout()` /
 `matchTimeout()` 是 Qt 6.0 才加进来的（已在本机 Qt 5.15.2 的头文件里核对过：
-`qregularexpression.h` 里没有这两个成员）。所以在 Qt 5.15 上要满足这一条只有两条路：
-一是把匹配放到工作线程上等一个截止时间（超时就放弃那一条并记错，线程本身无法真正
-被杀掉，得让它自然结束），二是直接调 PCRE2 的 match limit。两条都不是小活。
-**不要把这一条当成「顺手加个参数」**；开 FILT-002 时先决定走哪条路，再动手。
+`qregularexpression.h` 里没有这两个成员）。当时有两条路：一是把匹配放到工作线程上等
+一个截止时间，二是直接调 PCRE2 的 match limit。**本轮选了第一条**：
+`ThreadNameMatchRunner` 起一个工作线程，用 `QWaitCondition` 等 `perEntryMs`，
+超时就把整个线程丢弃（`deleteLater`）并换一个新的，同时把结论记成 `Undecided` +
+一条 `Timeout` 问题；连续超时达到 `consecutiveTimeoutLimit`（默认 2）时断路器打开，
+后续条目不再派活、直接按 `Undecided` 放行。**没选第二条**的原因是把 PCRE2 带进交付物
+与「一个 exe 分发」相冲，而且本机的 Qt 并没有随包提供 `libpcre2`（Qt 静态编进去了）。
 
 判断方法很简单：**看完成标准里有没有动词指向一个还不存在的模块**。
 「创建会话」「在设置界面里」「显示在差异视图里」都指向别的工作流的产物；
@@ -1127,3 +1224,11 @@ Filters 页、面板的控件宿主、属性条件的输入框），而这些住
 | 组合式设置存储直接转发各层的 `changed` 信号 | 一次写入会先由被写的那一层发出、再由组合层发出，上层收到**两条**；而层的 `clear()` 用**空键**表示「全变了」，直接转发会把「某一层清空了」说成「所有设置都变了」——状态栏与标签上的脏标记会白抖一次 | 组合层（`ScopedSessionSettings`）**不连接**三层的 `changed`，自己按「**有效值**有没有变」发一次。代价是外部绕过组合层直接改某一层时它不会察觉——因此约定三层存储只经组合层读写，并把这条写进类注释 |
 | 把「写入成功」当成「用户看得见变化」 | 往会话层写、而视图层已经有同一条时，值确实存进了会话层（用户点的就是「保存到当前会话默认值」），但有效值仍是视图层那个。此时发 `changed` 或改写视图层都是错的：前者让脏标记白抖，后者让这次改动活不过关标签而用户以为存下来了 | 两者分开：值存进目标层、`changed` 按有效值发，并另给 `resolvedFromLayer()` / `describeResolution()` 让界面显示「当前生效值来自「仅当前视图」」。**凡是「按作用域分层存储」的系统都会有这个错位**，要在接口上留出表达它的地方 |
 | 用 `QCOMPARE` 直接比 `enum class` | `QTEST_MAIN` 的 `QCOMPARE` 需要 `toString<T>`，对 `enum class` 没有现成特化；补一个特化当然可以，但那会让断言依赖枚举**序号**——在枚举中间插一个值，快照与断言的含义就整体错位 | 比较机器标识字符串（`QString::fromLatin1(settingScopeIdentifier(scope))`）。本仓既有套件都是这么写的，且字符串是稳定的对外事实（它会进会话文件与命令行）。本轮 `Tests/SettingsScope` 全篇按这条办 |
+| 函数内构造的临时容器被返回，指针随即悬垂 | `QVector<Row> matchModeTable()` 按**值**返回临时对象，`matchModeRow()` 又返回指向其中一行的指针 → 函数一返回指针就指向已析构的存储。现象很误导：`nameMatchModeLabel()` 返回空串、`QCOMPARE` 失败，紧接着下一条用例直接 **SIGSEGV**（栈里看不出与表有关） | 三张表一律改成**函数内静态**并返回引用（`static const QVector<Row> table = …; return table;`）。**「返回容器的指针」等于返回悬垂指针**，除非容器本身是静态的 |
+| 以为 `QVector` 有 `QStringList` 的成员 | 写 `QVector<QString>{…}.join("；")` 报 `no member named 'join'`——`join` / `filter` 这类方便成员只在 `QStringList` 上 | 加一个 `joinProblems()` 辅助先转成 `QStringList` 再 `join`。**`QVector` 与 `QStringList` 不是同一个容器**，别按后者用前者 |
+| 自检函数自己去读模块内部的表 → 一条**永远不会红**的护栏 | `validateNameFilterTables()` 最初从模块内的静态表取数据，于是测试把一份故意写坏的表传进去也影响不到它：变异 M27（改坏组合语义表）漏检。**测试全绿但守的东西没被守住**，这正是 §5 第 7 条说的那种最坏的护栏 | 自检**把表当参数**（`validateNameFilterTables(modeTable, combineTable)`），坏表才影响得到它；并补一条「对故意写坏的表跑同一判定必须报出条数」的用例。**凡是「自检/校验」函数，数据来源必须是参数而不是内部常量**，否则它测的是自己 |
+| 大小写选项只在精确 / 通配路径上生效，正则漏了 | 自查发现的**真实功能缺陷**：`= *.CPP` 在 `Qt::CaseInsensitive` 下能命中，`~\.CPP$` 却始终区分大小写——因为 `setPatternOptions(… CaseInsensitiveOption)` 只加在了非正则分支上 | 构造正则时按需带上该选项（`decide()` 里按值捕获前设置），并新增 `regexHonorsCaseSensitivity` 用例钉住。**「同一个开关要管三条路径」时最容易漏掉最后加的那一条** |
+| 用 `anchoredPattern()` 做整名匹配 | `QRegularExpression::anchoredPattern()` 会把模式包成 `\A(?:…)\z`，用户自己写的 `^a` / `a$` 与包装后的锚点叠加，语义被悄悄改掉（不同写法下表现为永不匹配或行为不定）。而用户以为「正则模式」就是普通正则 | 不要用 `anchoredPattern()`；改判 `match.capturedStart() == 0 && match.capturedLength() == name.length()`。**包装用户输入前先想清楚它会不会改变用户表达的意思** |
+| 解析结果里的对象在测试里被当成 `const` | `const NameFilterParseResult parsed` 上调 `parsed.filter.setCombineMode(...)` 报 `'this' argument to member function … has type 'const NameFilter'`。这不是库的问题，是测试自己写错了限定 | 去掉那个 `const`。**解析结果是可变的工作对象**，不要顺手加 `const`（本仓的 `ParseResult` 类都是这个语义） |
+| 预设往返多出末尾空行 | `serializeNamedNameFilters()` 吐 `"*.cpp\n*.h\n"`，往返后与期望 `"*.cpp\n*.h"` 不等——只差一个看不见的换行，两个字符串在终端里长得一模一样 | `flush()` 里丢掉 `body` 末尾的空行；并且**只有 `bodyStarted` 之后的空行才进正文**——记录标题之前的空行会让元信息块提前结束。**「逐字一致」的往返断言必须包含首尾空白**，否则查不出这类差异 |
+| 新套件忘了写 `QTEST_MAIN` | 链接报 `Undefined symbols: "_main"`。§6 早有一条同类记录（`Q_OBJECT` 那行），本轮又犯一次 | `.cpp` 末尾必须有 `QTEST_MAIN(Tst_Xxx)`。**新建套件的第一条构建失败，十有八九是它或 `.moc` include，先查这两个再查别的** |
