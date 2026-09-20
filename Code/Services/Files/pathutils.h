@@ -130,6 +130,58 @@ bool isValidFileName(const QString &name);
 /// 而不是只报一句「名称非法」让用户自己找。
 int findInvalidFileNameCharacter(const QString &name);
 
+///
+/// \brief 名称不合法的原因（PRD: PLAT-007 第 4 条）。
+///
+/// 为什么是枚举而不是直接返回一句文案
+/// -------------------------------
+/// 界面要做的远不止「显示原因」。不同原因的处置完全不同：
+///   - `TrailingSpaceOrDot` 可以给一个「去掉首尾空格」的一键修正按钮；
+///   - `ReservedName` 只能让用户改名，没有可自动做的事；
+///   - `TooLong` 可以提示截断到多少字符。
+/// 一旦把结果做成字符串，这些能力就只能在界面层重新解析文案来恢复——
+/// 那等于把「有哪些原因」这个知识抄了第二份，迟早不一致。
+///
+enum class FileNameProblem {
+    None = 0,
+    Empty,              ///< 名字为空
+    DotOrDotDot,        ///< `.` 或 `..`：是目录项，不是文件或目录的名字
+    ControlCharacter,   ///< 控制字符（含换行、制表、回车）
+    ForbiddenCharacter, ///< 平台禁止的字符
+    TrailingSpaceOrDot, ///< 以空格或点结尾
+    ReservedName,       ///< Windows 保留设备名
+    TooLong,            ///< 超过单个名字的长度上限
+};
+
+/// 稳定的机器可读标识（用于日志与测试断言，不用于界面显示）。
+const char *fileNameProblemIdentifier(FileNameProblem problem);
+
+/// 面向用户的原因说明与可执行的建议。两人分工：先说要改什么，再说为什么。
+QString describeFileNameProblem(FileNameProblem problem);
+
+/// 名称校验结果：问题分类 + 位置（合法时 position 为 -1）。
+struct FileNameCheck
+{
+    FileNameProblem problem = FileNameProblem::None;
+    int position = -1;
+
+    bool isValid() const { return problem == FileNameProblem::None; }
+};
+
+///
+/// \brief 一次查清名称的所有问题（PRD: PLAT-007 第 4 条「统一校验」）。
+///
+/// 这是唯一的实现，isValidFileName() 与 findInvalidFileNameCharacter() 都是它的
+/// 薄封装。三个函数各写一遍校验逻辑的话，「什么算非法」就有了三个事实来源，
+/// 而且分歧方式是静默的：`isValidFileName` 说不合法、`checkFileName` 说合法，
+/// 调用方各取所需，用户遇到的是「有时能建、有时不能建」。
+///
+/// **校验标准取所有平台里最严格的一套**，理由见 pathutils.cpp 里的说明：
+/// 本工具经常在 Windows 与 Linux 之间比同一份文件树，在这里放行一个 Linux 合法
+/// 但 Windows 非法的名字，要等到那份文件树被同步到 Windows 上才失败。
+///
+FileNameCheck checkFileName(const QString &name);
+
 /// 是否是系统保留设备名（Windows 的 CON / PRN / AUX / NUL / COM1-9 / LPT1-9）。
 ///
 /// 这类名称不含任何非法字符，因此字符检查发现不了——只能在整名比较时判定。

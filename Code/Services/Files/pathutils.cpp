@@ -338,39 +338,166 @@ bool comparePaths(const QString &left, const QString &right, const Style &style,
     return QString::compare(normalizedLeft, normalizedRight, caseSensitivity) == 0;
 }
 
-int findInvalidFileNameCharacter(const QString &name)
+const char *fileNameProblemIdentifier(FileNameProblem problem)
 {
-    if (name.isEmpty())
-        return 0;
+    // 英文稳定标识，理由同 FileSystemError：这些字符串会出现在日志与测试断言里，
+    // 跟着界面语言变就没法跨版本比对。给用户看的是 describeFileNameProblem()。
+    switch (problem) {
+    case FileNameProblem::None:
+        return "none";
+    case FileNameProblem::Empty:
+        return "empty";
+    case FileNameProblem::DotOrDotDot:
+        return "dot-or-dot-dot";
+    case FileNameProblem::ControlCharacter:
+        return "control-character";
+    case FileNameProblem::ForbiddenCharacter:
+        return "forbidden-character";
+    case FileNameProblem::TrailingSpaceOrDot:
+        return "trailing-space-or-dot";
+    case FileNameProblem::ReservedName:
+        return "reserved-name";
+    case FileNameProblem::TooLong:
+        return "too-long";
+    }
+    return "unknown";
+}
 
-    // 取「所有平台里最严格的那一套」：Windows 的保留字符集合。
+QString describeFileNameProblem(FileNameProblem problem)
+{
+    // 每一种都要给出「改什么」。只说「名称非法」等于把找问题的活推给用户，
+    // 而用户看不到控制字符、看不出结尾多了一个空格。
+    switch (problem) {
+    case FileNameProblem::None:
+        return QString();
+
+    case FileNameProblem::Empty:
+        return QStringLiteral("名称不能为空。请输入一个名称。");
+
+    case FileNameProblem::DotOrDotDot:
+        return QStringLiteral("「.」与「..」是目录本身的占位符，不能作为名称。请换一个名称。");
+
+    case FileNameProblem::ControlCharacter:
+        return QStringLiteral("名称里含有换行、制表符一类的控制字符，它们在文件列表中无法显示。"
+                              "请删除这些字符。");
+
+    case FileNameProblem::ForbiddenCharacter:
+        // 说清是哪些字符、以及为什么连用不到的平台也拦：用户很可能在 Linux 上
+        // 建了一个带 ':' 的名字然后同步到 Windows 上，那时才发现就晚了。
+        return QStringLiteral("名称里有不能使用的字符。下列字符在某个目标平台上非法，"
+                              "本工具一律不放行：< > : \" / \\ | ? *");
+
+    case FileNameProblem::TrailingSpaceOrDot:
+        // 这一条最需要解释：Windows 会在保存时**静默**去掉结尾的空格与点，
+        // 于是用户取到的名字与输入的名字不一样，而两边看起来一模一样。
+        return QStringLiteral("名称不能以空格或点结尾。Windows 会在保存时静默去掉它们，"
+                              "导致之后按原名找不到文件。请删除结尾的空格或点。");
+
+    case FileNameProblem::ReservedName:
+        return QStringLiteral("这是一个系统保留的设备名（CON、PRN、AUX、NUL、COM1-9、LPT1-9，"
+                              "带扩展名也算）。请换一个名称。");
+
+    case FileNameProblem::TooLong:
+        return QStringLiteral("名称过长。单个名称最多 255 个字符（Windows 与多数文件系统的上限），"
+                              "请缩短后再试。");
+    }
+
+    return QString();
+}
+
+FileNameCheck checkFileName(const QString &name)
+{
+    FileNameCheck check;
+
+    if (name.isEmpty()) {
+        check.problem = FileNameProblem::Empty;
+        check.position = 0;
+        return check;
+    }
+
+    // 逐个字符检查。
+    //
+    // "forbidden" 取「所有平台里最严格的那一套」（Windows 的保留字符集合）。
     // 这样做是有意的——本工具经常在 Windows 与 Linux 之间比同一份文件树，
     // 在这里放行一个 Linux 合法但 Windows 非法的名字（如 "a:b.txt"），
-    // 等到那份文件树被同步到 Windows 上才失败，那时已经很难追查到源头。
+    // 等到那份文件树被同步到 Windows 上才失败，那时已经很难追查到源头了。
+    //
+    // 反过来的代价（在 Linux 上也不许用 "a:b.txt"）是可用性上的小损失，
+    // 而且用户在 Linux 上本来也很少这么命名。
     static const QString forbidden = QStringLiteral("<>:\"/\\|?*");
 
     for (int i = 0; i < name.length(); ++i) {
         const QChar character = name.at(i);
+
+        if (character.unicode() >= 0xDC80 && character.unicode() <= 0xDCFF) {
+            // 承载原始字节的私存码位（见 pathname.h）。它是文件名里真实存在的
+            // 一个字节，不是控制字符，必须放行——拦下它等于禁止用户操作那个文件。
+            continue;
+        }
+
         // 控制字符（含换行、制表符）一律非法：它们在列表里无法正确显示，
         // 也会让日志与报表的输出错乱。
-        if (character.unicode() < 0x20 || character.unicode() == 0x7F)
-            return i;
-        if (forbidden.contains(character))
-            return i;
+        if (character.unicode() < 0x20 || character.unicode() == 0x7F) {
+            check.problem = FileNameProblem::ControlCharacter;
+            check.position = i;
+            return check;
+        }
+
+        if (forbidden.contains(character)) {
+            check.problem = FileNameProblem::ForbiddenCharacter;
+            check.position = i;
+            return check;
+        }
     }
 
     // "." 与 ".." 是目录项而非文件名，长度合法但语义非法。
-    // 返回 0 表示「从第一个字符起就不合法」，便于界面把光标定位到开头。
-    if (name == QLatin1String(".") || name == QLatin1String(".."))
-        return 0;
+    // 位置返回 0 表示「从第一个字符起就不合法」，便于界面把光标定位到开头。
+    if (name == QLatin1String(".") || name == QLatin1String("..")) {
+        check.problem = FileNameProblem::DotOrDotDot;
+        check.position = 0;
+        return check;
+    }
 
-    return -1;
+    // 结尾的空格与点。
+    //
+    // 单列一类而不是并进上面的字符循环，因为它不是「某个字符非法」而是
+    // 「位置非法」：空格与点在名字中间完全合法（"a b.txt"、"v1.2"），
+    // 只有出现在结尾才有问题。混进字符检查会连正常名字一起拦掉。
+    const QChar last = name.at(name.length() - 1);
+    if (last == QLatin1Char(' ') || last == QLatin1Char('.')) {
+        check.problem = FileNameProblem::TrailingSpaceOrDot;
+        check.position = name.length() - 1;
+        return check;
+    }
+
+    // 单个名称的长度上限按 255 个 UTF-16 码元。
+    // Windows（NTFS）与多数 POSIX 文件系统都是 255，取这个共同值即可。
+    // 放在最后判：一个既超长又含非法字符的名字，用户先改哪个都一样，
+    // 但「有非法字符」更容易定位到具体位置。
+    if (name.length() > 255) {
+        check.problem = FileNameProblem::TooLong;
+        check.position = 255;
+        return check;
+    }
+
+    // 保留设备名不含任何非法字符，因此只能放在字符检查之后整名比较。
+    if (isReservedName(name)) {
+        check.problem = FileNameProblem::ReservedName;
+        check.position = 0;
+        return check;
+    }
+
+    return check;
+}
+
+int findInvalidFileNameCharacter(const QString &name)
+{
+    return checkFileName(name).position;
 }
 
 bool isValidFileName(const QString &name)
 {
-    return !name.isEmpty() && findInvalidFileNameCharacter(name) < 0
-           && !isReservedName(name);
+    return checkFileName(name).isValid();
 }
 
 bool isReservedName(const QString &name)

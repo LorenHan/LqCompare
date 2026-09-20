@@ -65,13 +65,19 @@ Code/Tests/run-tests.sh
 Code/Tests/run-tests.sh CommandRegistry
 ```
 
-仓库级检查（CI 也跑这三条）：
+仓库级检查（CI 也跑这几条）：
 
 ```bash
 python3 tools/check_layering.py   # App -> Views -> Services 依赖方向（ENG-001）
 python3 tools/check_icons.py      # 图标声明、引用、文件三者一致（ENG-009）
 python3 tools/check_spec.py       # 规格数据合法且 PRD 与数据同步（DOC-005）
+python3 tools/check_shell.py      # 脚本不用 bash 4 内建与 GNU 扩展（ENG-003）
+python3 tools/check_winapi.py     # 不用 ANSI 版 Windows API（PLAT-007）
+python3 tools/check_winapi.py --self-test   # 先确认上一条真的会报错
 ```
+
+`check_winapi.py --self-test` 单独列出来的原因：**一个从不报错的护栏比没有护栏更糟**，
+它会让人以为这块已经被守住了。凡是静态检查脚本，都应当能自证会报错。
 
 ## 4. 规格即 issue
 

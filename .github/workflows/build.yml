@@ -33,6 +33,13 @@ jobs:
       # 这一步专门拦 bash 4 内建与 GNU 工具扩展这两类「Linux 能跑、macOS 崩」的写法。
       - name: Shell 脚本可移植性检查（ENG-003 / PLAT-001）
         run: python3 tools/check_shell.py
+      # Windows 宽字符 API 在 CI 里根本没被编译过（矩阵里只有 Ubuntu），
+      # 而用错 ANSI 版 API 的后果是中文路径乱码——要等用户拿到才暴露。
+      # 所以这里做静态检查。先跑自测：一个从不报错的护栏比没有护栏更糟。
+      - name: Windows 宽字符 API 护栏自测（PLAT-007）
+        run: python3 tools/check_winapi.py --self-test
+      - name: Windows 宽字符 API 检查（PLAT-007）
+        run: python3 tools/check_winapi.py
 
   build-and-test:
     name: Build and test (${{ matrix.os }})

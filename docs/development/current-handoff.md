@@ -6,8 +6,10 @@
 ## 1. 一句话现状
 
 规格（369 条）与 GitHub issue 已全部铺好；Qt 工程骨架已在 macOS 上编译通过、
-主程序可启动、测试全绿。**服务层开始有真实功能**：文件系统抽象层（PLAT-002）
-与回收站服务（PLAT-003）已落地，其中回收站在本机是**真的能删进废纸篓再还原回来**的。
+主程序可启动、测试全绿。**服务层开始有真实功能**：文件系统抽象层（PLAT-002）、
+回收站服务（PLAT-003）与名称处理（PLAT-007）已落地。其中回收站在本机是
+**真的能删进废纸篓再还原回来**的；名称处理则连「无效 UTF-8 的文件名」这种
+只在 Linux 上出现的输入都写好了测试（CI 上会真实执行）。
 界面上仍是 169 个按钮里 31 条带处理器，其余点击后提示对应 ACTION-ID。
 
 ## 1.1 已落地的服务层模块
@@ -18,10 +20,12 @@
 | `Services/Log/` | ENG-006 | 骨架 | — |
 | `Services/Files/`（文件系统） | PLAT-002 | **部分完成**（Windows 实现未编译验证） | `Tests/FileSystem`（50 用例） |
 | `Services/Files/`（回收站） | PLAT-003 | **部分完成**（Windows 实现未编译验证） | `Tests/Trash`（35 用例） |
+| `Services/Files/`（名称与 Unicode） | PLAT-007 | **部分完成**（长路径只写在 Windows 侧，未编译验证） | `Tests/PathName`（40 用例 + 1 个仅 Linux 执行） |
 
 PLAT-002 的详细说明与其「第 2 条完成标准为何不勾选」见
 [issue #325](https://github.com/LorenHan/LqCompare/issues/325)；
-PLAT-003 见 [issue #324](https://github.com/LorenHan/LqCompare/issues/324)。
+PLAT-003 见 [issue #324](https://github.com/LorenHan/LqCompare/issues/324)；
+PLAT-007 见 [issue #328](https://github.com/LorenHan/LqCompare/issues/328)。
 
 ### 1.2 回收站（PLAT-003）落地到了什么程度
 
@@ -49,14 +53,16 @@ PLAT-003 见 [issue #324](https://github.com/LorenHan/LqCompare/issues/324)。
 | --- | --- | --- |
 | 构建 | Qt 5.15.2 clang_64 上 qmake + make 通过，产出 `dist/macos/LqCompare.app` | `qmake && make -j8` |
 | 运行 | 主程序离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
-| 测试（全量） | **99 passed / 0 failed**（Trash 35 + FileSystem 50 + CommandRegistry 14） | `Code/Tests/run-tests.sh` |
+| 测试（全量） | **139 passed / 0 failed / 1 skipped**（PathName 40 + Trash 35 + FileSystem 50 + CommandRegistry 14） | `Code/Tests/run-tests.sh` |
 | 文件系统抽象层 | 47 个纯逻辑用例 + 3 个真实文件系统用例全通过；其中 20 个覆盖 **Windows** 路径规则（盘符 / UNC / 长路径前缀 / 大小写），在 macOS 上真实执行 | `Code/Tests/run-tests.sh FileSystem` |
 | 回收站 | 35 个用例全通过。其中 9 个验证 XDG（Linux）的路径与 `.trashinfo` 规则、2 个是**真实**的废纸篓往返与冲突拒绝、多个断言「不可用时搬移函数一次都没被调用」 | `Code/Tests/run-tests.sh Trash` |
+| 名称与 Unicode | 40 个用例通过 + 1 个跳过（无效 UTF-8 名字的用例只在 Linux 上执行，CI 会跑）。覆盖字节保真往返、UTF-8 边界与过长编码、Unicode 组合形式、六类文件名问题的原因与位置 | `Code/Tests/run-tests.sh PathName` |
 | 分层检查 | 通过（Services 未反向依赖界面） | `python3 tools/check_layering.py` |
 | 图标检查 | 通过（27 个图标，声明/引用/文件三者一致） | `python3 tools/check_icons.py` |
 | 规格自检 | 通过（369 条，P0 59 条，PRD 与数据同步） | `python3 tools/check_spec.py` |
 | Shell 可移植性 | 通过（1 个脚本，无 bash 4 内建与 GNU 工具扩展） | `python3 tools/check_shell.py` |
-| 测试套件 | `99 passed / 0 failed`，且「无套件匹配」被视为失败（exit 2） | `Code/Tests/run-tests.sh` |
+| Windows 宽字符 API | 通过（40 个源文件、清单内 43 个 API；自测 17 个样本） | `python3 tools/check_winapi.py [--self-test]` |
+| 测试套件 | `139 passed / 0 failed`，且「无套件匹配」被视为失败（exit 2） | `Code/Tests/run-tests.sh` |
 | 命令注册表自检 | 启动时 0 问题（说明不缺图标、不缺说明、无快捷键冲突） | 启动日志 |
 
 **已知未验证**：Windows MinGW 32 位构建未在本机验证（无该环境）；
@@ -79,7 +85,8 @@ Code/
 ├── Services/
 │   ├── Command/                  commandregistry（命令注册中心）
 │   ├── Log/                      logging（分级日志）
-│   ├── Files/                    filesystem（抽象层）、pathutils（路径规则）、
+│   ├── Files/                    filesystem（抽象层）、pathutils（路径与名称规则）、
+│   │                             pathname（字节保真 / Unicode / 显示）、
 │   │                             trash（回收站服务 + XDG 规则）、
 │   │                             filesystem_posix/_win、trash_mac.mm/_linux/_win
 │   ├── command.pri / log.pri / files.pri / services.pri
@@ -89,6 +96,7 @@ Code/
 │   │                             （内存回收站），多套件共用
 │   ├── CommandRegistry/          tst_commandregistry + .pro（14 用例）
 │   ├── FileSystem/               tst_filesystem + .pro（50 用例）
+│   ├── PathName/                 tst_pathname + .pro（40 用例 + 1 个仅 Linux）
 │   ├── Trash/                    tst_trash + .pro（35 用例）
 │   └── run-tests.sh              统一测试运行器
 └── ThirdParty/                   myclasspath.pri（定位 LqRibbon）、lqribbon.pri
@@ -100,6 +108,7 @@ tools/
 ├── check_layering.py             ENG-001 依赖方向
 ├── check_icons.py                ENG-009 图标一致性
 ├── check_shell.py                ENG-003 脚本可移植性（bash 4 / GNU 扩展护栏）
+├── check_winapi.py               PLAT-007 宽字符 API（禁止 ANSI 版与不带后缀的写法）
 └── check_spec.py                 规格自检 + PRD 同步 + 优先级策略 + 文档计数
 
 docs/
@@ -126,6 +135,7 @@ docs/
 | `a693346` | 参考项目克隆实测结果与受限网络下的取用方式 | DOC-006 |
 | `e456c83` | 文件系统服务抽象层与可替换的假实现 | PLAT-002 |
 | `de1ba13` | 回收站与可逆删除服务 | PLAT-003 |
+| 见 `git log` | Unicode、特殊文件名与名称字节保真 | PLAT-007 |
 
 远端：369 个 issue 全部创建，标签为 `需求 / 待实现 / <模块> / <优先级>`，
 其中 P0 59 条。反查入口是 `docs/github/prd-issues.json`。
@@ -142,19 +152,19 @@ git push git@github.com:LorenHan/LqCompare.git main
 
 | 对话 | 工作流 | 从哪条 issue 开始 | 交付什么 |
 | --- | --- | --- | --- |
-| **A 平台底座** | 继续 | `PLAT-007`（Unicode 与长路径）→ `PLAT-008`（权限/只读/占用）→ `PLAT-004`（系统图标） | 在 `Services/Files/` 内新增文件；`files.pri` 已在 `services.pri` 里接好 |
+| **A 平台底座** | 继续 | `PLAT-008`（权限/只读/占用）→ `PLAT-004`（系统图标）→ `PLAT-005`（Shell 集成） | 在 `Services/Files/` 与 `Services/Platform/` 内新增文件；`.pri` 已在 `services.pri` 里接好 |
 | **B 会话框架** | 新开 | `SESS-001`（会话基类）→ `SESS-002`（类型注册表）→ `SESS-006`（设置框架） | `Services/Session/`、`Views/Session/`，含测试 |
 | **H 过滤与格式** | 新开 | `FILT-001`（掩码解析器，纯算法、最容易写出完整测试） | `Services/Filter/`、`Services/Format/` |
 
 三个工作流的目录互不重叠，`services.pri` 的 include 已一次加齐（`exists()` 保护），
 因此三方都不需要改共享文件。详见 [parallel-workstreams.md](parallel-workstreams.md) §1。
 
-**A 工作流的三件要紧事：**
+**A 工作流的四件要紧事：**
 
 1. `trash_linux.cpp` 与 `trash_win.cpp` 需要在各自的平台上首次构建并修正。
-   它们是当前唯一**从未被编译过**的代码（另有 `filesystem_win.cpp`），
-   PLAT-002 与 PLAT-003 的各一条完成标准因此未勾选。拿到 Windows 机器时，
-   这三份文件应当一次性过一遍——它们用的是同一套手写常量与 `static_assert` 模式，
+   它们与 `filesystem_win.cpp` 是当前唯一**从未被编译过**的代码，
+   PLAT-002 / PLAT-003 / PLAT-007 的各一条完成标准因此未勾选。拿到 Windows
+   机器时一次性过一遍——几份文件共用同一套手写常量 + `static_assert` 模式，
    错法也相似（先看 `NSFileManagerUnmountBusyError` 写成 768 那件事就知道，
    这类错误编译期会直接报出来，不必等运行）。
 2. **删除只有一条入口：`TrashService`**。`FileSystem::deleteToTrash` 已经移除，
@@ -165,6 +175,12 @@ git push git@github.com:LorenHan/LqCompare.git main
    `decideTrash()` 拿到的 `reason` / `advice` 让用户选「取消 / 永久删除」。
    `TrashFallback` 的默认值是 `Cancel`——这个默认值会被当成「用户还没回答」时的行为，
    把它定成 `DeletePermanently` 会让一次界面卡顿变成一批文件的永久消失。
+4. 界面上显示文件名时**统一走 `PathName::forDisplay()`**，不要直接把名字塞进控件。
+   换行会撑破列表行、首尾空格完全看不见，用户会在「看起来一样」的两个名字里挑错。
+   同时记住两条纪律：读回与写回一律用**原始名字**（转义只发生在显示层）；
+   把文本编码回系统字节必须用 `PathName::toNativeBytes()`，
+   **绝不能用 `QString::toUtf8()`**（它会把承载原始字节的未配对代理换成 `?`，
+   而且从返回值上看不出发生过什么）。
 
 三个并行对话不是硬性数量，也可以只开两个（A + B），或把 B 换成 **O 工程与文档**
 （`ENG-002` 模块构建守卫、`DOC-001` 用户手册）。**H 建议早做**：掩码解析器是纯算法，
@@ -180,6 +196,13 @@ git push git@github.com:LorenHan/LqCompare.git main
 4. **提交消息必须带 ACTION-ID 与 issue 号**，格式见 parallel-workstreams.md §3。
 5. **破坏性操作必须可逆**：删除走回收站、覆盖先备份、批量前预演。
 6. **每个条目配测试**，且测试要能在 `-platform offscreen` 下跑。
+7. **静态检查脚本必须能自证会报错**。加一个 `--self-test`，用「该报的」与
+   「不该报的」两类样本各跑一遍。一个从不报错的护栏比没有护栏更糟——它会让人
+   以为这块已经被守住了。`check_winapi.py --self-test` 是现成的例子。
+8. **写平台代码时先问「这段逻辑能不能抽成纯函数」**。能抽就抽：Windows 的路径
+   规则、Linux 的回收站规则、UTF-8 的字节校验都因此能在开发机上被真实执行。
+   抽不出来的只剩真正的系统调用，那部分如实标注「未在目标平台验证」，
+   并在 issue 上写清楚——**不要**把「写了」当成「做完了」。
 
 ## 6. 本仓库的「坑」记录（新增坑请追加到本节）
 
@@ -215,3 +238,10 @@ git push git@github.com:LorenHan/LqCompare.git main
 | XDG `.trashinfo` 的两处格式细节 | `Path` 必须百分号编码（含空格与中文的名字不编码会被解析方截断）；分隔符 `/` 要保留；`DeletionDate` 是**本地时间且不带时区后缀**（写成 UTC 或带 `Z` 部分实现解析失败） | 抽成 `xdgTrashInfoContents()` / `parseXdgTrashInfoPath()` 纯函数，在 macOS 上就往返测过了 |
 | `shellapi.h` 必须在 `windows.h` 之后 | 反过来会因缺少基础类型而编译失败 | `trash_win.cpp` 里已按顺序 include 并注明 |
 | 真实往返测试的清理守卫 | 断言失败会直接 `return`，后面的清理代码不执行 → 用户的废纸篓里留下测试造出来的垃圾文件。而**失败恰恰最容易发生** | 用 RAII 守卫（`TrashCleanupGuard` / `TrashFileRemover`）而不是顺序清理代码；守卫在两次危险操作**之间**声明，覆盖所有失败路径 |
+| `QString::toUtf8()` 会把未配对代理换成 `?` | 承载原始字节的私存码位（U+DC80..DCFF）经 `toUtf8()` 变成 `3f`，原始字节**无声丢失**——返回值看起来完全正常，只是一段合法的 UTF-8 | 编码回字节一律用 `PathName::toNativeBytes()`。有一条专门的用例（`toUtf8WouldLoseRawBytes`）把这个差异钉死，有人换回 `toUtf8()` 会立刻失败 |
+| `QString::fromUtf8` 无法区分「无效字节」与「真的是 U+FFFD」 | 它把无效字节替换成 U+FFFD，而 U+FFFD 本身是合法字符（`EF BF BD`）。于是「原文里有一个 U+FFFD」与「这里有个坏字节」从结果上完全一样，逆向编码时却要走不同分支 | UTF-8 校验必须自己写（`decodeUtf8Sequence`），按码位范围判定。几十行，换来判断能力 |
+| UTF-8 **过长编码**不判会凭空产生 NUL | `C0 80` 是 U+0000 的过长编码。放行它会让解码结果里出现一个 NUL，而 NUL 在路径里是终止符语义——系统调用在那里截断 | 校验里必须有「码位 < 该长度的下界即拒绝」这一条；同理要拒绝代理区码位（与私存方案会撞车）与超过 U+10FFFF 的值 |
+| `QString::normalized()` 保留未配对代理 | 这是**实测结论**（Qt 5.15.2：`DC80 0061 DCFF` 规范化后一个都不变），整套字节保真方案依赖它。属外部依赖，Qt 改了行为会导致原始字节静默变成 U+FFFD | 用 `normalizationKeepsRawBytes` 用例钉住，同时把实测过程写进注释——将来 Qt 升级后这条会失败，提醒重新评估 |
+| 转义前缀被 `toUpper()` 一起大写 | 先 `.arg(...).toUpper()` 得到 `\XFF`。`\X` 不是任何语言认的转义写法，用户看到只会觉得这个界面输出的东西不能直接用 | 只大写十六进制部分：`QStringLiteral("\\x") + QString::number(v, 16).rightJustified(2, '0').toUpper()` |
+| 静态护栏从不报错也没人发现 | 一个永远 `exit 0` 的检查脚本会让人以为这块已经被守住了，比没有护栏更糟 | 凡是静态检查脚本都要能自证会报错：`check_winapi.py --self-test` 用 17 个样本（含「注释里提到 ANSI API」这类**不该**报的）验证两边都对 |
+| 护栏不认条件编译 | `filesystem.cpp` 在 `#ifdef Q_OS_WIN` 块里包含 `<windows.h>` 用 `static_assert` 核对手写常量——那正是刻意设计的护栏，却被「非 Windows 文件不得包含 Windows 头」这条判成违规 | 护栏里维护预处理条件栈，只对**不在 `Q_OS_WIN` 块里**的包含报错 |
