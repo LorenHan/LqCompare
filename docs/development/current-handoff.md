@@ -1098,6 +1098,33 @@ git push --force-with-lease=main:<远端当前提交> \
 现在既不打印它们、又没人删它们，四个 `validate*()` 处于「有实现、有单测、
 无生产调用点」的状态，悬着不决定的话下一个人会照 §2 的旧描述去找那几行日志。
 
+**下一轮开工前先看这三条实地核对的结果**（本轮顺手查的，省得再查一遍）：
+
+- **`OPT-002`（常规选项）实际是 2/5，不是 0/5**，标签却还是「待实现」。
+  已落：第 2 条（`general.singleInstance`，默认「复用已有实例」）与
+  第 3 条的**接线**（`MainWindow.cpp` 里 `SessionArea::sessionCountChanged` 计数为 0 且
+  `general.lastSessionAction == "exit"` 时 `QTimer::singleShot(0, this, &QWidget::close)`，
+  否则留在 Home 页）。**但第 3 条没有任何自动化覆盖**——`Code/Tests/` 里搜不到
+  `lastSessionAction`，也就是说「关掉最后一个会话到底会退出还是留在 Home」这件事
+  目前只有读代码这一个证据。第 1、4、5 条（记忆上次会话 / 指定工作区 / 系统自启动 /
+  文件关联的开关）**确实没做**，而且 `optionsdialog.cpp` 在「常规」页上自己写了一句话
+  说明它们尚未实现——那句话是准确的，不要把它当成待删的占位文案。
+  → 因此**下一轮如果做 OPT-002，正确的最小集是「给第 3 条补一条测试」**：
+  它的实现在 `MainWindow` 里，测试要落在 `Tests/AppIntegration` 那一类能起真窗口的套件上
+  （`Tests/Options` / `Tests/OptionsDialog` 只到设置仓库与对话框，够不到这条路径）。
+  勾第 3 条之前先想清楚这一点，否则又是一条「只有读代码能证明」的完成标准。
+- **`OPT-001`（选项对话框框架）是 5 条里落 4 条**：分类树、搜索框、底部三按钮 +
+  未应用时的切换提示、每项 tooltip、以及「读写集中在设置仓库」都在
+  `Views/Options/optionsdialog.{h,cpp}` 里，并有 `Tests/OptionsDialog` 覆盖。
+  **第 1 条只落得动一部分**：`categories()` 现在返回 4 个分类
+  （`general` / `display` / `logging` / `storage`），而规格列了 12 个——
+  其余 8 个分类的**页面**分别属于 OPT-003 ~ OPT-011，不是本条目能自己补齐的。
+  因此它该有的标签也是「部分完成」，理由是「框架齐、分类随各自的 OPT-* 条目长出来」。
+- **`OPT-013 / OPT-014` 的处境要按源码核对**：`optionsrepository` 里已经有
+  `importFile` / `exportFile` 与「导出外观类 / 含机器相关路径」两个开关，
+  而 `Tests/Options` 里已经有对应的导入预览与逐项选择用例——
+  也就是说这两条的**服务层可能也已经落地了**，别按标签直接开工。
+
 下面这一轮（02:2x）在同一节的基础上推进了 **`FILT-004` 内容过滤器的服务层**
 （`Services/Filter/contentfilter.{h,cpp}` + `Tests/ContentFilter` 85 个用例函数）。
 第 1、2 条已落，第 3 条落了一半（顺序定死并有用真比对引擎的证据，接进 `Services/Text`
