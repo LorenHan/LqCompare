@@ -82,6 +82,11 @@ void TstLogging::initTestCase()
     QCOMPARE(LqCompare::Log::level(), Level::Warning);
     QVERIFY(LqCompare::Log::logFile().isEmpty());
     QCOMPARE(LqCompare::Log::sinkCount(), 0);
+    // 与级别同理：轮转与详细性能计时也各有出厂默认值，而它们同样是产品行为。
+    QVERIFY(!LqCompare::Log::performanceTimingEnabled());
+    QCOMPARE(QString::fromLatin1(
+                     LqCompare::Log::rotationModeIdentifier(LqCompare::Log::rotationPolicy().mode)),
+             QStringLiteral("none"));
 }
 
 void TstLogging::init()
@@ -92,6 +97,8 @@ void TstLogging::init()
     LqCompare::Log::clearSinks();
     LqCompare::Log::setLogFile(QString());
     LqCompare::Log::setLevel(Level::Warning);
+    LqCompare::Log::setRotationPolicy(LqCompare::Log::RotationPolicy());
+    LqCompare::Log::setPerformanceTimingEnabled(false);
 }
 
 void TstLogging::cleanupTestCase()
@@ -100,6 +107,8 @@ void TstLogging::cleanupTestCase()
     LqCompare::Log::clearSinks();
     LqCompare::Log::setLogFile(QString());
     LqCompare::Log::setLevel(Level::Warning);
+    LqCompare::Log::setRotationPolicy(LqCompare::Log::RotationPolicy());
+    LqCompare::Log::setPerformanceTimingEnabled(false);
 }
 
 // =============================================================================
@@ -762,6 +771,189 @@ void TstLogging::levelNamesAreDistinct()
         unique.insert(name);
     }
     QCOMPARE(unique.size(), all.size());
+}
+
+// =============================================================================
+// D2 详细性能计时开关（OPT-010 第 4 条）
+// =============================================================================
+
+void TstLogging::timingIsFilteredByLevelWhenTheSwitchIsOff()
+{
+    // 出厂默认是「关」。关着的时候行为与开关存在之前**完全一样**：
+    // 计时行与普通日志同样受级别控制。
+    LqCompare::Log::setLevel(Level::Error);
+    Capture capture;
+    captureInto(&capture);
+    {
+        LqCompare::Log::Stopwatch timer(Level::Info, QStringLiteral("test"), QStringLiteral("慢操作"));
+    }
+    QCOMPARE(capture.records.size(), 0);
+}
+
+void TstLogging::timingBypassesTheLevelFilterWhenTheSwitchIsOn()
+{
+    // 这正是这个开关存在的理由：排查「为什么这一步很慢」时最常见的配置是
+    // 级别停在 warning/error，而把级别调到 debug 会同时放出成千上万条
+    // 逐文件的调试日志——用户要的是「哪一步慢」，不是「每一步都刷屏」。
+    LqCompare::Log::setLevel(Level::Error);
+    LqCompare::Log::setPerformanceTimingEnabled(true);
+
+    Capture capture;
+    captureInto(&capture);
+    {
+        LqCompare::Log::Stopwatch timer(Level::Info, QStringLiteral("test"), QStringLiteral("慢操作"));
+    }
+    QCOMPARE(capture.records.size(), 1);
+    QVERIFY(capture.records.first().message.contains(QStringLiteral("慢操作")));
+    QVERIFY(capture.records.first().message.contains(QStringLiteral("耗时")));
+}
+
+void TstLogging::timingKeepsTheTimersOwnLevelWhenItBypasses()
+{
+    // 绕过级别过滤**不改变级别字段**：日志里的这一行仍然是调用点声明的严重性，
+    // 否则「按级别筛日志」的人会看到一条级别与他设置不符的行。
+    LqCompare::Log::setLevel(Level::Error);
+    LqCompare::Log::setPerformanceTimingEnabled(true);
+
+    Capture capture;
+    captureInto(&capture);
+    {
+        LqCompare::Log::Stopwatch timer(Level::Debug, QStringLiteral("test"), QStringLiteral("慢操作"));
+    }
+    QCOMPARE(capture.records.size(), 1);
+    QCOMPARE(capture.records.first().level, Level::Debug);
+}
+
+void TstLogging::stopwatchReadsTheSwitchAtFinishTimeNotConstruction()
+{
+    // 与级别同一条纪律：计时器已经构造出来之后再打开开关，也必须记上——
+    // 「先放计时器、再打开开关」是排查慢操作时最常见的用法。
+    LqCompare::Log::setLevel(Level::Error);
+    Capture capture;
+    captureInto(&capture);
+
+    {
+        LqCompare::Log::Stopwatch timer(Level::Info, QStringLiteral("test"), QStringLiteral("慢操作"));
+        LqCompare::Log::setPerformanceTimingEnabled(true);
+    }
+    QCOMPARE(capture.records.size(), 1);
+    QVERIFY(!capture.records.first().message.isEmpty());
+}
+
+// =============================================================================
+// D3 轮转策略与写入路径（OPT-010 第 2 条）
+// =============================================================================
+
+void TstLogging::rotationPolicyIsOffByDefaultAndSettable()
+{
+    QCOMPARE(QString::fromLatin1(
+                     LqCompare::Log::rotationModeIdentifier(LqCompare::Log::rotationPolicy().mode)),
+             QStringLiteral("none"));
+
+    LqCompare::Log::RotationPolicy policy;
+    policy.mode = LqCompare::Log::RotationMode::Daily;
+    policy.keepFiles = 2;
+    LqCompare::Log::setRotationPolicy(policy);
+
+    const LqCompare::Log::RotationPolicy stored = LqCompare::Log::rotationPolicy();
+    QCOMPARE(QString::fromLatin1(LqCompare::Log::rotationModeIdentifier(stored.mode)),
+             QStringLiteral("daily"));
+    QCOMPARE(stored.keepFiles, 2);
+}
+
+void TstLogging::writeDoesNotRotateWhenThePolicyIsOff()
+{
+    // 「配了策略但关着」必须与「没配」等价：一个关掉的策略仍然改名文件，
+    // 用户会认为那个开关坏了。
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString logPath = QDir(dir.path()).filePath(QStringLiteral("lqcompare.log"));
+    {
+        QFile seed(logPath);
+        QVERIFY(seed.open(QIODevice::WriteOnly));
+        seed.write(QByteArray(4096, 'x'));
+        seed.close();
+    }
+    QVERIFY(LqCompare::Log::setLogFile(logPath));
+    LqCompare::Log::setLevel(Level::Warning);
+
+    LqCompare::Log::write(Level::Warning, QStringLiteral("test"), QStringLiteral("一条普通日志"));
+
+    QVERIFY(!QFile::exists(logPath + QStringLiteral(".1")));
+    QVERIFY(QFileInfo(logPath).size() > 4096);
+}
+
+void TstLogging::writeRotatesWhenTheSizeLimitIsExceeded()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString logPath = QDir(dir.path()).filePath(QStringLiteral("lqcompare.log"));
+    {
+        QFile seed(logPath);
+        QVERIFY(seed.open(QIODevice::WriteOnly));
+        seed.write(QByteArray(4096, 'x'));
+        seed.close();
+    }
+    QVERIFY(LqCompare::Log::setLogFile(logPath));
+    LqCompare::Log::setLevel(Level::Warning);
+
+    LqCompare::Log::RotationPolicy policy;
+    policy.mode = LqCompare::Log::RotationMode::Size;
+    policy.maximumBytes = 1024;
+    policy.keepFiles = 3;
+    // 设置策略会把「上次检查时刻」复位，因此下一条日志立刻检查——
+    // 用户刚点完「应用」就去看日志目录，不该还要等满那一秒的节流间隔。
+    LqCompare::Log::setRotationPolicy(policy);
+
+    LqCompare::Log::write(Level::Warning, QStringLiteral("test"), QStringLiteral("触发轮转"));
+
+    // 旧内容进了 `.1`，新的一条落在新建的当前文件里——这证明轮转发生在
+    // 写这一行**之前**（反过来的话超限的那一条会留在旧文件里，而旧文件
+    // 体积已经达标，下一次检查又要为它轮转一次）。
+    QVERIFY(QFile::exists(logPath + QStringLiteral(".1")));
+    QCOMPARE(QFileInfo(logPath + QStringLiteral(".1")).size(), 4096LL);
+    const QString current = readWholeFile(logPath);
+    QVERIFY(current.contains(QStringLiteral("触发轮转")));
+}
+
+void TstLogging::rotateIfNeededReportsTheDecisionWithoutWritingAnything()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString logPath = QDir(dir.path()).filePath(QStringLiteral("lqcompare.log"));
+    {
+        QFile seed(logPath);
+        QVERIFY(seed.open(QIODevice::WriteOnly));
+        seed.write(QByteArray(64, 'x'));
+        seed.close();
+    }
+    QVERIFY(LqCompare::Log::setLogFile(logPath));
+
+    LqCompare::Log::RotationPolicy policy;
+    policy.mode = LqCompare::Log::RotationMode::Size;
+    policy.maximumBytes = 1024;
+    LqCompare::Log::setRotationPolicy(policy);
+
+    LqCompare::Log::RotationDecision decision;
+    QString error;
+    // 「不需要轮转」返回 true（检查完成了），而不是 false——把两者混起来，
+    // 调用点会把「一切正常」当成失败报给用户。
+    QVERIFY(LqCompare::Log::rotateIfNeeded(QDateTime::currentDateTime(), &decision, &error));
+    QCOMPARE(error, QString());
+    QVERIFY(!decision.rotate);
+    QVERIFY(!decision.reason.isEmpty());
+    QVERIFY(!QFile::exists(logPath + QStringLiteral(".1")));
+}
+
+void TstLogging::rotateIfNeededFailsWhenNoLogFileIsConfigured()
+{
+    LqCompare::Log::RotationPolicy policy;
+    policy.mode = LqCompare::Log::RotationMode::Daily;
+    LqCompare::Log::setRotationPolicy(policy);
+
+    QString error;
+    QVERIFY(!LqCompare::Log::rotateIfNeeded(QDateTime::currentDateTime(), nullptr, &error));
+    QVERIFY(!error.isEmpty());
 }
 
 // Q_OBJECT 声明在头文件里，因此这里不需要 #include "xxx.moc"：

@@ -94,6 +94,14 @@ bool OptionsRuntime::applyKeys(const QStringList &keys)
     Log::Level level = Log::Level::Info;
     Log::levelFromName(m_repository->value(QStringLiteral("logging.level")).toString(), &level);
     Log::setLevel(level);
+
+    // 详细性能计时与轮转策略都是「读到就生效」的纯状态，没有失败路径，
+    // 因此不像日志文件那样需要回滚。顺序上先设策略再换文件：换文件之后会立刻
+    // 按新策略检查一次轮转，策略还没设的话那次检查用的就是上一个策略。
+    Log::setPerformanceTimingEnabled(
+            m_repository->value(Log::performanceTimingKey()).toBool());
+    Log::setRotationPolicy(Log::RotationPolicy::fromValues(m_repository->values()));
+
     QString path;
     if (m_repository->value(QStringLiteral("logging.fileEnabled")).toBool()) {
         path = m_repository->value(QStringLiteral("logging.filePath")).toString();
@@ -110,8 +118,21 @@ bool OptionsRuntime::applyKeys(const QStringList &keys)
         emit runtimeError(m_lastError);
         return false;
     }
-    m_lastError.clear();
-    return true;
+
+    // 换完文件立刻按策略查一次轮转：新路径上可能已经躺着一份超限的旧日志
+    // （上一次运行留下的），等「下一条日志」才处理会让用户刚打开程序就看到
+    // 一个超标文件。失败**如实上报**，但日志继续照记——轮转没做成的后果
+    // 只是旧日志暂时偏大，不该让它变成「设置无法应用」。
+    QString rotationError;
+    if (!path.isEmpty()) {
+        Log::RotationDecision decision;
+        if (!Log::rotateIfNeeded(QDateTime::currentDateTime(), &decision, &rotationError))
+            rotationError = QStringLiteral("日志轮转未能完成：%1").arg(rotationError);
+    }
+    m_lastError = rotationError;
+    if (!m_lastError.isEmpty())
+        emit runtimeError(m_lastError);
+    return m_lastError.isEmpty();
 }
 
 } // namespace Options

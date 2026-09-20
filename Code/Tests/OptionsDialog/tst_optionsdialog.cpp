@@ -2,11 +2,14 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPushButton>
 #include <QSpinBox>
 #include <QTemporaryDir>
 
@@ -366,6 +369,116 @@ private slots:
         auto *fontSize = qobject_cast<QSpinBox *>(dialog.editorFor(QStringLiteral("display.contentFontSize")));
         QVERIFY(fontSize);
         QCOMPARE(fontSize->suffix(), QStringLiteral(" pt"));
+    }
+    void loggingPageExposesClearAndDiagnosticsButtons() {
+        QTemporaryDir temp;
+        Settings::OptionsRepository repository({temp.path(), false});
+        ProbeDialog dialog(&repository);
+        // 按钮按 objectName 找：文案会改，对象名是这条断言的稳定依据。
+        QVERIFY(dialog.findChild<QPushButton *>(QStringLiteral("optionsClearLog")));
+        QVERIFY(dialog.findChild<QPushButton *>(QStringLiteral("optionsExportDiagnostics")));
+        QVERIFY(dialog.findChild<QPushButton *>(QStringLiteral("optionsOpenLogDirectory")));
+        // 轮转与性能计时开关都是**数据驱动**生成的控件：定义表里有这几项，
+        // 页面上就必须有对应的编辑器——否则「设置项登记了但改不动」。
+        for (const QString &key : {QStringLiteral("logging.rotationMode"),
+                                   QStringLiteral("logging.rotationMaximumMegabytes"),
+                                   QStringLiteral("logging.rotationKeepFiles"),
+                                   QStringLiteral("logging.performanceTiming")})
+            QVERIFY2(dialog.editorFor(key) != nullptr, qPrintable(key));
+        auto *mode = qobject_cast<QComboBox *>(dialog.editorFor(QStringLiteral("logging.rotationMode")));
+        QVERIFY(mode);
+        // 下拉项的**标识**（不是显示名）必须与按键名逐一对应，且默认选中「不轮转」。
+        QCOMPARE(mode->count(), Log::rotationModeChoices().size());
+        QCOMPARE(mode->currentData().toString(), QStringLiteral("none"));
+    }
+    void clearLogFailsWhenFileLoggingIsOff() {
+        QTemporaryDir temp;
+        Settings::OptionsRepository repository({temp.path(), false});
+        ProbeDialog dialog(&repository);
+        Log::setLogFile(QString());
+        QVERIFY(!dialog.clearLog());
+        QVERIFY(!dialog.lastError().isEmpty());
+    }
+    void clearLogTruncatesTheConfiguredFile() {
+        QTemporaryDir temp;
+        Settings::OptionsRepository repository({temp.path(), false});
+        ProbeDialog dialog(&repository);
+        const QString logPath = temp.filePath(QStringLiteral("lqcompare.log"));
+        {
+            QFile seed(logPath);
+            QVERIFY(seed.open(QIODevice::WriteOnly));
+            QVERIFY(seed.write(QByteArray(2048, 'x')) == 2048);
+        }
+        QVERIFY(Log::setLogFile(logPath));
+        QVERIFY(dialog.clearLog());
+        // 文件必须还在（可能正被追加写入），只是内容为空。删掉它会让写入落到
+        // 已删除的 inode 上——`ls` 看不到增长，而调用方以为日志重新开始了。
+        QVERIFY(QFile::exists(logPath));
+        QCOMPARE(QFileInfo(logPath).size(), 0LL);
+    }
+    void exportDiagnosticsHonoursTheRedactionChoice() {
+        QTemporaryDir temp;
+        Settings::OptionsRepository repository({temp.path(), false});
+        ProbeDialog dialog(&repository);
+        const QString logPath = temp.filePath(QStringLiteral("lqcompare.log"));
+        {
+            QFile seed(logPath);
+            QVERIFY(seed.open(QIODevice::WriteOnly));
+            seed.write("碰到 " + QDir::homePath().toUtf8() + "/work/a.txt\n");
+        }
+        QVERIFY(Log::setLogFile(logPath));
+
+        QString redactedBundle;
+        QVERIFY2(dialog.exportDiagnostics(temp.path(), true, &redactedBundle), qPrintable(dialog.lastError()));
+        const QJsonObject redacted = QJsonDocument::fromJson(
+                [&redactedBundle] {
+                    QFile file(redactedBundle + QStringLiteral("/manifest.json"));
+                    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+                }()).object();
+        QCOMPARE(redacted.value(QStringLiteral("redacted")).toBool(), true);
+        QVERIFY(redacted.value(QStringLiteral("logIncluded")).toBool());
+        QVERIFY(QFile::exists(redactedBundle + QStringLiteral("/environment.txt")));
+
+        // 不脱敏那一份的口径必须真的不同：包里的日志应保留原始家目录路径。
+        QString rawBundle;
+        QVERIFY2(dialog.exportDiagnostics(temp.path(), false, &rawBundle), qPrintable(dialog.lastError()));
+        QVERIFY(rawBundle != redactedBundle);
+        QFile archived(rawBundle + QStringLiteral("/logs/lqcompare.log"));
+        QVERIFY(archived.open(QIODevice::ReadOnly));
+        QVERIFY(QString::fromUtf8(archived.readAll()).contains(QDir::homePath()));
+    }
+    void exportDiagnosticsReportsAnUnusableDirectory() {
+        QTemporaryDir temp;
+        Settings::OptionsRepository repository({temp.path(), false});
+        ProbeDialog dialog(&repository);
+        QString bundle;
+        QVERIFY(!dialog.exportDiagnostics(QString(), true, &bundle));
+        QVERIFY(!dialog.lastError().isEmpty());
+        QVERIFY(bundle.isEmpty());
+    }
+    void applyingRotationSettingsReachesTheLogModule() {
+        // 「设置项存进去了」不等于「策略生效了」：中间那一步在 OptionsRuntime 里，
+        // 而它没有任何界面现象——轮转策略没被接上时，设置页照常保存、照常回显，
+        // 只是文件永远不轮转。这条用例专门盯住那次转发。
+        QTemporaryDir temp;
+        Settings::OptionsRepository repository({temp.path(), false});
+        Options::OptionsRuntime runtime(&repository);
+        const auto result = repository.apply({{Log::rotationModeKey(), QStringLiteral("size")},
+                                              {Log::rotationMaximumMegabytesKey(), 9},
+                                              {Log::rotationKeepFilesKey(), 4},
+                                              {Log::performanceTimingKey(), true}});
+        QVERIFY2(result.ok, qPrintable(result.error));
+
+        const Log::RotationPolicy policy = Log::rotationPolicy();
+        QCOMPARE(QString::fromLatin1(Log::rotationModeIdentifier(policy.mode)),
+                 QStringLiteral("size"));
+        QCOMPARE(policy.maximumMegabytes(), 9LL);
+        QCOMPARE(policy.keepFiles, 4);
+        QVERIFY(Log::performanceTimingEnabled());
+
+        // 本套件其余的用例不该继承这个全局状态（文件输出位置由 cleanup 还原）。
+        Log::setRotationPolicy(Log::RotationPolicy());
+        Log::setPerformanceTimingEnabled(false);
     }
     void saveReviewScreenshots() {
         QTemporaryDir temp;

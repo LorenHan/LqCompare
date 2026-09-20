@@ -1,11 +1,14 @@
 #include "optionsdialog.h"
 
 #include "fileopsoptions.h"
+#include "diagnostics.h"
 #include "logging.h"
 
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QCoreApplication>
+#include <QDateTime>
 #include <QDesktopServices>
 #include <QDialogButtonBox>
 #include <QDir>
@@ -22,6 +25,7 @@
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QSysInfo>
 #include <QTableWidget>
 #include <QTreeWidget>
 #include <QUrl>
@@ -245,7 +249,44 @@ QWidget *OptionsDialog::buildPage(const QString &category)
             if (!QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(path).absolutePath())))
                 setStatus(QStringLiteral("无法打开日志目录：%1").arg(QFileInfo(path).absolutePath()), true);
         });
-        layout->addWidget(noteLabel(QStringLiteral("日志轮转、清空日志、诊断包与独立性能计时开关尚未实现。调试级别会输出已实现的调试日志。"), page));
+        auto *clear = new QPushButton(QStringLiteral("清空日志文件"), page);
+        clear->setObjectName(QStringLiteral("optionsClearLog"));
+        layout->addWidget(clear, 0, Qt::AlignLeft);
+        connect(clear, &QPushButton::clicked, this, [this] { clearLog(); });
+        auto *diagnose = new QPushButton(QStringLiteral("导出诊断包…"), page);
+        diagnose->setObjectName(QStringLiteral("optionsExportDiagnostics"));
+        layout->addWidget(diagnose, 0, Qt::AlignLeft);
+        connect(diagnose, &QPushButton::clicked, this, [this] {
+            // 先把「里面有什么」说清楚，再让用户决定要不要脱敏——顺序反过来的话，
+            // 用户是在文件已经写出去之后才知道包里有路径。
+            QDialog confirm(this);
+            confirm.setWindowTitle(QStringLiteral("导出诊断包"));
+            auto *confirmLayout = new QVBoxLayout(&confirm);
+            auto *notice = noteLabel(QString(), &confirm);
+            notice->setObjectName(QStringLiteral("optionsDiagnosticNotice"));
+            notice->setWordWrap(true);
+            auto *redact = new QCheckBox(QStringLiteral("脱敏（把家目录与配置目录替换成 ~ / <配置目录>）"), &confirm);
+            redact->setObjectName(QStringLiteral("optionsDiagnosticRedact"));
+            redact->setChecked(true);
+            // 提示文案随勾选实时变化，且**取自服务层**——界面自己写第二份说明
+            // 就会与诊断包里 manifest.json 记的脱敏状态对不上。
+            const auto refreshNotice = [notice, redact] {
+                notice->setText(Log::diagnosticNoticeText(redact->isChecked()));
+            };
+            connect(redact, &QCheckBox::toggled, &confirm, [refreshNotice] { refreshNotice(); });
+            refreshNotice();
+            confirmLayout->addWidget(notice);
+            confirmLayout->addWidget(redact);
+            auto *buttons = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, &confirm);
+            confirmLayout->addWidget(buttons);
+            connect(buttons, &QDialogButtonBox::accepted, &confirm, &QDialog::accept);
+            connect(buttons, &QDialogButtonBox::rejected, &confirm, &QDialog::reject);
+            if (confirm.exec() != QDialog::Accepted) return;
+            const QString directory = QFileDialog::getExistingDirectory(
+                    this, QStringLiteral("选择诊断包的输出目录"), QDir::homePath());
+            if (!directory.isEmpty()) exportDiagnostics(directory, redact->isChecked());
+        });
+        layout->addWidget(noteLabel(QStringLiteral("日志轮转按策略在写入时自动检查：单份日志达到体积上限、或跨天后第一次写入时换出当前文件。轮转保留的历史日志不会被「清空日志文件」删除；要一并清掉就在文件管理器里操作。「导出诊断包」会把当前日志与轮转历史、程序版本与运行环境信息写成一个目录，并在清单里记下是否脱敏。"), page));
     } else if (category == QStringLiteral("storage")) {
         const QString location = m_repository ? m_repository->location().filePath() : QStringLiteral("不可用");
         const QString mode = m_repository && m_repository->location().portable
@@ -656,6 +697,78 @@ bool OptionsDialog::exportSettings(const QString &path, bool appearanceOnly, boo
     const auto result = m_repository->exportFile(path, appearanceOnly ? QStringList{QStringLiteral("display")} : QStringList{}, includeMachineSpecific);
     if (!result.ok) { setStatus(result.error, true); return false; }
     setStatus(QStringLiteral("已导出到：%1%2").arg(path, isDirty() ? QStringLiteral("\n尚未应用的更改未包含在导出中。") : QString()));
+    return true;
+}
+
+bool OptionsDialog::clearLog()
+{
+    const QString path = Log::logFile();
+    if (path.isEmpty()) {
+        m_lastError = QStringLiteral("当前未启用文件日志，没有可清空的日志文件。");
+        setStatus(m_lastError, true);
+        emit operationFailed(m_lastError);
+        return false;
+    }
+    QString error;
+    if (!Log::clearLogFile(path, &error)) {
+        m_lastError = error;
+        setStatus(error, true);
+        emit operationFailed(error);
+        return false;
+    }
+    m_lastError.clear();
+    // 明确说出「历史份没被删」：清空之后用户会去日志目录翻，发现还有 .1/.2，
+    // 如果界面从没提过这件事，他会认为清空功能坏了一半。
+    setStatus(QStringLiteral("已清空当前日志文件：%1\n轮转保留的历史日志不受影响。").arg(path));
+    return true;
+}
+
+bool OptionsDialog::exportDiagnostics(const QString &outputDirectory, bool redactPaths,
+                                      QString *bundleDirectory)
+{
+    if (bundleDirectory != nullptr)
+        bundleDirectory->clear();
+
+    Log::DiagnosticBundleRequest request;
+    request.logFilePath = Log::logFile();
+    request.outputDirectory = outputDirectory;
+    request.redactPaths = redactPaths;
+    // 家目录与配置目录都交给服务层去替换：界面只负责说出「这台机器上这两个目录
+    // 分别是什么」，规则的实现（长前缀优先、边界判定）只有服务层那一份。
+    request.homeDirectory = QDir::homePath();
+    request.storageDirectory = m_repository ? m_repository->location().directory : QString();
+    request.now = QDateTime::currentDateTime();
+
+    Log::DiagnosticEnvironment &environment = request.environment;
+    environment.applicationName = QCoreApplication::applicationName();
+    environment.applicationVersion = QCoreApplication::applicationVersion();
+    environment.qtVersion = QString::fromLatin1(qVersion());
+    environment.osDescription = QSysInfo::prettyProductName();
+    environment.architecture = QSysInfo::currentCpuArchitecture();
+    environment.storageMode = m_repository && m_repository->location().portable
+            ? QStringLiteral("便携模式（程序目录 config/）")
+            : QStringLiteral("标准模式（用户配置目录）");
+    environment.storageDirectory = request.storageDirectory;
+    environment.logLevel = QString::fromLatin1(Log::levelIdentifier(Log::level()));
+    environment.rotationSummary = Log::rotationSummary(Log::rotationPolicy());
+
+    const Log::DiagnosticBundleResult result = Log::buildDiagnosticBundle(request);
+    if (bundleDirectory != nullptr)
+        *bundleDirectory = result.bundleDirectory;
+    if (!result.ok) {
+        m_lastError = result.error;
+        setStatus(result.error, true);
+        emit operationFailed(result.error);
+        return false;
+    }
+    m_lastError.clear();
+    QString message = QStringLiteral("诊断包已导出到：%1\n包含 %2 个文件（%3）。")
+            .arg(result.bundleDirectory)
+            .arg(result.files.size())
+            .arg(result.redacted ? QStringLiteral("已脱敏") : QStringLiteral("未脱敏"));
+    if (!result.logIncluded)
+        message += QStringLiteral("\n当前未启用文件日志，包内只有环境信息。");
+    setStatus(message);
     return true;
 }
 

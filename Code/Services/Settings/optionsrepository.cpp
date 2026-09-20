@@ -1,5 +1,6 @@
 #include "optionsrepository.h"
 
+#include "../Log/logfiles.h"
 #include "../Log/logging.h"
 #include <QCoreApplication>
 #include <QCryptographicHash>
@@ -234,6 +235,35 @@ const QVector<OptionDefinition> &OptionsRepository::definitions()
         {QStringLiteral("logging.filePath"), QStringLiteral("logging"),
          QStringLiteral("日志文件位置"), QStringLiteral("绝对路径；留空自动使用配置目录下 logs/lqcompare.log。默认导出不包含此机器路径。"),
          QString(), {}, 0, 0, true},
+
+        // 日志文件轮转与诊断（OPT-010 第 2、4 条）。
+        //
+        // 这一页的出厂值与 `Log::RotationPolicy` 的默认值必须一致：策略对象是
+        // 「读出来的值是什么意思」的唯一实现，而这里是「默认是什么」的唯一实现。
+        // 两边一旦分家，用户不碰设置时的行为与他在设置页看到的首个选项会对不上。
+        // `Tests/LogDiagnostics` 有一条用例拿 `Log::RotationPolicy()` 的默认值
+        // 与这几个定义比对，改任何一边都会红。
+        //
+        // `rotationMode` 的下拉选项直接取 `Log::rotationModeChoices()`，
+        // 不在这里手抄一遍：抄一遍的代价是「加了一种模式之后设置页里选不到」，
+        // 而那是没有任何报错的静默失效。
+        {QStringLiteral("logging.rotationMode"), QStringLiteral("logging"),
+         QStringLiteral("日志文件轮转"),
+         QStringLiteral("按体积或按天把旧日志换出当前文件；不轮转时日志会一直追加到同一个文件。"),
+         QStringLiteral("none"), Log::rotationModeChoices()},
+        {QStringLiteral("logging.rotationMaximumMegabytes"), QStringLiteral("logging"),
+         QStringLiteral("单份日志体积上限"),
+         QStringLiteral("按体积轮转时，单份日志达到该值就换成新文件。单位为兆字节。"),
+         5, {}, static_cast<int>(Log::minimumRotationMaximumMegabytes()),
+         static_cast<int>(Log::maximumRotationMaximumMegabytes()), false, false, QStringLiteral(" MB")},
+        {QStringLiteral("logging.rotationKeepFiles"), QStringLiteral("logging"),
+         QStringLiteral("保留的历史日志份数"),
+         QStringLiteral("轮转后保留的旧日志份数；0 表示不留历史，旧日志在轮转时被删除。"),
+         5, {}, 0, Log::maximumRotationKeepFiles(), false, false, QStringLiteral(" 份")},
+        {QStringLiteral("logging.performanceTiming"), QStringLiteral("logging"),
+         QStringLiteral("记录详细性能计时"),
+         QStringLiteral("打开后计时行不再受日志级别限制，可在保持常规日志量的同时临时排查慢操作。"),
+         false, {}},
 
         // 文件操作的默认行为（OPT-005）。
         //

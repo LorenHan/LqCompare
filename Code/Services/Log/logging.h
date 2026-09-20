@@ -1,6 +1,8 @@
 #ifndef LQCOMPARE_LOGGING_H
 #define LQCOMPARE_LOGGING_H
 
+#include "logfiles.h"
+
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QString>
@@ -71,6 +73,54 @@ bool setLogFile(const QString &filePath);
 QString logFile();
 
 ///
+/// \brief 日志文件的轮转策略（PRD: OPT-010 第 2 条）。
+///
+/// 策略住在日志模块里，而不是只住在设置页里：轮转必须**在写入路径上自动发生**。
+/// 只在用户点「应用」的那一刻执行一次的「轮转」不是轮转，那只是启动时删了一次文件。
+///
+/// 代价是多了一份全局状态（与级别、日志文件路径同类），因此 `Tests/Logging`
+/// 的 `init()` 也必须把它复位——否则上一个用例留下的策略会让下一个用例的
+/// 日志文件在自己没察觉的情况下被改名。
+///
+void setRotationPolicy(const RotationPolicy &policy);
+RotationPolicy rotationPolicy();
+
+///
+/// \brief 按策略立刻检查并执行一次轮转（`now` 可显式传入，便于测试跨天）。
+///
+/// 写入路径自己每满 1 秒最多检查一次（见 logging.cpp 里的理由），本函数是
+/// 「马上查一次」的显式入口：把日志文件换到新路径之后调它，新路径上已有的旧文件
+/// 会立刻按策略处理，而不必等到下一条日志。
+///
+/// 返回 false 表示**没能完成检查或执行**（未启用文件日志、磁盘操作失败），
+/// 原因写进 `error`；「检查过了、不需要轮转」返回 true。
+///
+bool rotateIfNeeded(const QDateTime &now, RotationDecision *decision = nullptr,
+                    QString *error = nullptr);
+
+///
+/// \brief 详细性能计时开关（PRD: OPT-010 第 4 条）。
+///
+/// 打开后，计时行**不再受全局级别限制**。这正是这个开关存在的理由：排查
+/// 「为什么这一步很慢」时最常见的配置是级别停在 warning/error，而把级别调到
+/// debug 会同时放出成千上万条逐文件的调试日志——用户要的是「哪一步慢」，
+/// 不是「每一步都刷屏」。关闭时计时行与普通日志一样受级别控制（现状）。
+///
+void setPerformanceTimingEnabled(bool enabled);
+bool performanceTimingEnabled();
+/// 这个开关在设置仓库里占的键名。
+QString performanceTimingKey();
+
+///
+/// \brief 记录一条**计时**日志。与 `write()` 只差一处：详细性能计时开关打开时无视全局级别。
+///
+/// 单独开一个入口，而不是让 `write()` 自己绕过级别：一旦 `write()` 能绕过级别，
+/// 第一个这么用的一定不会是计时器，而是某条「反正很重要」的普通日志，
+/// 从此 `--log-level` 就管不住日志量了。
+///
+void writeTiming(Level level, const QString &category, const QString &message);
+
+///
 /// \brief 一条日志的完整内容。
 ///
 /// 先成结构、再成文本，是为了让界面输出面板这类消费者不必去**反向解析**
@@ -134,7 +184,8 @@ void write(Level level, const QString &category, const QString &message);
 /// 「为什么这里有时很慢」的答案。
 ///
 /// 计时本身是**无条件**开启的（`QElapsedTimer::start()` 只是一次时钟读取）；
-/// 「要不要记」在析构时按当前级别判断，因此中途调过 `setLevel()` 也按新级别走。
+/// 「要不要记」在析构时判断（级别，或详细性能计时开关），因此中途调过
+/// `setLevel()` / `setPerformanceTimingEnabled()` 也按新值走。
 ///
 class Stopwatch
 {

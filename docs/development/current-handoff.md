@@ -179,12 +179,31 @@ Qt 6.0 才有 `setMatchTimeout()`，本仓钉在 5.15，因此超时是自己做
   新增 `decodeRejectsAFrameShorterThanItsDeclaredPayload()` 之后该变异被检出。
 - 结论与接口细节见 §1.16；「本机跑的是回退路径」这条也记进了 §6 的坑表。
 
+### 1.0.4 落定 OPT-010 日志与诊断选项（2026-09-21 06:3x）
+
+夜间那批「把界面接通当一批来做」的产出里，`OPT-010` 是**唯一一个连服务层都没有的条目**
+——全仓 grep `rotate` / `diagnos` / `performanceTiming` 零命中，issue #365 五条完成标准
+全是「日志与诊断选项」这一页该有的东西。这一轮把它整条落到底：
+
+- 新增 `Services/Log/logfiles.{h,cpp}`（滚动与清空）与 `Services/Log/diagnostics.{h,cpp}`（诊断包），
+  两个模块都**纯 QtCore**，并沿用 OPT-005 的做法——把「策略」做成可自检的纯数据对象、
+  把「判定」做成注入时间的纯函数。
+- 新增 `Tests/LogDiagnostics`（**89 个用例函数**，九组 A~I）；`Tests/Logging` 34 → **43**、
+  `Tests/Options` 46 → **50**、`Tests/OptionsDialog` 17 → **23**。
+- 全量 **3596 passed / 0 failed / 2 skipped（66 套件）**；五道护栏全过；
+  `make -B -j8` 全量重编 0 条本仓 warning；离屏启动正常。
+- **17 处变异 17 处检出、0 处漏检**。
+- 过程中**发现并修掉一个真实的隐私 bug**：脱敏的边界判定原本要求「路径后面必须跟分隔符」，
+  于是 `/Users/loren `（后面是空格）这种最常见的写法**不会**被替换掉——导出的诊断包里
+  就带着用户的真实家目录。判据已反转（见 §6）。
+
 ## 1.1 已落地的服务层模块
 
 | 模块 | 条目 | 状态 | 测试 |
 | --- | --- | --- | --- |
 | `Services/Command/` | UI-024 | 骨架 | `Tests/CommandRegistry`（14 用例） |
-| `Services/Log/` | ENG-006 | **部分完成**（界面输出面板尚未接线） | `Tests/Logging`（32 个用例函数） |
+| `Services/Log/` | ENG-006 | **部分完成**（界面输出面板尚未接线） | `Tests/Logging`（43 个用例函数，本轮从 32 加到 43） |
+| `Services/Log/`（滚动与诊断） | OPT-010 | **已完成**（五条标准全落；滚动 / 清空 / 诊断包三个服务层模块齐备，设置项登记在 `logging.*` 分类下，设置页有按钮与文案，界面走的是与测试同一条公开方法） | `Tests/LogDiagnostics`（89 个用例函数，**纯 QtCore**） |
 | `Services/Filter/` | FILT-001 | **部分完成**（界面上的速查与实时预览尚未接线） | `Tests/Filter`（87 个用例函数）；`FILT-005` 另见下一行 |
 | `Services/Filter/`（三层叠加与落点） | FILT-005 | **部分完成**（第 1、4、5 条的服务层已完整落地并有启动自检；第 2、3 条的服务层部分——启用状态与四态文案、面板数据与全文——也已落地，**缺的只是显示控件**，住所是设置页 OPT-*） | `Tests/FilterStack`（84 个用例函数，**纯 QtCore**） |
 | `Services/Filter/`（属性条件） | FILT-003 | **部分完成**（第 1~4 条已落；第 5 条只落了能独立验证的那一半——「与内容比对解耦」由读源码的护栏钉住，「扫描阶段提前丢弃」要等 `Folder/` 扫描器） | `Tests/AttributeFilter`（89 个用例函数，**纯 QtCore**） |
@@ -228,7 +247,8 @@ FILT-005 见 [issue #233](https://github.com/LorenHan/LqCompare/issues/233)；
 FILT-003 见 [issue #230](https://github.com/LorenHan/LqCompare/issues/230)；
 FILT-002 见 [issue #229](https://github.com/LorenHan/LqCompare/issues/229)；
 FILT-004 见 [issue #231](https://github.com/LorenHan/LqCompare/issues/231)；
-OPT-005 见 [issue #317](https://github.com/LorenHan/LqCompare/issues/317)。
+OPT-005 见 [issue #317](https://github.com/LorenHan/LqCompare/issues/317)；
+OPT-010 见 [issue #365](https://github.com/LorenHan/LqCompare/issues/365)。
 
 ### 1.2 回收站（PLAT-003）落地到了什么程度
 
@@ -814,12 +834,70 @@ FILT-005（三层叠加与作用域）与 FILT-003（属性过滤）已在后续
 `moduleNeverTouchesTheFileSystem` + `sourceGuardWouldCatchAnInjectedRead` 成对出现），
 与 FILT-004 同一手法：先把「决定」和「执行」切开。
 
+### 1.18 OPT-010 日志与诊断选项落地到了什么程度
+
+三个服务层文件、一组设置键、一页界面、一套 89 个用例函数的新套件：
+
+| 落点 | 文件 |
+| --- | --- |
+| 滚动与清空（服务层） | `Code/Services/Log/logfiles.{h,cpp}` |
+| 诊断包与环境报告（服务层） | `Code/Services/Log/diagnostics.{h,cpp}` |
+| 写路径上的滚动检查、性能计时开关 | `Code/Services/Log/logging.{h,cpp}`（改） |
+| 四个 `logging.*` 设置键 | `Code/Services/Settings/optionsrepository.cpp`（改） |
+| 设置生效（推到日志模块） | `Code/Views/Options/optionsruntime.cpp`（改） |
+| 两个按钮 + 告知弹窗 | `Code/Views/Options/optionsdialog.{h,cpp}`（改） |
+| 测试 | `Code/Tests/LogDiagnostics/`（新，89 个用例函数） |
+
+**五条完成标准全部勾上**，逐条对应（用的是 issue #365 正文里的原话）：
+
+| 完成标准 | 落地情况 |
+| --- | --- |
+| 1. 日志级别（错误/警告/信息/调试）与日志文件位置可配置 | **已勾**（这一条在 ENG-006 那一轮就已落地，本轮没有改动）。`logging.level`（出厂 `warning`，取值与标签直接来自 `Log::levelChoices()` / `levelLabel()`）、`logging.fileEnabled`、`logging.filePath`（非绝对路径会被校验拒掉；对话框里配「浏览…」按钮，空值提示语是「配置目录下 logs/lqcompare.log」）。界面上的控件由设置声明表自动生成，**没有第二份默认值** |
+| 2. 日志文件轮转策略（按大小或按天） | **已勾**。`logging.rotationMode`（出厂 `none`，另两值 `size` / `daily`）+ `logging.rotationMaximumMegabytes`（出厂 5，1~1024，单位 `" MB"`）+ `logging.rotationKeepFiles`（出厂 5，0~100，单位 `" 份"`）；范围常量由**服务层**给出（`minimumRotationMaximumMegabytes()` 等），设置页不自己抄一遍。**检查在写路径上**（`appendRecord()` 里，`QElapsedTimer` 限流到每秒至多一次），所以「日志涨到上限」不需要用户去点一次设置。判据是**纯函数** `rotationDecision(policy, currentSize, fileDate, now)`——时间从外面注入，因此「跨天」这条分支能用假时间测，不需要等一天 |
+| 3. 提供「打开日志目录」「清空日志」「导出诊断包（日志+版本+环境信息）」 | **已勾**。日志页三个按钮：`optionsOpenLogDirectory`（打开当前日志目录，走系统文件管理器；未启用文件日志时提示而不是打开一个不存在的目录）、`optionsClearLog`（清空日志文件）、`optionsExportDiagnostics`（导出诊断包…）。诊断包内含 `logs/`（当前日志 + 全部滚动历史）、`environment.txt`（应用名与版本 / Qt 版本 / 系统与架构 / 存储模式与目录 / 当前日志级别 / 滚动设置摘要 / 日志文件路径 / 导出时间）、`manifest.json`（文件清单 + 脱敏次数 + 是否含日志）。目录名冲突时退让成 `-2`、`-3` |
+| 4. 提供「记录详细性能计时」开关，用于排查慢操作 | **已勾**。`logging.performanceTiming`（出厂 `false`）。关着时 `Stopwatch` 的耗时记录走正常的级别过滤；开着时**绕过级别过滤**但**保留计时器自己那条记录的级别**。开关在**析构时**读取（与级别同一处判断），所以「先放计时器、再开开关」这种排查顺序也能出结果 |
+| 5. 诊断包导出前提示会包含路径信息，并允许脱敏 | **已勾**。导出前先弹一个确认框（`optionsDiagnosticNotice` + `optionsDiagnosticRedact`），文案随勾选**实时变化**且**取自服务层** `Log::diagnosticNoticeText(bool)`（两段刻意不同的文字：脱敏版说「已把家目录与配置目录替换成 `~` / `<配置目录>`」，不脱敏版明说「包内会包含你的家目录与配置目录的真实路径」）。前缀表 `defaultRedactionRules(home, storageDir)` 按**最长前缀优先**排序（否则 `/Users/loren/.qcompare` 会先被 `/Users/loren` 吃掉，剩下的半截反而不像路径）。结果里带 `redactedOccurrences`，清单里也记着 |
+
+**「先告知再导出」的顺序是刻意的**：确认框在选目录**之前**弹出。反过来实现的话，
+用户是在文件已经写出去之后才知道包里有路径——那时候「允许脱敏」就只是个安慰。
+
+**为什么滚动检查必须在写路径上、而且写在写这一行之前**：只在「应用设置」时检查，
+等于把「日志文件会涨到 500 MB」交给用户记性——而用户恰恰是被日志占满磁盘才来改这项设置的。
+顺序也重要：先写这一行再检查的话，那条把文件顶过上限的记录永远留在旧文件里，
+滚动之后立刻又超限，于是「上限」变成一个永远达不到的实现细节。
+
+**为什么写路径上的滚动失败被吞掉**：`appendRecord()` 持着非递归互斥量，在里面再记一条
+「滚动失败」会**死锁**，而现象是「程序卡住」，与日志模块看起来毫无关系。所以那里只尽力而为；
+需要错误的地方（设置页的应用动作）走显式的 `Log::rotateIfNeeded()` 拿 `RotationDecision` 与错误串。
+**日志系统的失败不该把用户的工作一起带走**——这是本模块唯一一处刻意不报错的判断。
+
+**为什么清空是截断而不是删除**：删除之后日志系统手里那个 `QFile` 仍指向已被 unlink 的
+inode，后续写入落在一个「谁也不认识的文件」上：磁盘不涨、文件也永远不出现，
+用户看到的是「日志功能坏了」。截断保住了 inode 与打开的文件句柄。
+
+**为什么脱敏的边界朝「多替换」一侧偏**：判据是「路径后面不能是名字的延续字符
+（`_ - .` 或字母数字）」，而不是「后面必须是分隔符」。后者会漏掉 `/Users/loren `（后面是空格）
+这类真实路径——那是一次隐私泄露，发出去的包里躺着用户的家目录；
+前者多替换的顶多是 `/Users/lorenx` 这种恰好以家目录名开头的路径，只是看起来有点怪。
+**两种错误的代价不对等**，所以规则朝不泄露的一侧偏。
+
+**为什么枚举滚动历史不用 `QDir` 的名字通配**：日志文件名是用户可配的。
+`entryList(name + ".*")` 在名字含 `[` `*` `?` 时既会**漏掉**真正的历史
+（`a[1].log.1`），又会**误收**无关文件（`a1.log.12345`）。改成列全部文件、
+按前缀 `startsWith` + 整数后缀解析来判断。这条是**测试先红、再去修实现**发现的。
+
+**未做（有意留空）**：诊断包里不额外收集系统信息（不跑 `system_profiler`、
+不读注册表、不抓控件树）——那会让「导出一个包」变成一件慢且有副作用的事；
+环境报告里只有进程自己就能答出来的东西。也不做「自动上报」：包只落在用户选的目录里。
+
 ## 2. 已验证的事实（不用再花时间确认）
 | 项目 | 结论 | 验证方式 |
 | --- | --- | --- |
 | 构建 | Qt 5.15.2 clang_64 上 qmake + make 通过，产出 `dist/macos/LqCompare.app` | `qmake && make -j8` |
 | 运行 | 主程序离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
-| 测试（全量） | **3487 passed / 0 failed / 2 skipped，65 个套件**（2026-09-21 实测）。此前一轮是 3394 / 64 套件；本轮为 OPT-005 新增 `Tests/FileOpsOptions`（**92 个用例函数**）并把 `Tests/OptionsDialog` 从 16 加到 17。2 条跳过分别来自 `PathName` 与 `Registry`，都是按平台条件跳过的用例 | `Code/Tests/run-tests.sh` |
+| 测试（全量） | **3596 passed / 0 failed / 2 skipped，66 个套件**（2026-09-21 06:2x 实测）。此前一轮是 3487 / 65 套件；本轮为 OPT-010 新增 `Tests/LogDiagnostics`（**89 个用例函数**）并把 `Tests/Logging` 从 34 加到 43、`Tests/Options` 从 46 加到 50、`Tests/OptionsDialog` 从 17 加到 23。2 条跳过分别来自 `PathName` 与 `Registry`，都是按平台条件跳过的用例 | `Code/Tests/run-tests.sh` |
+| 滚动与诊断（OPT-010） | 89 个用例函数（QTest 合计 91，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分九组：A 滚动策略与自检 12、B 纯函数滚动判定 14、C 真实文件的滚动与清空 13、D 历史枚举 8、E 脱敏 14、F 环境报告与文件名 8、G 导出前告知 6、H 诊断包 14、I 源码级护栏 4。这套件**刻意不链接 QtGui**：滚动与诊断都是纯文件工作，哪天有人往里面拽图形依赖，本工程立刻构建失败。C 组真的在 `QTemporaryDir` 里建日志文件、写到超限、断言 `.1` 出现且旧内容在里面 | `Code/Tests/run-tests.sh LogDiagnostics` |
+| 滚动与诊断能反向验证 | **17 处变异 17 处检出、0 处漏检**。M1~M12 打服务层（空文件也去滚动、大小判据从 `>=` 改成 `>`、按日模式不比较日期、`keepFiles == 0` 时不清理已有历史、清空改成删除文件、历史枚举退回 `QDir` 通配、脱敏不做最长前缀优先、脱敏只替换前缀不校验右边界、环境报告漏一项、目录名冲突时不退让、失败时不回滚半成品目录、清单不含自身），M13 打 `logging.cpp`（写路径上不再做滚动检查），M14~M15 打设置仓库与设置页，M16~M17 打界面与日志模块的接线。**驱动脚本本身踩过一个坑**：变异落在头文件上时必须把整个套件重建（`purge_suites()`），否则旧 `.o` 会让变异编不进去而报「漏检」（见 §6） | 变异测试（结论写在 issue #365 的落地说明里） |
 | 文件操作策略（OPT-005） | 92 个用例函数（QTest 合计 93，含 `initTestCase`）全通过、0 跳过。分九组：A 三种枚举与标签 13、B 出厂默认与安全契约 11、C 覆盖判定四态 12、D 阈值（大文件 / 批量删除）11、E 校验方式 7、F 元数据保留三项 8、G 键表与自检（含把**故意写坏**的表喂进同一判定）13、H 界面共用同一套标签 5、I 源码级护栏（不碰文件系统 / 不 include 视图头 / 反向验证护栏本身会红）12。这套件**刻意不链接 QtGui**：`fileopsoptions` 是纯策略数据，哪天有人往它里面拽图形依赖，本工程立刻构建失败 | `Code/Tests/run-tests.sh FileOpsOptions` |
 | 文件操作策略能反向验证 | **25 处变异 25 处检出、0 处漏检**。M1~M20 打服务层（默认删除方式改成永久、覆盖默认改成直接覆盖、`safetyContractViolations()` 不再报直接覆盖、`OverwriteSituation` 四态塌缩成一态、目标缺失也去询问、MB→字节少乘一层、0 不再表示关闭、阈值判定用 `>=` 而非 `>`、校验方式表少一项、三个保留布尔合并成一个、键表去重/去空/去前缀、键表的 purpose 恒为空…），M21 打设置仓库的出厂值，M22~M25 打设置页（安全提示不再随草稿刷新、下拉文本改成界面自己写一份、单位后缀写死）。**注意驱动脚本本身踩过一个坑**：把 `.o` 的时间戳推到未来会让 `make` 认为目标比源新而**整轮跳过编译**，于是 25 处全报「未确认重编」——必须推**源文件**的 mtime 并断言变异确实编进去了（见 §6） | 变异测试（结论写在 issue #317 的落地说明里） |
 | 单实例与进程间通信（PLAT-006） | **103 个用例函数（QTest 合计 105，含 `initTestCase` 与 `cleanupTestCase`）**全通过、0 跳过。分十二组：A 标识符 12、B 线协议编解码 20、C 分帧 6、D 退出码表 6、E 退出码表自检的反向验证 9、F 命令行开关 6、G 置前策略 6、H 角色与启动结论 4、I 真子进程的转交 8、J 真子进程的失败与降级 9、K 崩溃遗留与生存期 13、L 源码级护栏 4。**它是本仓第一个起真子进程的套件**：`ChildProcess` 用 `QProcess` 把**自己**再拉起一次（`--child <mode>`），因此「第二个实例把参数交出去并带退出码退出」「首个实例不应答时降级」「进程 `_exit()` 之后标识仍可用」这些事是真的在两个进程之间发生的，不是在同一个进程里假装。子进程模式写在测试源码里，**没有往生产代码里加测试钩子** | `Code/Tests/run-tests.sh SingleInstance` |
@@ -835,11 +913,11 @@ FILT-005（三层叠加与作用域）与 FILT-003（属性过滤）已在后续
 | 名称与 Unicode | 40 个用例通过 + 1 个跳过（无效 UTF-8 名字的用例只在 Linux 上执行，CI 会跑）。覆盖字节保真往返、UTF-8 边界与过长编码、Unicode 组合形式、六类文件名问题的原因与位置 | `Code/Tests/run-tests.sh PathName` |
 | 错误携带与批量处置 | 36 个用例全通过。其中 9 个验证错误码在三种域下的携带与显示（含「未识别的码只给数字」）、11 个验证失败清单分组、12 个验证执行流程（含「重试只跑失败项」与「停止不移除已完成进度」）、4 个走真实文件系统做一次「设为只读 → 解除只读」往返 | `Code/Tests/run-tests.sh Batch` |
 | 系统图标 | 46 个用例函数（QTest 合计 48，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分四组：17 个验证缓存键与尺寸规则（扩展名折叠 7 + 键的合成与解析 5 + DPI 缩放 4 + Windows 档位收拢 1）、9 个验证有界 LRU 的淘汰与命中统计、6 个验证请求去重队列、11 个验证服务层（同步/异步/去重/回退/换比例清缓存）；另有 **3 个走真实系统图标源**（macOS 上真实执行：断言拿到非空像素、断言文字文件与文件夹的图确实不同） | `Code/Tests/run-tests.sh PlatformIcon` |
-| 主程序构建 | 通过，**本仓库自己的代码 0 warning**（`make -B -j8` 全量重编，实测 0 条本仓 warning、0 条 error）。链接行里能看到 `singleinstance.o` / `moc_singleinstance.o` 与 `instanceprotocol.o`，`nm -C` 在产出的可执行文件里数到 `LqCompare::Platform::SingleInstanceGuard` **72** 个符号——即单实例模块**确实进了产物**而不只是躺在磁盘上。本轮另数到 `FileOperationPolicy` **48** 个符号与 `fileOperationKeyTable` **27** 个（`fileopsoptions.o` 在链接行里；**没有 `moc_fileopsoptions.o`**，因为 `fileopsoptions.h` 里没有任何 `Q_OBJECT`——它是纯数据结构，不是 `QObject` 派生类），即 OPT-005 的策略模块同样进了产物。全量重建时唯一的告警仍是第 3 方 `MyClass/3rd-party/LqRibbon/…/LqRibbon.cpp:569: unused function 'nativeWindowScaleFactor' [-Wunused-function]`，不在本仓改动范围内 | `cd _build-lqcompare && ~/Qt/5.15.2/clang_64/bin/qmake -o Makefile ../Code/LqCompare.pro && make -B -j8`（**注意是 `Code/LqCompare.pro`**，仓库根没有 `LqCompare.pro`；用户指令里写的 `../LqCompare.pro` 会报 `Cannot find file`） |
+| 主程序构建 | 通过，**本仓库自己的代码 0 warning**（`make -B -j8` 全量重编，实测 0 条本仓 warning、0 条 error）。链接行里能看到 `singleinstance.o` / `moc_singleinstance.o` 与 `instanceprotocol.o`，`nm -C` 在产出的可执行文件里数到 `LqCompare::Platform::SingleInstanceGuard` **72** 个符号——即单实例模块**确实进了产物**而不只是躺在磁盘上。本轮另数到 `FileOperationPolicy` **48** 个符号与 `fileOperationKeyTable` **27** 个（`fileopsoptions.o` 在链接行里；**没有 `moc_fileopsoptions.o`**，因为 `fileopsoptions.h` 里没有任何 `Q_OBJECT`——它是纯数据结构，不是 `QObject` 派生类），即 OPT-005 的策略模块同样进了产物。OPT-010 的两个新模块在链接行里是 `logfiles.o` 与 `diagnostics.o`（同样**没有** `moc_*`，都是纯 QtCore 数据/函数，不是 `QObject`），`nm -C` 数到 `LqCompare::Log::rotationDecision`、`clearLogFile`、`buildDiagnosticBundle`、`writeTiming`（均为 `T`，即已实体化）。全量重建时唯一的告警仍是第 3 方 `MyClass/3rd-party/LqRibbon/…/LqRibbon.cpp:569: unused function 'nativeWindowScaleFactor' [-Wunused-function]`，不在本仓改动范围内。**一个构建上的坑**：`make -B` 会把 app bundle 的 `PkgInfo` / `Info.plist` 也一起删掉重建，而本机沙箱的删除守卫会拦住它，于是报 `Error 1` 但**编译与链接其实都成功了**（看 `MacOS/LqCompare` 的 mtime 是否为最新即可）。`touch` 一下这两个文件再 `make -j8` 就恢复正常（见 §6） | `cd _build-lqcompare && ~/Qt/5.15.2/clang_64/bin/qmake -o Makefile ../Code/LqCompare.pro && make -B -j8`（**注意是 `Code/LqCompare.pro`**，仓库根没有 `LqCompare.pro`；用户指令里写的 `../LqCompare.pro` 会报 `Cannot find file`） |
 | 主程序运行 | 离屏启动正常，日志显示「LqCompare 0.1.0 启动完成」与「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」，且**一次 `qt.svg: Cannot open file` 都没有**。本轮新增了 PLAT-006 那一行：默认启动（单实例开启）时是「共享内存不可用（QSharedMemory::create: out of resources），已由进程锁保证单实例；本进程是首个实例，已在端点 lqcompare-loren-org.lqcompare.d-4102bf82 上等待转交」；加 `--new-instance` 时是「单实例机制已由选项关闭：不占用标识、不建端点，直接启动」。**⚠️ 指令变更**：夜间对 `main.cpp` 的重写（233 删 / 91 增）**不再调用**之前几轮加的启动自检——`validateSessionTypeTable` / `validateFilterLayerTable` / `validateAttributeConditionTable` / `validateNameFilterTables` 现在**全仓没有任何调用方**（`validateContentFilterTables()` 从一开始就没有调用方，它落在同一个处境里），日志里也不会再出现「会话类型注册表：…」「三层过滤：…」「属性过滤：…」「名称过滤：…」那四行。保留下来的只有 `CommandRegistry::instance().validate()`（`main.cpp` 里那一处 `LQCOMPARE_ERROR("command", …)`）。这些表的校验**仍然被单元测试覆盖**（例如 `Tests/FilterStack` G 组有 6 条把**故意写坏**的表喂进同一个判定），因此丢的是「启动时的一声警报」，不是唯一的防线；**要不要把这四行自检加回 `main.cpp` 是一个待定的决定**，加回之前不要在文档里声称启动时会打印它们 | `QT_QPA_PLATFORM=offscreen ./dist/macos/LqCompare.app/Contents/MacOS/LqCompare --log-level info [--new-instance]`（**别用 `\| head` 收尾**，管道关闭会把进程直接杀掉、看不到真实退出码）。另：**上一轮的离屏实例可能还活着**，那时这次启动会走转发路径、立刻以 **10** 退出且**不打任何日志**——要做一次干净的启动确认请加 `--new-instance`，确认完记得把进程杀掉并清掉它留下的端点与 `.lock`（本轮清过一次：`/tmp/lqcompare-loren-org.lqcompare.d-4102bf82{,.lock}`），详见 §6 |
 | Shell 集成 | 99 个用例函数（QTest 合计 101，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分十一组：A 动作与目标 14、B 选项 8、C 命令行引号 8、D 计划 13、E 安装 10、F 卸载与还原 9、G 校验 5、H 残留 6、I 能力 4、J 预演 3、K 命令行解析 9。**全部跑在功能完整的内存注册表上**，因此安装回滚与卸载还原是在本机真实执行的流程，不是桩 | `Code/Tests/run-tests.sh ShellIntegration` |
 | Shell 集成的命令行引号 | 用测试内置的 `CommandLineToArgvW` 参考实现做往返：`"C:\Program Files\…\LqCompare.exe" --shell-action=compare "%1"` 切回来必须还是两个原值，含「结尾反斜杠要翻倍」这条最容易写错的规则 | `Code/Tests/run-tests.sh ShellIntegration` |
-| 分级日志 | 32 个用例函数（QTest 合计 34，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分五组：A 级别与过滤 6、B 格式 4、C 输出目标 11、D 耗时辅助 6、E 级别名解析 4、以及 `initTestCase`/`cleanupTestCase`。这套件**刻意不链接 QtGui**：哪天有人往 `logging.cpp` 里加图形依赖，本工程会立刻构建失败 | `Code/Tests/run-tests.sh Logging` |
+| 分级日志 | **43** 个用例函数（QTest 合计 45，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分七组：A 级别与过滤 6、B 格式 4、C 输出目标 11、**D2 性能计时开关 6**、**D3 滚动策略与写路径检查 5**、D 耗时辅助 6、E 级别名解析 4，以及 `initTestCase`/`cleanupTestCase`。这套件**刻意不链接 QtGui**：哪天有人往 `logging.cpp` 里加图形依赖，本工程会立刻构建失败。**新增组延续了本模块的卫生要求**：日志级别 / 日志文件 / 接收者 / 滚动策略 / 性能计时开关都是进程全局状态，因此 `init()` 与 `cleanupTestCase()` 必须把它们逐个复位，否则用例之间的顺序会让结果随机 | `Code/Tests/run-tests.sh Logging` |
 | 掩码语法与过滤声明 | 87 个用例函数（QTest 合计 89，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分九组：A 掩码基本语义 13、B 字符集 12、C 跨目录 8、D 大小写策略 9、E 声明解析 17、F 叠加 9、G 预览 6、H 语法速查 7、I 恶意与畸形输入 6。这套件同样**刻意不链接 QtGui**（掩码只处理字符串） | `Code/Tests/run-tests.sh Filter` |
 | 掩码语法速查与实现同源 | 21 条速查条目、53 条样本被逐条**真的跑一遍**（掩码类走 `Mask::compile` + `matches`，声明类走 `MaskFilter::parse` + `accepts`），因此「帮助里写的行为」与「程序的行为」不可能分家。另有断言：纯文本速查表里含每一个掩码与样本（它确实是生成物）、条目无重复、全表同时出现「匹配」与「不匹配」两种样本 | `Code/Tests/run-tests.sh Filter` |
 | 掩码的恶意输入有界 | `**/**/…`（24 个）对上 40 段路径、`*a*a*…`（12 个）对上 200 个 `a`、400 段路径、5000 字符掩码、500 成员字符集——全部在毫秒内出结果。这几条盯的是**指数级退化**（朴素递归分别是 2^40 与 2^200 量级），不是性能基线 | `Code/Tests/run-tests.sh Filter` |
@@ -864,7 +942,7 @@ FILT-005（三层叠加与作用域）与 FILT-003（属性过滤）已在后续
 | 图标检查 | 通过（32 个图标，声明/引用/文件三者一致） | `python3 tools/check_icons.py` |
 | 规格自检 | 通过（369 条，P0 59 条，PRD 与数据同步） | `python3 tools/check_spec.py` |
 | Shell 可移植性 | 通过（16 个脚本，无 bash 4 内建与 GNU 工具扩展；含 `_test-build/` 与 `.codex-work/` 下各套件构建目录里的 `target_wrapper.sh`） | `python3 tools/check_shell.py` |
-| Windows 宽字符 API | 通过（**326** 个源文件、清单内 43 个 API；自测 17 个样本） | `python3 tools/check_winapi.py [--self-test]` |
+| Windows 宽字符 API | 通过（**332** 个源文件、清单内 43 个 API；自测 17 个样本）。本轮从 326 涨到 332，正是 OPT-010 新增的两个模块（`logfiles` / `diagnostics` 的 `.h` 与 `.cpp`） | `python3 tools/check_winapi.py [--self-test]` |
 | 测试套件（无匹配视为失败） | 「无套件匹配」被视为失败（exit 2）——套件改名或过滤器拼错时不会报「全部通过」而实际 0 个用例执行。全量的实际数字见上面那一行 | `Code/Tests/run-tests.sh <不存在的套件名>` |
 | 命令注册表自检 | 启动时 0 问题（说明不缺图标、不缺说明、无快捷键冲突） | 启动日志 |
 | 会话设置目录自检 | ⚠️ **不在启动时打印**（理由见本表「主程序运行」那一行的指令变更）。`SessionSettingsCatalog::describe()` 现在**只有测试调用点**，生产路径上没有；目录当前是**空的**（框架刻意不含具体设置项），`describe()` 会输出「会话设置目录：0 份声明，共 0 个设置项」。它查的是每一份会话设置声明是否字段齐备、键是否唯一；各会话类型登记声明时它会立刻开始替它们把关——**只要有人把调用点接上** | `Code/Tests/run-tests.sh Settings` |
@@ -915,7 +993,14 @@ Code/
 │   │                             Version 等目录，属尚未接线的视图批次，本表不逐个展开）
 ├── Services/
 │   ├── Command/                  commandregistry（命令注册中心）
-│   ├── Log/                      logging（分级日志 / 级别过滤 / 三目标 / 耗时辅助）
+│   ├── Log/                      logging（分级日志 / 级别过滤 / 三目标 / 耗时辅助 /
+│   │                             滚动策略与性能计时开关；滚动检查在写路径上）、
+│   │                             logfiles（滚动与清空：RotationPolicy 纯数据策略对象 +
+│   │                             自检、注入时间的纯函数 rotationDecision、落盘
+│   │                             applyLogRotation、历史枚举、截断式 clearLogFile）、
+│   │                             diagnostics（环境报告 / manifest.json / 前缀表驱动的
+│   │                             路径脱敏 / 导出前告知文案 / buildDiagnosticBundle
+│   │                             失败整目录回滚）
 │   ├── Session/                  session（会话设置接口 + 内存实现）、
 │   │                             sessiontype（会话类型描述子与注册表：14 种内置
 │   │                             类型的字段 / ID 快照 / 按掩码的注册顺序优先）、
@@ -992,7 +1077,14 @@ Code/
 │   │                             「本模块不碰文件系统 / 不 include 视图头」的成对护栏；
 │   │                             另 include OptionsDialog 的编译单元以断言「界面标签
 │   │                             与服务层同源」）
-│   ├── Logging/                  tst_logging + .pro（32 用例函数，刻意不链接 QtGui）
+│   ├── Logging/                  tst_logging + .pro（43 用例函数，刻意不链接 QtGui）；
+│   │                             七组含本轮新增的 D2 性能计时开关、D3 滚动策略与写路径
+│   │                            检查；日志模块是进程全局状态，因此 init/cleanup 必须
+│   │                            把级别 / 文件 / 接收者 / 滚动策略 / 计时开关逐个复位
+│   ├── LogDiagnostics/           tst_logdiagnostics + .pro（89 用例函数，**纯 QtCore**，
+│   │                             刻意不链接 QtGui）；九组 A~I，C 组真的在 QTemporaryDir
+│   │                             里建日志文件并写到超限、H 组真的产出一整个诊断包目录、
+│   │                             I 组读源码钉住「本模块不 include 视图头 / 不弹对话框」
 │   ├── NameFilter/               tst_namefilter + .pro（93 用例函数，**纯 QtCore**，
 │   │                             刻意不链接 QtGui；十组 A~J，含用脚本替身
 │   │                             ScriptedRunner 覆盖超时策略、以及读源码钉住
@@ -1021,11 +1113,17 @@ Code/
 │   ├── SettingsScope/            tst_settingsscope + .pro（40 用例函数，**纯 QtCore**，
 │   │                             刻意不链接 QtGui——「视图级改动不得污染会话默认值」
 │   │                             因此在没有界面的情况下被断言住）
-│   ├── OptionsDialog/            tst_optionsdialog + .pro（17 用例函数，链接 QtWidgets）。
+│   ├── OptionsDialog/            tst_optionsdialog + .pro（23 用例，链接 QtWidgets；本轮
+│   │                             从 17 加到 23，新增的都是 OPT-010 的接线：清空按钮
+│   │                             存在 / 关掉文件日志时清空要报错 / 清空真的截断了配置
+│   │                             的那个文件 / 导出遵守脱敏勾选 / 目录不可用时如实报错 /
+│   │                             滚动设置一路走到日志模块）。
 │   │                             分类树 / 搜索 / 五分类页面与草稿、校验、文件操作页的
 │   │                             动态安全提示与单位后缀都在这套件里；它 include
 │   │                             `Services/Files/files.pri` 才能拿到服务层的标签
-│   ├── Options/                  tst_options + .pro（154 用例，选项仓库的声明与默认值）
+│   ├── Options/                  tst_options + .pro（50 用例，选项仓库的声明与默认值；
+│   │                             本轮从 46 加到 50，新增四条钉住 `logging.*` 四个键的
+│   │                             出厂值、取值范围是否**取自服务层**而不是界面自己抄一遍）
 │   ├── （其余套件：AppIntegration / Archive(V) / Cli(Probe) / CommandActions /
 │   │   CommandShortcuts / Folder(Merge) / Format / HomeRegistry / Media(V) / Merge(Output) /
 │   │   PatchApply / PatchRegression / Registry(V) / Report / Script / SessionArea /
@@ -1143,6 +1241,33 @@ git push --force-with-lease=main:<远端当前提交> \
 > 想让它停下来，把那个自动化暂停即可；已经推上去的提交都是各自独立的闭环，可以单独回退。
 
 ### 4.0 2026-09-21 更新：夜间产出的收尾与下一步
+
+**本轮闭环了 `OPT-010`（日志与诊断选项，issue #365）**，它是「界面接通那一批」
+（下面第 1 条）里的**第二张设置页**，接手前先读 §1.18。它和 OPT-005 一样把
+「服务层出策略、界面只搬运」当范式，但有两点新东西值得后续条目照着做：
+
+- **判定是注入时间的纯函数**（`rotationDecision(policy, currentSize, fileDate, now)`）。
+  「按日滚动」天然依赖「今天是哪天」，而把 `QDate::currentDate()` 写在实现里，
+  那条分支就只能靠等一天来测。把时间当参数之后，测试用假时间把跨天、同一天、
+  文件比现在新（时钟回拨）三种情形一起测掉。
+- **副作用必须落在真正的路径上，而不是只有一个显式的入口**。
+  `SetRotationPolicy()` 只改状态；真正会滚动的是 `appendRecord()`——
+  写每一行日志之前检查一次（`QElapsedTimer` 限流每秒至多一次）。
+  只在「应用设置」时检查的实现，会让用户在日志占满磁盘之后仍然要自己想到去点一下。
+
+**本轮修掉了一个真实的隐私缺陷**（不是新写的代码引入的，是新写的测试抓出来的）：
+脱敏的右边界原本要求「路径后面必须跟分隔符」，于是 `/Users/loren `（后面是空格）
+**不会**被替换，导出的诊断包里就带着真实家目录。判据已反转成
+「后面不能是名字的延续字符」。这条值得记住的是**方向**：脱敏宁可多替换一次
+（`/Users/lorenx` 被误替换，只是看着怪），也不能漏一次（那是真的泄露）。
+
+**验证数据**：`Tests/LogDiagnostics` 89 个用例函数（九组 A~I，纯 QtCore，刻意不链接
+QtGui）；`Tests/Logging` 34 → **43**、`Tests/Options` 46 → **50**、
+`Tests/OptionsDialog` 17 → **23**；全量 **3596 / 0 / 2（66 套件）**；
+五道护栏全绿（winapi 源文件数 326 → **332**）；主程序 `make -B -j8` 本仓 0 warning、
+离屏启动正常；**17 处变异 17 处检出、0 漏检**。
+
+### 4.0.1 更早一轮：OPT-005（issue #317）
 
 **再往上一轮（本轮）闭环了 `OPT-005`（文件操作选项，issue #317）**，它是「界面接通那一批」
 （下面第 1 条）里的第一张设置页，接手前先读 §1.17：
@@ -1669,3 +1794,8 @@ Filters 页、面板的控件宿主、属性条件与名称过滤的输入框、
 | 变异驱动脚本把 **`.o` 的 mtime 推到未来** | 想让 `make` 重编却推错了目标：`make` 认为目标比源新，于是**整轮跳过编译**，25 处变异全部报「未确认重编」——**一次看起来像「25 处全漏检」的假阴性**，而实际是变异根本没编进去 | 推**源文件**的 mtime（`os.utime(src)` 或 `touch -m`），并在跑用例前**断言变异确实被编译了**（例如检查新 `.o` 的 mtime 或产物里的符号）。**「失败」与「没跑」必须能区分**，否则护栏会给出方向完全相反的结论 |
 | 套件二进制的落点不统一 | 变异驱动按 `_test-build/<Suite>/bin/tst_x` 找产物，`Tests/OptionsDialog` 的却在 `_test-build/OptionsDialog/tst_optionsdialog`（少一层 `bin/`），于是 `FileNotFoundError` 被当成「变异未被检出」 | 驱动脚本两个路径都试（`bin/tst_x` 与 `tst_x`），找不到就**报错退出**而不是记成漏检。这类「工具自己找不到文件」的失败最容易被混进结果里 |
 | 把与安全**无关**的选项也算进「安全契约违规」 | `safetyContractViolations()` 最初写成「覆盖策略 != 询问 即违规」。但「跳过已存在的目标」虽然也不问，它**不覆盖任何东西**；把它算成违规会让这条契约退化成「必须等于 Ask」这个与安全性无关的同义反复，「保守」一词就失去了边界。而我先写的用例断言的是「Skip 不算违规」，于是**实现与用例对不上，用例红** | 契约的判据要落到**真正有害的那一个取值**上（只有 `Overwrite` 直接覆盖），而不是「不等于某个值」。写这类「把一句话变成函数」的契约时，先列出「哪些取值踩了这条线」再写条件 |
+| 路径脱敏的**右边界方向搞反**（真实隐私缺陷） | 判据最初写成「前缀后面必须紧跟路径分隔符」，于是 `/Users/loren `（后面是**空格**）——也就是句子里最常见的写法——**不会被替换**，导出的诊断包原样带着用户家目录。这是新写的测试抓出来的，不是 review 看出来的 | 脱敏的两种错误代价**不对等**：多替换一次（`/Users/lorenx` 被误替换）只是看着怪，漏替换一次是**真的泄露**。所以判据取「后面不能是名字的延续字符（`_ - .` 或字母数字）」，朝「宁多勿漏」偏。写这类判定时先问一句「两种错法各自的代价是什么」，再决定往哪边偏 |
+| 用 `QDir` 的**名字通配**去枚举「某某文件的兄弟文件」 | 滚动历史按 `entryList(日志名 + ".*")` 找。日志名是**用户可配**的，含 `[` `*` `?` 时通配符会被解释：`a[1].log` 既**漏掉**真正的 `a[1].log.1`，又**误收**无关的 `a1.log.12345`。前者让诊断包少一半材料，后者把无关文件打进包里（可能顺带带出隐私）。测试是**先红再改实现**的 | 别用通配符匹配用户可控的字符串。列全部条目、自己按前缀 `startsWith` + 后缀解析判断（`logfiles.cpp` 的 `existingHistory()` 就是这么写的，注释里写了理由） |
+| 变异打在**头文件**上时，只推源文件 mtime 不够 | 变异落在 `.h` 上（例如改默认值），依赖它的 `.cpp` 由 `make` 从 `.d` 文件推导依赖，**看似**会重编；但上一轮用过的 `shutil.copy2` 会把源文件的 mtime 一起还原，于是部分 `.o` 仍然「比源新」，变异编不进去而被记成「漏检」——和 §6 上一条是同一类假阴性，但触发路径不同 | 变异落在头文件上时**把整个套件的构建目录重建**（实现里叫 `purge_suites()`），不要只删单个 `.o`。判定标准仍是「变异确实进了产物」而不是「我推过 mtime 了」 |
+| `make -B` 会连 app bundle 的 `PkgInfo` / `Info.plist` 一起删掉重建 | 本机沙箱有删除守卫，拦住这两个文件的删除，于是 `make` 报 `*** [../dist/…/PkgInfo] Error 1` 并中止。**但编译与链接其实都已经成功了**——`MacOS/LqCompare` 的 mtime 是最新的，产物可用。若照着「报错了所以没构建成功」去排查，会白找很久 | 先看产物的 mtime 再判断成败；确认是这一条之后 `touch` 那两个文件再 `make -j8` 即可（它们的内容没变，只是 mtime 落后）。**这类「工具层的拒绝」与「代码层的失败」必须分开判断**，否则会把一次成功构建记成失败 |
+| 全局状态的测试必须逐个复位，**新加的开关也要算进去** | `Services/Log` 里日志级别 / 日志文件 / 接收者都是进程全局的，本轮又加了滚动策略与性能计时开关。若 `init()` 只复位旧的那几个，用例之间就会互相影响（前一条把计时开关打开、后一条断言关着）——而失败顺序看起来随机的 | 给模块加新的全局状态时，**同一轮里**把它补进该模块所有套件的 `init()` 与 `cleanupTestCase()`。`Tests/Logging` 的 `initTestCase` 现在会逐个断言初值，就是为了让「漏复位」立刻红 |

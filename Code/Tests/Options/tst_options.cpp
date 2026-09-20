@@ -736,6 +736,102 @@ private slots:
         QVERIFY(QFileInfo(alias).isSymLink());
 #endif
     }
+
+    // ---- 日志轮转设置项与 Log::RotationPolicy 的一致性（OPT-010 第 2 条） ----
+
+    void rotationDefinitionsMatchTheServiceDefaults()
+    {
+        // 「默认是什么」有两处实现：设置仓库的定义表，与服务层的策略对象。
+        // 两边分家时的现象是「用户不碰设置的行为」与「他在设置页看到的首个选项」
+        // 对不上，而没有任何机制会主动发现。这条用例就是那个机制。
+        const auto *mode = OptionsRepository::definition(LqCompare::Log::rotationModeKey());
+        const auto *megabytes = OptionsRepository::definition(
+                LqCompare::Log::rotationMaximumMegabytesKey());
+        const auto *keep = OptionsRepository::definition(LqCompare::Log::rotationKeepFilesKey());
+        QVERIFY(mode && megabytes && keep);
+
+        const LqCompare::Log::RotationPolicy policy;
+        QCOMPARE(mode->defaultValue.toString(),
+                 QString::fromLatin1(LqCompare::Log::rotationModeIdentifier(policy.mode)));
+        QCOMPARE(megabytes->defaultValue.toInt(), static_cast<int>(policy.maximumMegabytes()));
+        QCOMPARE(keep->defaultValue.toInt(), policy.keepFiles);
+        // 出厂策略本身必须是合法的，否则用户一打开设置页就已经处于「校验失败」。
+        QCOMPARE(policy.validate(), QString());
+    }
+
+    void rotationDefinitionBoundsComeFromTheServiceLayer()
+    {
+        // 上下界只有一份（`Log` 里那几个函数）：两处各写一遍数字时，
+        // 现象是「界面上允许填 2000，保存时却被判定非法」——用户只会觉得这页坏了。
+        const auto *megabytes = OptionsRepository::definition(
+                LqCompare::Log::rotationMaximumMegabytesKey());
+        const auto *keep = OptionsRepository::definition(LqCompare::Log::rotationKeepFilesKey());
+        QVERIFY(megabytes && keep);
+        QCOMPARE(megabytes->minimum,
+                 static_cast<int>(LqCompare::Log::minimumRotationMaximumMegabytes()));
+        QCOMPARE(megabytes->maximum,
+                 static_cast<int>(LqCompare::Log::maximumRotationMaximumMegabytes()));
+        QCOMPARE(keep->minimum, 0);
+        QCOMPARE(keep->maximum, LqCompare::Log::maximumRotationKeepFiles());
+    }
+
+    void rotationChoicesComeFromTheServiceLayer()
+    {
+        // 下拉选项抄一遍的代价是「加了一种模式之后设置页里选不到」，
+        // 而那是没有任何报错的静默失效。
+        const auto *mode = OptionsRepository::definition(LqCompare::Log::rotationModeKey());
+        QVERIFY(mode);
+        QCOMPARE(mode->choices, LqCompare::Log::rotationModeChoices());
+    }
+
+    void rotationValuesRoundTripThroughTheRepository()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        OptionsRepository repository({directory.filePath("settings"), false});
+
+        const auto applied = repository.apply({
+                {LqCompare::Log::rotationModeKey(), QStringLiteral("size")},
+                {LqCompare::Log::rotationMaximumMegabytesKey(), 12},
+                {LqCompare::Log::rotationKeepFilesKey(), 3},
+                {LqCompare::Log::performanceTimingKey(), true}});
+        QVERIFY2(applied.ok, qPrintable(applied.error));
+
+        // 策略对象读的就是仓库里的这几个键：往返之后必须逐字段一致。
+        const LqCompare::Log::RotationPolicy policy =
+                LqCompare::Log::RotationPolicy::fromValues(repository.values());
+        QCOMPARE(QString::fromLatin1(LqCompare::Log::rotationModeIdentifier(policy.mode)),
+                 QStringLiteral("size"));
+        QCOMPARE(policy.maximumMegabytes(), 12LL);
+        QCOMPARE(policy.keepFiles, 3);
+        QCOMPARE(policy.validate(), QString());
+        QVERIFY(repository.value(LqCompare::Log::performanceTimingKey()).toBool());
+    }
+
+    void rotationSettingsRejectOutOfRangeValues()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        OptionsRepository repository({directory.filePath("settings"), false});
+        const QVariantMap before = repository.values();
+
+        QVERIFY(!OptionsRepository::validate(LqCompare::Log::rotationModeKey(),
+                                            QStringLiteral("hourly")).isEmpty());
+        QVERIFY(!OptionsRepository::validate(
+                        LqCompare::Log::rotationMaximumMegabytesKey(),
+                        int(LqCompare::Log::minimumRotationMaximumMegabytes()) - 1).isEmpty());
+        QVERIFY(!OptionsRepository::validate(
+                        LqCompare::Log::rotationKeepFilesKey(),
+                        LqCompare::Log::maximumRotationKeepFiles() + 1).isEmpty());
+        // 类型也要守住：把布尔塞进数值项是界面最容易犯的错。
+        QVERIFY(!OptionsRepository::validate(
+                        LqCompare::Log::rotationKeepFilesKey(), true).isEmpty());
+
+        const auto rejected = repository.apply(
+                {{LqCompare::Log::rotationModeKey(), QStringLiteral("hourly")}});
+        QVERIFY(!rejected.ok);
+        QCOMPARE(repository.values(), before);
+    }
 };
 
 QTEST_GUILESS_MAIN(OptionsTests)

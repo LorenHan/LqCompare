@@ -38,6 +38,15 @@ public:
     bool importSettings(const QString &path);
     bool exportSettings(const QString &path, bool appearanceOnly = false,
                         bool includeMachineSpecific = false);
+    // 「清空日志」与「导出诊断包」两个按钮的实际动作。
+    //
+    // 做成公开方法而不是只在按钮的 lambda 里：测试要能走**同一条**路径，
+    // 否则覆盖的只是「按钮存在」而不是「按下去会做什么」。按钮那条路径另外
+    // 多两件界面上的事（文件选择框、脱敏确认框），那两件事不该在测试里发生——
+    // offscreen 平台上模态对话框等不到输入，会把用例挂住而不是变红。
+    bool clearLog();
+    bool exportDiagnostics(const QString &outputDirectory, bool redactPaths,
+                           QString *bundleDirectory = nullptr);
 
 public slots:
     void accept() override;
