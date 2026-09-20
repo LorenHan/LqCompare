@@ -132,6 +132,8 @@ private slots:
     void builtInDefinitionsAreValid();
     void jsonRoundTripPreservesOpaqueSettings();
     void damagedEntriesAreSkipped();
+    void duplicateIdsAreRejectedWithADiagnostic();
+    void idFormatRulesRejectUnstableIdentifiers();
     void invalidDocumentsAreRejected();
     void inheritanceByBaseIdAndSameId();
     void mergePriorityDoesNotMutateBuiltIns();
@@ -684,6 +686,46 @@ void FormatTests::damagedEntriesAreSkipped()
     QVERIFY(result.documentValid);
     QCOMPARE(ids(result.definitions), QStringList({"first", "last"}));
     QVERIFY(!result.diagnostics.isEmpty());
+}
+
+// 完成标准 4「定义有唯一稳定的 ID」的前半：同一份文件里出现重复 ID 时，
+// 只保留**第一次**出现的那个，后续的逐个跳过并给出诊断。
+// 静默接受两个同 ID 的定义，会让「按 ID 找定义」得到依赖条目书写顺序的结果——
+// 而覆盖与继承都是按 ID 找的，于是同一份定义文件在不同机器上解析出不同的规则表。
+void FormatTests::duplicateIdsAreRejectedWithADiagnostic()
+{
+    auto first = definition(QStringLiteral("dup"), QStringLiteral("text"), {QStringLiteral("*.first")});
+    auto second = definition(QStringLiteral("dup"), QStringLiteral("text"), {QStringLiteral("*.second")});
+    second.name = QStringLiteral("另一个重名格式");
+    const auto result = parseDefinitions(documentWithEntries({entryJson(first), entryJson(second)}));
+    QVERIFY2(result.documentValid, qPrintable(result.diagnostics.join('\n')));
+    QCOMPARE(ids(result.definitions), QStringList({QStringLiteral("dup")}));
+    // 断言活下来的是**第一个**：先到先得，而不是「后者覆盖前者」。
+    QCOMPARE(result.definitions.first().masks, first.masks);
+    QCOMPARE(result.diagnostics.size(), 1);
+    QVERIFY2(result.diagnostics.first().contains(QStringLiteral("重复")),
+             qPrintable(result.diagnostics.first()));
+}
+
+// 完成标准 4 的后半：ID 必须是稳定的小写短横线标识。允许大写、空格或空串，
+// 会让同一份定义在不同导出轮次上拿到不同的 ID，于是关联在跨机器传播时断掉，
+// 而用户只看到「覆盖没生效」，看不出断在哪一步。
+void FormatTests::idFormatRulesRejectUnstableIdentifiers()
+{
+    const QStringList invalid = {QStringLiteral("Upper"), QStringLiteral("has space"), QString(),
+                                 QStringLiteral("-leading"), QStringLiteral("dot.name")};
+    QJsonArray entries;
+    for (const QString &id : invalid) {
+        QJsonObject entry = entryJson(definition(QStringLiteral("placeholder"), QStringLiteral("text")));
+        entry[QStringLiteral("id")] = id;
+        entries.append(entry);
+    }
+    const auto result = parseDefinitions(documentWithEntries(entries));
+    QVERIFY(result.documentValid);
+    QVERIFY(result.definitions.isEmpty());
+    QCOMPARE(result.diagnostics.size(), invalid.size());
+    for (const QString &diagnostic : result.diagnostics)
+        QVERIFY2(diagnostic.contains(QStringLiteral("格式 ID 无效")), qPrintable(diagnostic));
 }
 
 void FormatTests::invalidDocumentsAreRejected()
