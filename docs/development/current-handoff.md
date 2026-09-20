@@ -15,7 +15,9 @@
 系统图标是按**类型**缓存 + 后台解析 + 去重的，在本机能真的拿到 Finder 那一套图标；
 Shell 集成的注册表计划、安装回滚、卸载还原与残留检查全部在**内存注册表**上真实执行，
 因此这台 macOS 上跑的是完整流程，而不只是编译过；分级日志（ENG-006）现在
-级别过滤对宏与直接调用一视同仁、输出行带线程 id、并支持挂任意接收者与 RAII 计时。
+级别过滤对宏与直接调用一视同仁、输出行带线程 id、并支持挂任意接收者与 RAII 计时；
+掩码语法与过滤声明（FILT-001）也落地了——21 条语法速查条目连同它们的样本
+都是**可执行**的，因而「帮助里写的行为」和「程序的行为」不可能分家。
 界面上仍是 169 个按钮里 31 条带处理器，其余点击后提示对应 ACTION-ID。
 
 ## 1.1 已落地的服务层模块
@@ -24,6 +26,7 @@ Shell 集成的注册表计划、安装回滚、卸载还原与残留检查全�
 | --- | --- | --- | --- |
 | `Services/Command/` | UI-024 | 骨架 | `Tests/CommandRegistry`（14 用例） |
 | `Services/Log/` | ENG-006 | **部分完成**（界面输出面板尚未接线） | `Tests/Logging`（32 个用例函数） |
+| `Services/Filter/` | FILT-001 | **部分完成**（界面上的速查与实时预览尚未接线） | `Tests/Filter`（87 个用例函数） |
 | `Services/Files/`（文件系统） | PLAT-002 | **部分完成**（Windows 实现未编译验证） | `Tests/FileSystem`（50 用例） |
 | `Services/Files/`（回收站） | PLAT-003 | **部分完成**（Windows 实现未编译验证） | `Tests/Trash`（35 用例） |
 | `Services/Files/`（名称与 Unicode） | PLAT-007 | **部分完成**（长路径只写在 Windows 侧，未编译验证） | `Tests/PathName`（40 用例 + 1 个仅 Linux 执行） |
@@ -38,7 +41,8 @@ PLAT-007 见 [issue #328](https://github.com/LorenHan/LqCompare/issues/328)；
 PLAT-008 见 [issue #330](https://github.com/LorenHan/LqCompare/issues/330)；
 PLAT-004 见 [issue #329](https://github.com/LorenHan/LqCompare/issues/329)；
 PLAT-005 见 [issue #326](https://github.com/LorenHan/LqCompare/issues/326)；
-ENG-006 见 [issue #338](https://github.com/LorenHan/LqCompare/issues/338)。
+ENG-006 见 [issue #338](https://github.com/LorenHan/LqCompare/issues/338)；
+FILT-001 见 [issue #228](https://github.com/LorenHan/LqCompare/issues/228)。
 
 ### 1.2 回收站（PLAT-003）落地到了什么程度
 
@@ -156,30 +160,60 @@ ENG-006 见 [issue #338](https://github.com/LorenHan/LqCompare/issues/338)。
 再以 `Qt::QueuedConnection` 连到面板的槽。这一步与 PLAT-004 / PLAT-005 的
 界面接入是同一批活（都需要 OPT 设置页），一起做更省事。
 
+### 1.7 FILT-001 落地到了什么程度
+
+规格的五条完成标准对应到代码：
+
+| 完成标准 | 落在哪里 | 在本机验证过 |
+| --- | --- | --- |
+| 支持 `*`（任意字符）、`?`（单字符）、`[...]`（字符集）、`**`（跨目录）等语义 | `Mask::compile()` / `Mask::matches()`；`*` 不跨 `/`、`?` 恰好一个字符、字符集含 `[!...]` / `[^...]` 取反与 `[a-z]` 区间、`**` **独占一段**时跨目录 | **是**——87 个用例函数里，A/B/C 三组共 33 个用例专测语义边界：`*` 吃零个字符、区间上下界含、`[a-]` 与 `[-a]` 里的 `-` 退化、`]` 写在最前面是字面量、`a?b` 不命中 `a/b`、`build/**` 也命中 `build` 本身、`a**b` 不跨目录 |
+| 支持排除掩码（前导 `-`）与包含掩码同时声明，排除优先 | `MaskFilter::parse()` 逐行解析；`MaskFilter::decide()` 先扫排除再扫包含 | **是**——`excludeWinsOverInclude` 断言 `*.cpp` + `-*_test.cpp` 下 `main_test.cpp` 不被接受；另有「只写排除 → 其余全保留」「只写包含 → 白名单」「空声明 → 全保留」三条 |
+| 掩码匹配在 Windows 上默认大小写不敏感、Unix 上默认大小写敏感，且可显式覆盖 | `defaultCaseSensitivity(MaskPlatform)`（**平台是显式参数**）+ `MaskPlatform` 枚举 + `setCaseSensitivity()` / `clearCaseSensitivityOverride()` | **是**——**两种平台的默认值都在本机被断言**（Windows 那条不靠 `#ifdef` 分支绕过去）；另有「显式覆盖生效」「清掉覆盖回到平台默认」「`[a-z]` 与 `[A-Z]` 在不敏感下双向成立」「不敏感不会让 `[A-_]` 的区间反转」 |
+| 提供掩码语法速查与实时预览（输入掩码后显示「匹配 N 项 / 共 M 项」） | 速查：`maskSyntaxReference()` 给出 21 行、每行都带可执行样本，另有 `maskSyntaxReferenceText()` 生成纯文本表；预览：`preview()` / `previewNames()` / `MaskFilterPreview::summary()` | **速查是**（测试会遍历这 21 行、把 53 条样本**真的跑一遍**，并断言纯文本速查里含每一个掩码与样本）；**计数是**（`summaryUsesTheWordingFromTheSpec` 断言文案逐字等于「匹配 2 项 / 共 3 项」）；**界面上的速查面板与实时预览不是**，见下 |
+| 解析器为纯函数并有完整单元测试（含恶意与畸形输入） | `Mask::compile()` 无全局状态、不碰文件系统；`Tests/Filter` 的 I 组专测恶意输入 | **是**——`compileIsPureAndRepeatable` 断言同一输入两次得到同一结果（含失败位置）；I 组 6 条覆盖 `**/**/…` 对上 40 段路径的 2^N 回溯、`*a*a*…` 的段内指数退化、400 段路径、5000 字符掩码、500 成员字符集 |
+
+**顺带定下来的两条对外约定**（都不是规格要求的，但不定下来会各自乱长）：
+
+1. **掩码里的分隔符恒为 `/`，`\` 是转义字符**，与平台无关。于是
+   `build\out` 会得到一条带建议的错误（「`\` 只能用来转义 `* ? [ ] - # \`，
+   如果这是 Windows 路径分隔符请改写成 `/`」），而不是静默变成 `buildout`。
+2. **不含 `/` 的掩码按名字匹配**（`*.txt` 在任意目录下都命中），
+   **含 `/` 的按相对路径从起点匹配**（`src/*.txt` 不命中 `x/src/a.txt`）。
+
+**还没有做的**：界面上的速查面板与实时预览尚未接线。`preview()` 与
+`maskSyntaxReferenceText()` 目前只有测试在用——「输入掩码后显示匹配 N / 共 M」
+需要一个 Filters 页或会话设置页来承载，而那要等 SESS/OPT 的工作流；
+与 PLAT-004 / PLAT-005 / ENG-006 的界面接入是同一批活。另外
+FILT-002（正则与超时保护）、FILT-003（属性过滤）、FILT-005（三层叠加）
+等都还没开始，它们都会**复用**这一份掩码实现。
+
 ## 2. 已验证的事实（不用再花时间确认）
 
 | 项目 | 结论 | 验证方式 |
 | --- | --- | --- |
 | 构建 | Qt 5.15.2 clang_64 上 qmake + make 通过，产出 `dist/macos/LqCompare.app` | `qmake && make -j8` |
 | 运行 | 主程序离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
-| 测试（全量） | **358 passed / 0 failed / 1 skipped**（Batch 36 + CommandRegistry 14 + FileSystem 50 + Logging 34 + PathName 40 + PlatformIcon 48 + ShellIntegration 101 + Trash 35） | `Code/Tests/run-tests.sh` |
+| 测试（全量） | **447 passed / 0 failed / 1 skipped**（Batch 36 + CommandRegistry 14 + FileSystem 50 + **Filter 89** + Logging 34 + PathName 40 + PlatformIcon 48 + ShellIntegration 101 + Trash 35） | `Code/Tests/run-tests.sh` |
 | 文件系统抽象层 | 47 个纯逻辑用例 + 3 个真实文件系统用例全通过；其中 20 个覆盖 **Windows** 路径规则（盘符 / UNC / 长路径前缀 / 大小写），在 macOS 上真实执行 | `Code/Tests/run-tests.sh FileSystem` |
 | 回收站 | 35 个用例全通过。其中 9 个验证 XDG（Linux）的路径与 `.trashinfo` 规则、2 个是**真实**的废纸篓往返与冲突拒绝、多个断言「不可用时搬移函数一次都没被调用」 | `Code/Tests/run-tests.sh Trash` |
 | 名称与 Unicode | 40 个用例通过 + 1 个跳过（无效 UTF-8 名字的用例只在 Linux 上执行，CI 会跑）。覆盖字节保真往返、UTF-8 边界与过长编码、Unicode 组合形式、六类文件名问题的原因与位置 | `Code/Tests/run-tests.sh PathName` |
 | 错误携带与批量处置 | 36 个用例全通过。其中 9 个验证错误码在三种域下的携带与显示（含「未识别的码只给数字」）、11 个验证失败清单分组、12 个验证执行流程（含「重试只跑失败项」与「停止不移除已完成进度」）、4 个走真实文件系统做一次「设为只读 → 解除只读」往返 | `Code/Tests/run-tests.sh Batch` |
 | 系统图标 | 46 个用例函数（QTest 合计 48，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分四组：17 个验证缓存键与尺寸规则（扩展名折叠 7 + 键的合成与解析 5 + DPI 缩放 4 + Windows 档位收拢 1）、9 个验证有界 LRU 的淘汰与命中统计、6 个验证请求去重队列、11 个验证服务层（同步/异步/去重/回退/换比例清缓存）；另有 **3 个走真实系统图标源**（macOS 上真实执行：断言拿到非空像素、断言文字文件与文件夹的图确实不同） | `Code/Tests/run-tests.sh PlatformIcon` |
-| 主程序构建 | 通过，`iconservice_mac.mm` 编进主程序，**0 warning**（原先 7 条 `-Wunguarded-availability-new` 已用 `API_AVAILABLE` 消掉，不是压掉） | `qmake && make -j8` |
+| 主程序构建 | 通过，`iconservice_mac.mm` 与 `mask.cpp` / `maskfilter.cpp` 都编进主程序，**本仓库自己的代码 0 warning**（原先 7 条 `-Wunguarded-availability-new` 已用 `API_AVAILABLE` 消掉，不是压掉）。注意 `make clean` 之后重编第三方 LqRibbon 会多出 1 条 `LqRibbon.cpp: unused function 'nativeWindowScaleFactor'`——它属于 MyClass 那个仓库，不在本仓改动范围内 | `qmake && make -j8`（增量构建看到的是 0 条） |
 | 主程序运行 | 离屏启动正常，日志 `Ribbon 构建完成：10 页 / 45 组 / 169 个按钮`，注册表自检 0 问题 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
 | Shell 集成 | 99 个用例函数（QTest 合计 101，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分十一组：A 动作与目标 14、B 选项 8、C 命令行引号 8、D 计划 13、E 安装 10、F 卸载与还原 9、G 校验 5、H 残留 6、I 能力 4、J 预演 3、K 命令行解析 9。**全部跑在功能完整的内存注册表上**，因此安装回滚与卸载还原是在本机真实执行的流程，不是桩 | `Code/Tests/run-tests.sh ShellIntegration` |
 | Shell 集成的命令行引号 | 用测试内置的 `CommandLineToArgvW` 参考实现做往返：`"C:\Program Files\…\LqCompare.exe" --shell-action=compare "%1"` 切回来必须还是两个原值，含「结尾反斜杠要翻倍」这条最容易写错的规则 | `Code/Tests/run-tests.sh ShellIntegration` |
 | 分级日志 | 32 个用例函数（QTest 合计 34，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分五组：A 级别与过滤 6、B 格式 4、C 输出目标 11、D 耗时辅助 6、E 级别名解析 4、以及 `initTestCase`/`cleanupTestCase`。这套件**刻意不链接 QtGui**：哪天有人往 `logging.cpp` 里加图形依赖，本工程会立刻构建失败 | `Code/Tests/run-tests.sh Logging` |
+| 掩码语法与过滤声明 | 87 个用例函数（QTest 合计 89，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分九组：A 掩码基本语义 13、B 字符集 12、C 跨目录 8、D 大小写策略 9、E 声明解析 17、F 叠加 9、G 预览 6、H 语法速查 7、I 恶意与畸形输入 6。这套件同样**刻意不链接 QtGui**（掩码只处理字符串） | `Code/Tests/run-tests.sh Filter` |
+| 掩码语法速查与实现同源 | 21 条速查条目、53 条样本被逐条**真的跑一遍**（掩码类走 `Mask::compile` + `matches`，声明类走 `MaskFilter::parse` + `accepts`），因此「帮助里写的行为」与「程序的行为」不可能分家。另有断言：纯文本速查表里含每一个掩码与样本（它确实是生成物）、条目无重复、全表同时出现「匹配」与「不匹配」两种样本 | `Code/Tests/run-tests.sh Filter` |
+| 掩码的恶意输入有界 | `**/**/…`（24 个）对上 40 段路径、`*a*a*…`（12 个）对上 200 个 `a`、400 段路径、5000 字符掩码、500 成员字符集——全部在毫秒内出结果。这几条盯的是**指数级退化**（朴素递归分别是 2^40 与 2^200 量级），不是性能基线 | `Code/Tests/run-tests.sh Filter` |
 | 日志级别真的生效 | 不带参数启动**不产生任何日志输出**（默认 `warning`，启动横幅是 `info`）；`--log-level info` 打印带线程 id 的完整启动序列；`--log-level debgu`（拼错）打印「无法识别的日志级别「debgu」，改用 warning」 | `QT_QPA_PLATFORM=offscreen ./LqCompare [--log-level …]` |
 | 分层检查 | 通过（Services 未反向依赖界面） | `python3 tools/check_layering.py` |
 | 图标检查 | 通过（27 个图标，声明/引用/文件三者一致） | `python3 tools/check_icons.py` |
 | 规格自检 | 通过（369 条，P0 59 条，PRD 与数据同步） | `python3 tools/check_spec.py` |
 | Shell 可移植性 | 通过（1 个脚本，无 bash 4 内建与 GNU 工具扩展） | `python3 tools/check_shell.py` |
 | Windows 宽字符 API | 通过（63 个源文件、清单内 43 个 API；自测 17 个样本） | `python3 tools/check_winapi.py [--self-test]` |
-| 测试套件 | `358 passed / 0 failed`，且「无套件匹配」被视为失败（exit 2） | `Code/Tests/run-tests.sh` |
+| 测试套件 | `447 passed / 0 failed`，且「无套件匹配」被视为失败（exit 2） | `Code/Tests/run-tests.sh` |
 | 命令注册表自检 | 启动时 0 问题（说明不缺图标、不缺说明、无快捷键冲突） | 启动日志 |
 
 **已知未验证**：Windows MinGW 32 位构建未在本机验证（无该环境）；
@@ -202,6 +236,8 @@ Code/
 ├── Services/
 │   ├── Command/                  commandregistry（命令注册中心）
 │   ├── Log/                      logging（分级日志 / 级别过滤 / 三目标 / 耗时辅助）
+│   ├── Filter/                   mask（掩码语法 / 匹配 / 语法速查表）、
+│   │                             maskfilter（包含排除叠加 / 大小写策略 / 预览计数）
 │   ├── Files/                    filesystem（抽象层 + 错误携带）、pathutils（路径与名称规则）、
 │   │                             pathname（字节保真 / Unicode / 显示）、
 │   │                             trash（回收站服务 + XDG 规则）、
@@ -212,13 +248,14 @@ Code/
 │   │                             registrystore（注册表抽象 + 内存实现 + 故障注入）、
 │   │                             shellintegration（计划 / 安装回滚 / 卸载还原 / 校验 / 残留）、
 │   │                             iconservice_mac.mm/_win/_linux、registrystore_win.cpp/_stub.cpp
-│   ├── command.pri / log.pri / files.pri / platform.pri / services.pri
+│   ├── command.pri / log.pri / filter.pri / files.pri / platform.pri / services.pri
 ├── Pictures/                     27 个 SVG 图标 + Pictures.qrc
 ├── Tests/
 │   ├── Support/                  fakefilesystem（内存文件系统）、faketrashservice
 │   │                             （内存回收站），多套件共用
 │   ├── CommandRegistry/          tst_commandregistry + .pro（14 用例）
 │   ├── FileSystem/               tst_filesystem + .pro（50 用例）
+│   ├── Filter/                   tst_filter + .pro（87 用例函数，刻意不链接 QtGui）
 │   ├── Logging/                  tst_logging + .pro（32 用例函数，刻意不链接 QtGui）
 │   ├── PathName/                 tst_pathname + .pro（40 用例 + 1 个仅 Linux）
 │   ├── Trash/                    tst_trash + .pro（35 用例）
@@ -322,9 +359,15 @@ git push --force-with-lease=main:<远端当前提交> \
 
 | 对话 | 工作流 | 从哪条 issue 开始 | 交付什么 |
 | --- | --- | --- | --- |
+| **B 会话框架** | 新开（**优先——它是钥匙**） | `SESS-001`（会话抽象基类）→ `SESS-002`（类型注册表）→ `SESS-006`（设置框架） | `Services/Session/`、`Views/Session/`，含测试 |
+| **H 过滤与格式** | 继续（同模块的自然延续） | `FILT-005`（过滤器的层级与作用域）——`FILT-001` 已落地，它直接复用 | 仍在 `Services/Filter/` 内，纯逻辑 |
 | **A 平台底座** | 继续 | `PLAT-006`（单实例与进程间通信）——但只能做第 1、2、4 条，见 §4.1 | 仍在 `Services/Platform/` 内；`platform.pri` 已接好 QtGui 与注册表相关的 `LIBS` |
-| **H 过滤与格式** | 新开（**当前无阻塞，优先**） | `FILT-001`（掩码解析器，纯算法、最容易写出完整测试） | `Services/Filter/`、`Services/Format/` |
-| **B 会话框架** | 新开 | `SESS-001`（会话基类）→ `SESS-002`（类型注册表）→ `SESS-006`（设置框架） | `Services/Session/`、`Views/Session/`，含测试 |
+
+**为什么把 SESS-001 排在前面**：它是本仓库的**钥匙**——`PLAT-006` 第 3 条、
+`CLI-001` 起的执行部分、以及所有需要「真正打开一个会话」的界面条目都等着它。
+一直被推迟是因为它看起来「只是界面」，但它同时解锁了三四条现在完全做不了的东西。
+代价是它落在 `Views/` 里（`createWidget` 返回 `QWidget`），测试要链接 QtWidgets
+并在 offscreen 下跑——那是这个仓库还没做过的事，所以第一轮要留出余量。
 
 三个工作流的目录互不重叠，`services.pri` 的 include 已一次加齐（`exists()` 保护），
 因此三方都不需要改共享文件。详见 [parallel-workstreams.md](parallel-workstreams.md) §1。
@@ -338,14 +381,27 @@ git push --force-with-lease=main:<远端当前提交> \
 
 | 条目 | 被谁阻塞 | 现在能做多少 |
 | --- | --- | --- |
+| `SESS-001` 会话抽象基类 | **无**（它是阻塞别人的那一方） | **可完整落地**。唯一要留意的是它的契约里有 `sessionSettings`——第一轮把设置定义成**接口**即可，具体实现留给 `SESS-006` |
 | `PLAT-006` 第 3 条（收到参数后首个实例**创建会话**并把窗口置前） | `SESS-001`（会话基类）未落地 | 「把已有窗口激活到前台」可做；「创建会话」做不了 |
 | `PLAT-006` 第 5 条（单实例行为可由选项关闭） | `OPT-002`（设置框架）未落地 | 可以做成显式接口 + 命令行开关；「选项界面里能关」做不了 |
 | `PLAT-006` 第 1、2、4 条 | 无 | **可完整落地并测试**（跨平台单实例、参数转发与退出码、超时降级），因此这一条值得开，只勾这三条 |
 | `PLAT-004` 第 1 条、`PLAT-005` 第 1 条 | 需要在真的 Windows 上编译 + 在资源管理器里看 | 只能等有 Windows 机器 |
-| `PLAT-004` / `PLAT-005` / `ENG-006` 的界面接入 | `OPT-001` / `OPT-002`（设置页）未落地 | 服务层已就绪，界面接口留好即可（`ENG-006` 已把接收者机制做好） |
+| `PLAT-004` / `PLAT-005` / `ENG-006` / `FILT-001` 的界面接入 | `OPT-001` / `OPT-002`（设置页）未落地 | 服务层已就绪，界面接口留好即可（`ENG-006` 的接收者机制、`FILT-001` 的 `maskSyntaxReferenceText()` 与 `preview()` 都已备好） |
 | 任何在 `Views/` 里新增真正会话界面的条目 | `SESS-001`（会话基类） | 只能先做服务层 |
-| `FILT-001` 掩码解析器 | **无**（纯算法，输入输出都是字符串） | 可完整落地并测试 —— 这是当前性价比最高的一条 |
+| ~~`FILT-001` 掩码解析器~~ | **已落地**（提交见 §3.1，issue #228） | 已完成，其余 FILT 条目都复用它 |
+| `FILT-005` 过滤器的层级与作用域 | 第 4 条（「视图临时过滤不写入会话」）要等 `SESS-001`；第 3 条里的**面板**要等设置页 | 前两条与第 5 条可做：三层叠加、每层可开关、合并后的表达式与匹配计数（做成数据 + 文本，面板留给界面批次） |
+| `FILT-002` 名称过滤器（正则与超时保护） | **不是被别的模块阻塞，而是被 Qt 版本卡住**——见下面的专门说明 | 第 1、3、4 条可做（三种模式、组合语义、实时校验）；**第 2 条（200ms 超时）在 Qt 5.15 上需要绕道** |
+| `FILT-003` 属性过滤 | 第 5 条（「扫描阶段早期生效」的性能断言）要等 `Folder/` 的扫描器 | 第 1~4 条可做：大小/时间/属性位的纯判定 |
 | `CLI-001` 起的命令行条目 | `SESS-001`（解析出来的东西要能变成会话） | 解析部分可做（`ShellIntegration::parseShellInvocation()` 已是例子），执行部分做不了 |
+
+**`FILT-002` 第 2 条的专门说明（省得下一轮白做半截）**：那条要求
+「正则匹配有超时保护（默认 200ms/条），超时记录为错误条目并继续」。但
+**Qt 5.15 的 `QRegularExpression` 没有匹配超时**——`setMatchTimeout()` /
+`matchTimeout()` 是 Qt 6.0 才加进来的（已在本机 Qt 5.15.2 的头文件里核对过：
+`qregularexpression.h` 里没有这两个成员）。所以在 Qt 5.15 上要满足这一条只有两条路：
+一是把匹配放到工作线程上等一个截止时间（超时就放弃那一条并记错，线程本身无法真正
+被杀掉，得让它自然结束），二是直接调 PCRE2 的 match limit。两条都不是小活。
+**不要把这一条当成「顺手加个参数」**；开 FILT-002 时先决定走哪条路，再动手。
 
 判断方法很简单：**看完成标准里有没有动词指向一个还不存在的模块**。
 「创建会话」「在设置界面里」「显示在差异视图里」都指向别的工作流的产物；
@@ -510,7 +566,7 @@ git push --force-with-lease=main:<远端当前提交> \
 | 让缓存层直接吃 `QIcon` | 缓存淘汰顺序、去重、命中统计是最容易写错的部分，而一旦它们依赖 `QIcon`，测试就得有一个能跑图形栈的环境 | `IconEntry::payload` 用不透明的 `QVariant`：生产放 `QIcon`，测试放 `QString`。于是这批逻辑能在只链接 QtCore 的套件里完整覆盖。代价是 `usable()` 只回答「有没有」，所以真实图标源另有三条走真机的用例 |
 | 图标解析与其他后台工作共用线程池 | 一个耗时任务（枚举大目录、读压缩包）会把所有图标请求排到它后面，界面上表现为「整个列表都不出图标」——用户会以为是图标功能坏了，而不是「有个任务在跑」 | `IconService` 用**专属**的单线程 `QThreadPool`；池容量设 1 也顺便免除「提供者实现各自考虑并发」的负担 |
 | 对真实系统图标源做「一定不是回退图标」的断言 | macOS 对未知扩展名（`.zzzznope`）会给**通用文档图标**，来源是 `System` 而不是 `Builtin`——与 Finder 的行为一致，这是正确行为。断言 `hasFallback() == true` 会失败，而看起来像代码有 bug | 按来源分支断言：`System` 时断言 `usable()` 且 `actualPixelSize > 0`；`Builtin` 时才断言 `hasFallback()`。**教训**：对「外部系统会怎么回答」的断言，先确认外部系统的真实行为，不要按自己的直觉写期望值 |
-| `check_spec.py` 的文档计数护栏会误报「N 个条目」这种口语 | 我在架构文档里用「几千文件的目录会占几千格」举例时，最初写成了「N 个条目」的形状（数字紧跟「个条目」），护栏的 `(\d+)\s*个条目` 把它当成规格条目数，直接报错；改完这行**引用它的坑表本身**又踩了第二次 | 该护栏的模式是刻意宽进严出的（宁可误报也不漏报过期数字）。**写文档时避免让数字紧贴「个条目」「条规格」这类词**，表达缓存/列表数量时换成「格」「项」。反过来也不要把这个模式改窄——它正是靠宽匹配才抓到了 5 处过期数字 |
+| `check_spec.py` 的文档计数护栏会误报「N 个条目」这种口语 | 我在架构文档里用「几千文件的目录会占几千格」举例时，最初写成了「N 个条目」的形状（数字紧跟「个条目」），护栏直接报错；改完这行**引用它的坑表本身**又踩了第二次——本轮写 FILT-001 的分组说明时第三次踩到，因为「三组（N 条）」与「（N 条，每条带样本）」都是同样的形状 | 该护栏是刻意宽进严出的（宁可误报也不漏报过期数字）。**它的模式不止「个条目」与「条规格」，写文档前先看一眼 `check_spec.py` 的 `patterns`**：数字紧跟「个条目」、数字紧跟「条规格」、以及两种括号形状（数字 + 条 + 右括号、数字 + 条 + 逗号）；最后还有一条针对表格里的「合计」行。所以数量一律写成「33 个用例」「这 21 行」这种形状，**不要在括号里用「数字 + 条」**。反过来也不要把这些模式改窄：它们正是靠宽匹配才抓到了 5 处真正的过期数字 |
 | `git push --force-with-lease` 在本仓永远报 `stale info` | `origin` 是 https URL，推送走的是 SSH URL，两者是不同远端；git 找不到对应的 remote-tracking 引用，无法核对租约，于是保守拒绝。**报错信息读起来像「远端被别人推过」**，会被误判成协作冲突而不敢继续 | 显式写期望值：`git push --force-with-lease=main:<远端当前提交> git@github.com:LorenHan/LqCompare.git main`，前置一次 `git fetch origin`。更根本的做法是能不强推就不强推——先回填提交号再推 |
 | 32 位进程写注册表却不加 `KEY_WOW64_64KEY` | 交付目标是 32 位 MinGW 构建。默认视图下写入会落到 `WOW6432Node` 影子副本，而 64 位资源管理器**看不见**那里。现象是安装、校验、卸载全都报成功，只有右键菜单「没有变化」——用户唯一能看到的证据就是什么都没发生 | 全部注册表访问固定带 `KEY_WOW64_64KEY`。判定依据不是「我们的程序多宽」，而是「谁要读它」——读它的是 64 位资源管理器 |
 | 用「某个值一直写不进去」的注入测回滚 | `failOnValue()` 把该值的**删除**也一起挡住，于是回滚必然也失败，用例只留下一句「回滚未完全成功」。而「回滚逻辑写错了」与「注册表真的删不掉」从结果上完全分不开，这个用例等于什么都没测 | 另加一次性注入 `failNextWriteOnValue()`，只挡这一次写入、不影响删除。真实世界的写入失败大多是瞬时的（被杀毒软件短暂锁住），这才是想模拟的那一类。断言才能落在 `rollbackClean` 上 |
@@ -531,3 +587,15 @@ git push --force-with-lease=main:<远端当前提交> \
 | 日志文本格式里线程名的可选段 | 线程名只有主线程之外少数情况才有。直接拼 `[t:<id> <name>]` 时，名字为空会在行里留一个孤立空格，按空格切分日志的工具会多切出一段空字段 | 名字为空时整段不输出（`[t:<id>]` 与 `[t:<id> <name>]` 两种形态）。定宽短名（`"INFO "` / `"WARN "` 都占 5 格）则是为了级别列之后的内容能对齐——日志是给人竖着扫的 |
 | 耗时辅助用 `start()` / `stop()` 两个调用 | 中途 `return`、抛异常、或忘了写 `stop()` 的路径都会漏记——而漏记的那条恰恰最可能是「为什么这里有时很慢」的答案 | 改成 RAII：作用域开头构造一个 `Log::Stopwatch`，离开作用域自动记一条。`finish()` 可重复调用（手动结束过就只记一条）；**级别在析构时判断**，这样「先放计时器、再用命令行调级别」也能出结果 |
 | 日志套件链接 QtGui | 别的套件都是 `QT += gui`（`QKeySequence` 属于 QtGui）。日志只用 QtCore，若也跟着加，等哪天有人往 `logging.cpp` 里加图形依赖就没人会发现 | `LoggingTests.pro` 写 `QT -= gui`，让「混进 QtGui 依赖」变成构建失败。这也是 `QTEST_MAIN` 在这里展开成 `QCoreApplication` 的原因（无需 offscreen 平台） |
+| `\` 转义用「不认识的转义就原样保留」这种宽容处理 | Windows 用户把路径分隔符敲进掩码（`build\out`）时，它会被静默解释成 `buildout`——过滤看起来生效了、只是漏了一批文件，而这类偏差在界面上完全无法自查 | 转义白名单是**封闭**的（`* ? [ ] - # \`），其余一律报错，并且提示里明确写「如果这是 Windows 路径分隔符，请改写成 `/`」。宁可报错，也不要给出一个看起来生效的过滤器 |
+| 掩码里的分隔符跟着平台走 | 会让「预设库导出给团队共享」（FILT-007）带上平台色彩：`build/out` 在一台机器上排除子目录、在另一台上排除一个名字里带 `/` 的条目 | 掩码里 `/` 恒为分隔符、`\` 恒为转义，与平台无关。顺带让「`*` / `?` / 字符集都不可能吃掉 `/`」成为结构性事实——段是按 `/` 切出来的，段里根本没有 `/` |
+| 只按 `\n` 切过滤声明的行 | Windows 上编辑过的预设文件是 CRLF，于是每行末尾多一个 `\r`，`*.tmp` 悄悄变成 `*.tmp\r`——**静静地对不上任何文件**，而掩码本身看起来完美无缺 | 切行同时认 `\n`、`\r\n`、`\r`（`\r\n` 算一个换行，否则空行的行号会整体偏大）。注意修复层在**声明解析**而不是掩码解析：行尾是文本文件的属性，不是掩码语言的属性 |
+| 大小写不敏感时把区间端点也折叠 | `[A-_]` 折叠后是 `a`..`_`，而 `a`(U+0061) 比 `_`(U+005F) 大——区间**反了**，这个字符集从此永远匹配不到任何东西，表面上却一切正常 | 不折端点，改成「拿反转大小写的字符再试一遍」。这样 `[a-z]` 命中 `A`、`[A-Z]` 命中 `a` 都自然成立，也不必为区间维护两套边界 |
+| 段级匹配写成递归回溯 | `**` 每一步都有「吃零段」与「吃一段」两个选择，`**/**/**/…` 对上有 N 段的路径时有 2^N 条路径。一个手抖敲出来的掩码就足以让扫描停在那里不动，而现象是「程序卡死」而不是「结果不对」 | 用「可达掩码段」表做 NFA 模拟，复杂度 O(路径段数 × 掩码段数)。`**` 的 ε 闭包只朝后传播，所以一次顺序扫描就到不动点，不需要反复迭代 |
+| `**` 的语义不定就开写 | 不定下来的话，`a**b` 与 `a*b` 的行为没有任何可预期的区别，用户只能靠试；而两种实现都能自圆其说，谁也不会发现自己在改别人的规则 | 明确「`**` 只有**独占一段**时才跨目录，段内等同于 `*`」（gitignore / ant / ripgrep 的共同规则），并把它写进速查表——文档与行为同源，改一头另一头会红 |
+| 不含 `/` 的掩码直接拿整条相对路径匹配 | `*.txt` 对不上 `src/a.txt`（因为 `*` 不跨 `/`），而「文件掩码」在所有人心里都是「任意目录下的 .txt」——用户会认为掩码功能坏了 | 由**掩码自己**决定按哪一侧匹配：不含 `/` 按名字匹配，含 `/` 按相对路径从起点匹配。这样 `*.txt` 处处生效、`src/*.txt` 又不会误伤别处的同名子树 |
+| 把「速查表」写成 markdown 表格 | 文档里的示例与实现必然在某次修改后分家，而错误方式是「帮助里说 `[!a]` 是取反、程序其实不认」这种用户完全无法自查的偏差 | 速查表做成**数据**（`maskSyntaxReference()`），每条带可执行样本，测试逐条跑一遍；纯文本速查由数据生成。FILT-011 的「文档与测试语料同源」由此变成一条会红的用例 |
+| 未闭合的 `[` 当成字面量 | 用户把 `[abc` 漏掉一个 `]` 时，掩码会静静变成「匹配字符串 `[abc`」——过滤看起来还在工作，只是永远不命中，界面上完全看不出问题 | 报错并给出列号与建议（补 `]`，或写成 `\[`）。「永远匹配不到任何东西」的掩码要和语法错误一样被拦下来 |
+| Qt 5.15 的 `QRegularExpression` **没有**匹配超时 | FILT-002 第 2 条要求「正则匹配 200ms/条超时保护」，而 `setMatchTimeout()` / `matchTimeout()` 是 **Qt 6.0** 才加的（已在本机 `qregularexpression.h` 里核对）。照直觉把它当成「顺手加个参数」会做到一半才发现做不到 | 开 FILT-002 之前先定路线：走工作线程 + 截止时间（超时就放弃那一条并记错，注意线程无法真正杀掉），或直接调 PCRE2 的 match limit。两条都不是小活 |
+| 声明的槽/构造函数没有实现，失败发生在**链接**期 | `moc_tst_filter.o` 引用了 `TstFilter::hiddenIsTotalMinusIncluded()`，报错是 `Undefined symbols` 且指向 moc 生成的文件，看起来像 moc 出了问题而不是「少写了一个函数」；`Mask::Mask()` 只声明未定义同理 | 头里声明的槽必须在 .cpp 里有实现；构造函数声明了就要定义（或写 `= default`）。看到 `Undefined symbols ... referenced from ... moc_*.o` 时，第一个要查的就是「哪个声明漏了实现」 |
+| 报告「0 warning」时不说范围 | `_build-lqcompare` 是增量构建，看到的是 0 条；一旦 `make clean` 重编，第三方 LqRibbon 会冒出 `LqRibbon.cpp: unused function 'nativeWindowScaleFactor'`。于是「0 warning」这个结论到底指什么就说不清了 | 说「本仓库自己的代码 0 warning」，并注明第三方那一条不属于本仓（它在 MyClass 仓库里）。清过构建目录之后要重新数一遍 |
