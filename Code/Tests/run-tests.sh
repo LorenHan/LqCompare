@@ -9,6 +9,10 @@
 #   Code/Tests/run-tests.sh                 # 全部套件
 #   Code/Tests/run-tests.sh CommandRegistry # 只跑名字匹配的套件
 #   QMAKE=/path/to/qmake Code/Tests/run-tests.sh
+#   MAKE=/path/to/mingw32-make Code/Tests/run-tests.sh
+#   LQCOMPARE_TEST_SKIP="AppIntegration CommandActions" Code/Tests/run-tests.sh
+#       # 排除依赖可选模块（LqRibbon，在私有仓 MyClass 里）的套件。
+#       # 排除项会在开头与末尾汇总里显式打出，不会被当成「全都验证过了」。
 #
 # 兼容性约束：本脚本要同时在 macOS 与 Windows（Git Bash）上跑，因此不得使用
 # bash 4 语法，也不得使用 GNU 工具扩展。具体踩过的坑：
@@ -20,13 +24,26 @@
 #   4. macOS + Rosetta 上未签名的 x86_64 二进制**跑不起来**（进程卡在 `U`
 #      状态、CPU 恒为 0、连 `SIGKILL` 都进不去），因此构建完要补一次
 #      ad-hoc 签名。详见下面构建成功之后那段注释。
-# 下面用可移植写法规避这四点。
+#   5. Windows（Git Bash）上没有 `make`，MinGW 装的是 `mingw32-make`；
+#      而且可执行文件带 `.exe` 后缀，`[[ -x foo ]]` 不会自动补。
+#      这两条都不探测的话，Windows 上表现是「每个套件都构建失败」。
+# 下面用可移植写法规避这五点。
 set -uo pipefail
 
 CODE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "${CODE_ROOT}/.." && pwd)"
 BUILD_ROOT="${LQCOMPARE_TEST_BUILD_ROOT:-${REPO_ROOT}/_test-build}"
 FILTER="${1:-}"
+
+# 可选依赖缺失时要排除的套件：空格分隔的子串，匹配规则与位置参数 FILTER 一致。
+# 用在「这台机器上没有某个可选模块」的场合——目前只有 LqRibbon 一个，它在**私有**
+# 仓 MyClass 里，公开 CI 与没有该仓的贡献者都拿不到。实测 66 个套件里只有
+# `AppIntegration` 与 `CommandActions` 真的依赖它（两个 .pro 里 include 了
+# `ThirdParty/lqribbon.pri`），其余 64 个都不依赖。
+#
+# **刻意不做成静默**：被排除的套件会连同数量打在开头与末尾汇总里。
+# 否则「全部套件通过」会被读成「所有套件都验证过了」——那是 CI 里最危险的一种绿。
+SKIP="${LQCOMPARE_TEST_SKIP:-}"
 
 # 优先用环境变量指定的 qmake；否则在常见位置里找。
 if [[ -z "${QMAKE:-}" ]]; then
@@ -43,6 +60,25 @@ fi
 
 if [[ -z "${QMAKE:-}" || ! -x "${QMAKE}" ]]; then
     echo "找不到 qmake。请设置 QMAKE=/path/to/qmake。" >&2
+    exit 2
+fi
+
+# 「哪个 make」同样要探测，而不是直接写 `make`：Windows（Git Bash）上通常**没有**
+# `make`，MinGW 提供的是 `mingw32-make`。不探测的话，Windows 上每个套件都会停在
+# 「构建失败」，而真正的报错（`make: command not found`）被下面那句 `>/dev/null 2>&1`
+# 吞掉了，于是看起来像「代码编不过」——比真实原因难查得多。
+# `MAKE` 同时是 make 自己的内建变量：从外部传进来的值会被尊重（用于覆盖）。
+if [[ -z "${MAKE:-}" ]]; then
+    for candidate in mingw32-make make gmake; do
+        if command -v "${candidate}" >/dev/null 2>&1; then
+            MAKE="${candidate}"
+            break
+        fi
+    done
+fi
+
+if [[ -z "${MAKE:-}" ]]; then
+    echo "找不到 make/mingw32-make。请设置 MAKE=/path/to/make。" >&2
     exit 2
 fi
 
@@ -65,11 +101,30 @@ total_fail=0
 total_skip=0
 # 用字符串而不是数组记录失败套件：空数组在 `set -u` 下的取值会报未定义变量。
 failed_suites=""
+skipped_suites=""
+skipped_count=0
 ran_suites=0
+
+if [[ -n "${SKIP}" ]]; then
+    echo "按 LQCOMPARE_TEST_SKIP 排除（这些套件本轮**没有验证**）：${SKIP}"
+fi
 
 for project in "${PROJECTS[@]}"; do
     suite="$(basename "$(dirname "${project}")")"
     if [[ -n "${FILTER}" && "${suite}" != *"${FILTER}"* ]]; then
+        continue
+    fi
+    # 这里故意不引号包 ${SKIP}：要的就是按空白拆成多个模式。
+    matched_skip=0
+    for pattern in ${SKIP}; do
+        if [[ "${suite}" == *"${pattern}"* ]]; then
+            matched_skip=1
+            break
+        fi
+    done
+    if [[ "${matched_skip}" -eq 1 ]]; then
+        skipped_suites="${skipped_suites}${suite} "
+        skipped_count=$((skipped_count + 1))
         continue
     fi
     ran_suites=$((ran_suites + 1))
@@ -85,9 +140,9 @@ for project in "${PROJECTS[@]}"; do
         total_fail=$((total_fail + 1))
         continue
     fi
-    if ! (cd "${build_dir}" && make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)" >/dev/null 2>&1); then
+    if ! (cd "${build_dir}" && "${MAKE}" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)" >/dev/null 2>&1); then
         echo "  ✗ 构建失败"
-        echo "    复现：cd ${build_dir} && make"
+        echo "    复现：cd ${build_dir} && ${MAKE}"
         failed_suites="${failed_suites}${suite} "
         total_fail=$((total_fail + 1))
         continue
@@ -95,6 +150,12 @@ for project in "${PROJECTS[@]}"; do
 
     # 套件可执行文件由各 .pro 的 DESTDIR 决定，统一约定为 <build_dir>/bin。
     binary="${build_dir}/bin/$(basename "${project}" .pro)"
+    # Windows 上可执行文件带 `.exe`，而 `[[ -x foo ]]` **不会**自动补后缀。
+    # 不显式处理的话会掉到下面的 `find` 兜底：结果虽然也对，但要绕一圈，
+    # 而且依赖 `find -perm` 在 MSYS 下的行为——那是另一处不可靠的地方。
+    if [[ ! -x "${binary}" && -x "${binary}.exe" ]]; then
+        binary="${binary}.exe"
+    fi
     if [[ ! -x "${binary}" ]]; then
         binary="$(find "${build_dir}" -maxdepth 2 -type f -perm -u+x -name 'tst_*' | head -n 1)"
     fi
@@ -116,7 +177,15 @@ for project in "${PROJECTS[@]}"; do
         codesign -f -s - "${binary}" >/dev/null 2>&1 || true
     fi
 
-    output="$("${binary}" -o -,txt 2>&1)"
+    # 输出同时落盘两份：一份纯文本（给人看，也是 CI 失败时要上传的「日志」），
+    # 一份 JUnit XML（给 CI 消费，见 ENG-003 第 3 条与 ENG-004 第 3 条）。
+    # 顺序（文件在前、`-` 在后）是为了让屏幕上的输出保持原样。
+    #
+    # 格式必须是 `junitxml` 而不是 `xml`：Qt 的 `xml` 是它自己的私有格式
+    # （根节点 `<TestCase>`），任何 CI 的测试报告解析器都不认；`junitxml` 才
+    # 产出 `<testsuite failures=... tests=...>` 这种 JUnit 根节点，失败用例清单
+    # 才能被 CI 当作「失败用例清单」直接消费（ENG-004 第 3 条）。
+    output="$("${binary}" -o "${build_dir}/results.txt,txt" -o "${build_dir}/results.xml,junitxml" -o -,txt 2>&1)"
     status=$?
     summary="$(printf '%s\n' "${output}" | grep -E '^Totals:' | tail -n 1)"
     printf '%s\n' "${output}" | grep -E '^(FAIL!|PASS.*skipped)' | head -n 20
@@ -147,7 +216,11 @@ echo "════════════════════════�
 # 「一个测试都没跑」必须当成失败：套件改名或过滤器拼错时，
 # 只报「全部套件通过」而实际 0 个用例执行，是 CI 里最危险的那种绿。
 if [[ ${ran_suites} -eq 0 ]]; then
-    echo "没有套件匹配过滤器「${FILTER}」——一个测试都没跑。" >&2
+    if [[ -n "${skipped_suites}" ]]; then
+        echo "所有匹配的套件都被 LQCOMPARE_TEST_SKIP 排除了——一个测试都没跑。" >&2
+    else
+        echo "没有套件匹配过滤器「${FILTER}」——一个测试都没跑。" >&2
+    fi
     exit 2
 fi
 echo "合计：${total_pass} passed, ${total_fail} failed, ${total_skip} skipped"
@@ -155,4 +228,10 @@ if [[ -n "${failed_suites}" ]]; then
     echo "失败套件：${failed_suites}"
     exit 1
 fi
-echo "全部套件通过。"
+# 有套件被排除时绝不能只说「全部套件通过」：那会把「64 个套件验证过」
+# 说成「所有套件都验证过」。排除的套件名与数量都打出来，让人一眼看到缺口。
+if [[ -n "${skipped_suites}" ]]; then
+    echo "通过（已排除 ${skipped_count} 个套件、未验证）：${skipped_suites}"
+else
+    echo "全部套件通过。"
+fi

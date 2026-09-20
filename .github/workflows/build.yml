@@ -4,9 +4,21 @@ name: Build and test
 # 这些检查都很便宜，但能挡住「加一行 include 破坏可测性」「手改 PRD 被冲掉」
 # 「脚本用了 macOS 上不存在的写法」这类要过很久才暴露的问题。
 #
-# 注意一个覆盖盲区：构建与测试只在 Ubuntu 上跑，而仓库还声称支持 macOS 与
-# Windows（Git Bash）。因此 macOS/Windows 特有的问题**不会**在这里暴露，
-# 只能靠 check_shell.py 这类静态护栏兜住。新增脚本时请记得这一点。
+# 流水线阶段（ENG-004 第 1 条）：代码风格检查 -> 构建 -> 测试 -> 打包产物。
+#   1. `checks` 作业就是「代码风格检查」：五个静态护栏（分层、图标、规格、shell
+#      可移植性、宽字符 API），串起来十几秒。
+#   2. 其余三个阶段都在 `build-and-test` 里，顺序是「构建主程序」->「运行测试
+#      套件」->「打包主程序」。
+#
+# 平台矩阵（ENG-004 第 2 条）：Ubuntu / macOS / Windows 三条腿。
+#   macOS 用 `macos-15-intel` 而不是 `macos-latest`：本项目 Qt 基线的 5.15.2
+#   只有 macOS x86_64（clang_64）官方包，而 GitHub 托管的 arm64 运行器**没有
+#   预装 Rosetta 2**，x86_64 的 qmake 在上面跑不起来。`macos-13` 已于
+#   2025-12-04 退役，用它会直接失败。Intel 标签可用到 2027-08，届时必须整体
+#   迁到 arm64 并自建 Qt（Qt 5.15.2 没有官方 arm64 macOS 包）。
+#   Windows 用 MinGW 8.1.0 32 位，与交付目标一致（见 Code/LqCompare.pro 头注释）。
+#
+# 依赖与降级（ENG-004 第 5 条）：见「获取 LqRibbon 依赖」那一步的长注释。
 
 on:
   push:
@@ -29,13 +41,14 @@ jobs:
         run: python3 tools/check_icons.py
       - name: 规格数据自检（UI-024 / DOC-005）
         run: python3 tools/check_spec.py
-      # CI 只在 Linux 上跑测试，所以「在 CI 上全绿」不代表脚本能在 macOS 上跑。
-      # 这一步专门拦 bash 4 内建与 GNU 工具扩展这两类「Linux 能跑、macOS 崩」的写法。
+      # CI 要在三个平台跑同一份脚本，所以「在 Linux 上全绿」不代表脚本能在
+      # macOS / Windows（Git Bash）上跑。这一步专门拦 bash 4 内建、GNU 工具
+      # 扩展、以及「Windows 上没有 make / 可执行文件带 .exe」这几类写法。
       - name: Shell 脚本可移植性检查（ENG-003 / PLAT-001）
         run: python3 tools/check_shell.py
-      # Windows 宽字符 API 在 CI 里根本没被编译过（矩阵里只有 Ubuntu），
-      # 而用错 ANSI 版 API 的后果是中文路径乱码——要等用户拿到才暴露。
-      # 所以这里做静态检查。先跑自测：一个从不报错的护栏比没有护栏更糟。
+      # Windows 宽字符 API 只有 Windows 腿才会真正编译到，而用错 ANSI 版 API
+      # 的后果是中文路径乱码——静态护栏先兜一道。先跑自测：一个从不报错的
+      # 护栏比没有护栏更糟。
       - name: Windows 宽字符 API 护栏自测（PLAT-007）
         run: python3 tools/check_winapi.py --self-test
       - name: Windows 宽字符 API 检查（PLAT-007）
@@ -44,30 +57,181 @@ jobs:
   build-and-test:
     name: Build and test (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # 没有超时的话，一个卡住的测试会把作业挂到 6 小时的默认上限，那期间既没有
+    # 结论也占着并发额度。三条腿里 Windows 最慢（MinGW 编译 60+ 个测试工程）。
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
-            qt: "5.15.2"
+            qt_arch: gcc_64
+            qt_tools: ""
+            package_ext: tar.gz
+          - os: macos-15-intel
+            qt_arch: clang_64
+            qt_tools: ""
+            package_ext: zip
+          - os: windows-latest
+            qt_arch: win32_mingw81
+            qt_tools: tools_mingw,qt.tools.win32_mingw810
+            package_ext: zip
     env:
       QT_QPA_PLATFORM: offscreen
+    # Windows 上 `run:` 默认走 pwsh，而下面每一步都是 bash 语法
+    # （`case`、`[ -n ]`、`>> "$GITHUB_OUTPUT"`），所以整作业统一用 bash。
+    # Windows 的 bash 由 Git for Windows 提供，运行器自带。
+    defaults:
+      run:
+        shell: bash
     steps:
       - uses: actions/checkout@v4
-      - name: 安装 Qt
+
+      # ENG-004 第 5 条：优先走缓存，命中时不再从公网取 Qt。
+      # 缓存失效（首次运行、Qt 镜像上的文件变动导致 key 漂移）时会退化成重新
+      # 下载；下载本身失败的话作业停在**这一步**，而不是给出一个假的绿色结果。
+      # 这是刻意的：Qt 装不上时后面所有阶段都没有意义。
+      # Windows 这里额外装 MinGW 8.1.0 工具链（提供 mingw32-make），
+      # 与交付目标同一套工具链。
+      - name: 安装 Qt（缓存命中则不下载）
         uses: jurplel/install-qt-action@v4
         with:
-          version: ${{ matrix.qt }}
+          version: "5.15.2"
+          arch: ${{ matrix.qt_arch }}
+          tools: ${{ matrix.qt_tools }}
           cache: true
-      - name: 获取 LqRibbon 依赖
+
+      # 这一步是整条流水线的**降级开关**，也是这条流水线以前从没跑起来过的原因。
+      #
+      # LqRibbon 在**私有**仓库 MyClass 里。没有凭据时匿名 clone 会以 128 退出
+      # （fatal: could not read Username for 'https://github.com'），
+      # 于是整条流水线在第一步就红掉——**而这一步之后的构建与测试从来没有跑过**，
+      # 那才是这条流水线真正该给出的信息。
+      #
+      # 实测（不是推断）：66 个测试工程里**只有 2 个**真的依赖 LqRibbon——
+      # `Tests/AppIntegration` 与 `Tests/CommandActions` 的 .pro 里 include 了
+      # `ThirdParty/lqribbon.pri`，其余 64 个都不依赖；主程序
+      # （Code/LqCompare.pro -> ThirdParty/lqribbon.pri 与 Views/Page/ribbonlayout）
+      # 才需要它。
+      # 复现这条清单：对每个 .pro 跑一次
+      # `LQCOMPARE_MYCLASS_ROOT=/nonexistent qmake <pro>`，失败的即依赖方。
+      #
+      # 所以这里退化成「拿不到依赖就跑那 64 个套件、跳过主程序构建与打包」，
+      # 而不是让一条不需要凭据也能跑的信息一起丢掉。
+      #
+      # 想让主程序构建也跑起来：在仓库 Secrets 里加 `MYCLASS_TOKEN`
+      # （对 MyClass 有 Contents: read 权限的 PAT），本步骤会自动改用带凭据的 URL。
+      # 凭据走 `env` 而不是直接写进脚本：避免 token 里的特殊字符被 shell 解释，
+      # 也避免它出现在命令回显里。
+      - name: 获取 LqRibbon 依赖（尽力而为，拿不到不阻断测试）
+        id: ribbon
+        env:
+          MYCLASS_TOKEN: ${{ secrets.MYCLASS_TOKEN }}
         run: |
-          # LqRibbon 位于 MyClass 仓库；CI 中以只读方式取入同级目录。
-          git clone --depth 1 https://github.com/LorenHan/MyClass.git ../MyClass
+          url="https://github.com/LorenHan/MyClass.git"
+          if [ -n "${MYCLASS_TOKEN}" ]; then
+            url="https://x-access-token:${MYCLASS_TOKEN}@github.com/LorenHan/MyClass.git"
+          fi
+          if git clone --depth 1 "${url}" ../MyClass 2>/dev/null; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+            echo "LqRibbon 已就绪，主程序构建与打包会照常执行。"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=跳过主程序构建与打包::未取得 LqRibbon（MyClass 为私有仓库，且未配置 MYCLASS_TOKEN）。除 2 个依赖它的套件外，其余 64 个照常运行。"
+          fi
+
       - name: 构建主程序
+        if: steps.ribbon.outputs.available == 'true'
         run: |
           mkdir -p ../build
           cd ../build
           qmake "$GITHUB_WORKSPACE/Code/LqCompare.pro"
-          make -j"$(nproc)"
+          # nproc 是 GNU coreutils 的东西，macOS 上没有；getconf 三个平台都有。
+          make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
+
+      # 这一步必须在没有 LqRibbon 时也跑：64 个套件是自足的（ENG-002），
+      # 而「测试到底跑没跑」才是这条流水线最该回答的问题。
+      # 拿不到依赖时把 2 个真正依赖它的套件排除，但排除必须**被看到**：
+      # run-tests.sh 会把被排除的套件名与数量打在开头与末尾汇总里，
+      # 绝不说「全部套件通过」——否则 64 个会被读成 66 个。
       - name: 运行测试套件
-        run: bash Code/Tests/run-tests.sh
+        env:
+          RIBBON_AVAILABLE: ${{ steps.ribbon.outputs.available }}
+        run: |
+          if [ "${RIBBON_AVAILABLE}" = "true" ]; then
+            bash Code/Tests/run-tests.sh
+          else
+            LQCOMPARE_TEST_SKIP="AppIntegration CommandActions" \
+              bash Code/Tests/run-tests.sh
+          fi
+
+      # ENG-004 第 1 条的最后一段「打包产物」。
+      # 主程序打包需要 LqRibbon，所以和「构建主程序」共用同一个判据；拿不到依赖
+      # 时明确跳过，而不是产出一个没有可执行文件的空包。
+      - name: 打包主程序
+        if: steps.ribbon.outputs.available == 'true'
+        env:
+          PACKAGE_EXT: ${{ matrix.package_ext }}
+        run: |
+          set -e
+          mkdir -p artifacts
+          archive="artifacts/LqCompare-${RUNNER_OS}-${RUNNER_ARCH}.${PACKAGE_EXT}"
+          case "${RUNNER_OS}" in
+            Linux)
+              # 只打可执行文件本身：Qt 共享库不在包里，运行需要目标机自带
+              # Qt 5.15.2（做成自包含包要走 linuxdeployqt，那是联网下载，与第 5 条冲突）。
+              tar -C dist/linux -czf "${archive}" LqCompare
+              ;;
+            macOS)
+              # `-y` 保留 .app 内部的符号链接，否则解包出来的 bundle 结构是坏的。
+              (cd dist/macos && zip -q -y -r "../../${archive}" LqCompare.app)
+              ;;
+            Windows)
+              # windows 运行器自带 7-Zip。
+              # 注意这条分支目前走不到（主程序构建需要 LqRibbon，CI 里拿不到），
+              # 所以它属于**未验证代码**：哪天真配了 MYCLASS_TOKEN，第一次跑
+              # 到这里的输出要盯一眼。
+              7z a -tzip "${archive}" dist/windows/LqCompare.exe
+              ;;
+            *)
+              echo "未处理的平台 ${RUNNER_OS}" >&2
+              exit 1
+              ;;
+          esac
+          ls -la artifacts
+
+      # ENG-004 第 3 条：测试**失败时也要**留下日志，否则「CI 红了」这句话对
+      # 排查毫无帮助。`run-tests.sh` 已经把每个套件的纯文本日志与 JUnit XML
+      # 落到 `_test-build/<套件>/`，这里整体上传（`always()` 保证失败时也执行）。
+      - name: 上传测试日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-logs-${{ matrix.os }}
+          path: |
+            _test-build/**/results.txt
+            _test-build/**/results.xml
+          if-no-files-found: warn
+
+      # ENG-004 第 4 条：可执行文件作为构建产物上传，便于手工验证。
+      # 主程序包（存在时）。
+      - name: 上传主程序产物
+        if: steps.ribbon.outputs.available == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: LqCompare-${{ matrix.os }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 7
+
+      # 测试套件可执行文件（始终）。没有 MYCLASS_TOKEN 时 CI 唯一能编出来的
+      # 可执行文件就是它们，而这正是「手工验证」最需要的东西：下载下来直接重跑
+      # 一遍，不用在本地重现整套 Qt 环境。
+      - name: 上传测试套件可执行文件
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-binaries-${{ matrix.os }}
+          path: _test-build/*/bin/tst_*
+          if-no-files-found: warn
+          retention-days: 7

@@ -229,6 +229,55 @@ Qt 6.0 才有 `setMatchTimeout()`，本仓钉在 5.15，因此超时是自己做
 （「内容过滤条件可保存为文件格式定义的一部分」）此前被写成「要等文件格式定义」，
 现在**宿主已经存在**，它缺的只是**把自己的两个声明键挂上去**这一步，与 `FMT-001` 无关。
 
+### 1.0.6 修好一条从来没跑起来过的流水线：ENG-004（2026-09-21 07:4x）
+
+**这条流水线自建立起就没有产出过任何关于「构建」与「测试」的信息。** `gh run list`
+上最近 6 次运行全是 `failure`，而且都停在同一步：
+
+```
+Build and test (ubuntu-latest)  获取 LqRibbon 依赖  fatal: could not read Username
+  for 'https://github.com': No such device or address
+##[error]Process completed with exit code 128.
+```
+
+`gh run view` 把这件事说得更清楚：
+
+```
+Y Build and test (ubuntu-latest) in 27s
+  Y 安装 Qt
+  X 获取 LqRibbon 依赖
+  - 构建主程序          <- 「-」= 根本没开始
+  - 运行测试套件        <- 「-」= 根本没开始
+Y Repository checks in 13s
+```
+
+也就是说：**五道静态护栏在跑（13 秒全绿），而编译与测试从来没跑过**。根因是
+`LqRibbon` 在**私有**仓 `MyClass` 里，匿名 clone 必然以 128 退出，而这一步被写成了
+硬失败。这一轮做了四件事：
+
+1. **把「拿不到私有依赖」改成降级开关**，而不是整条流水线的死因：拿不到时跳过主程序
+   构建与打包，测试照跑。
+2. **降级范围用实测而不是推断**：66 个测试工程里真正依赖 LqRibbon 的只有
+   `Tests/AppIntegration` 与 `Tests/CommandActions`（其余 64 个不依赖），判据是对每个
+   `.pro` 跑一次 `LQCOMPARE_MYCLASS_ROOT=/nonexistent qmake` 数出来的。**上一轮写在
+   workflow 注释里的「一个都不 include Views/，所以全部套件都不依赖 LqRibbon」是错的**，
+   而且它的依据只是「没 grep 到」。
+3. **补齐 ENG-004 的五条完成标准里能落地的部分**：四个阶段（静态检查 → 构建 → 测试 →
+   打包）、三平台矩阵、失败时上传日志与 JUnit 用例清单、可执行产物上传、Qt 走缓存
+   并有缓存失效/依赖缺失两种降级说明。
+4. **修掉 `run-tests.sh` 上四类「写的时候以为能跨平台」的问题**：输出格式用了 Qt 私有的
+   `xml` 而不是 CI 能消费的 `junitxml`；Windows（Git Bash）上没有 `make`（MinGW 装的是
+   `mingw32-make`）；Windows 上可执行文件带 `.exe` 而 `[[ -x foo ]]` 不会补后缀；
+   可选依赖缺失时缺一个「显式排除且必须被看见」的机制。
+
+**本轮验证数据**：全量 **3598 / 0 / 2（66 套件，2 分 59 秒）**（用的就是改过的 `run-tests.sh`）；
+五道护栏全绿（winapi 源文件 332，本轮没变）；主程序增量构建 0 条本仓 warning、离屏启动正常；
+**8 处变异 8 处检出、0 处漏检**。本轮**不碰任何 C++ 代码**，所以上面的功能数字与上一轮一致
+是预期的，不是「没测」。
+
+**本轮诚实记账**：三条腿能不能真的跑绿，要等推上去之后 CI 自己回答，见 §1.20 与 §4.0.2。
+代码提交与推送见 §3.1。
+
 ## 1.1 已落地的服务层模块
 
 | 模块 | 条目 | 状态 | 测试 |
@@ -965,12 +1014,79 @@ inode，后续写入落在一个「谁也不认识的文件」上：磁盘不涨
 `Code/Tests/<模块>/`，再看 `docs/development/team-*.md`——夜间那批工作流有 24 路，
 本文档对它们的覆盖面并不完整。
 
+### 1.20 ENG-004 持续集成流水线：修到了什么程度
+
+**这条路以前一次都没通过，而且不是「红在测试上」，是红在测试之前。** 见 §1.0.6 的日志。
+本轮的改动分三块。
+
+**一、流水线阶段（完成标准 1、3、4、5）**
+
+| 阶段 | 落地 | 拿不到 LqRibbon 时 |
+| --- | --- | --- |
+| 代码风格检查 | `checks` 作业：五道静态护栏（分层 / 图标 / 规格 / shell 可移植性 / 宽字符 API，含自测） | 照常跑（不依赖任何私有物） |
+| 构建 | `构建主程序` 步骤：`qmake Code/LqCompare.pro` + `make -j$(getconf _NPROCESSORS_ONLN)` | **跳过**（用 `::notice` 显式说一声，不是静默） |
+| 测试 | `运行测试套件`：`bash Code/Tests/run-tests.sh` | 照常跑，但排除 2 个依赖 LqRibbon 的套件 |
+| 打包产物 | `打包主程序`：Linux 出 `LqCompare-linux-x64.tar.gz`、macOS 出 `LqCompare-macos-x64.zip`（`zip -y` 保符号链接）、Windows 出 zip | **跳过**（宁可跳过，也不产一个没有可执行文件的空包） |
+
+上传的构建产物有两类，都是 `always()`/显式条件：**测试日志**（每个套件的纯文本 + JUnit XML）、
+**可执行文件**（主程序包；以及 66 个测试套件二进制——没有 token 时 CI 唯一能编出来的可执行文件
+就是它们，而这正是「下载下来手工重跑一遍」最需要的东西）。
+
+**二、平台矩阵（完成标准 2）**：`ubuntu-latest` / `macos-15-intel` / `windows-latest` 三条腿，
+`fail-fast: false`（一条腿红不能吃掉另一条腿的信息）。
+
+- **macOS 必须用 `macos-15-intel`，不能用 `macos-latest`**：本项目 Qt 基线 5.15.2 只有
+  macOS x86_64（clang_64）官方包，而 GitHub 托管的 arm64 运行器**没有预装 Rosetta 2**，
+  x86_64 的 qmake 在上面跑不起来。`macos-13`（原来的 Intel 标签）已于 **2025-12-04 退役**，
+  用了会直接失败。`macos-15-intel` 可用到 2027-08，**之后再没有 x86_64 托管运行器**，
+  届时要整体迁 arm64 + 自建 Qt。
+- **Windows 用 MinGW 8.1.0 32 位**（`arch: win32_mingw81` + `tools: tools_mingw,qt.tools.win32_mingw810`），
+  与 `Code/LqCompare.pro` 头注释里的交付目标同一套工具链。
+- **`defaults.run.shell: bash`**：Windows 上 `run:` 默认是 pwsh，而每一步都是 bash 语法
+  （`case` / `[ -n ]` / `>> "$GITHUB_OUTPUT"`），不显式声明的话三条腿只会剩两条。
+- 作业级 `timeout-minutes: 120`：不给超时的话一个卡住的测试会占着额度挂到 6 小时上限。
+
+**三、`run-tests.sh` 的四类可移植性修复（都是「写的时候以为跨平台」）**
+
+1. **输出格式**：`-o results.xml,xml` 改成 `junitxml`。Qt 的 `xml` 是它自己的私有格式
+   （根节点 `<TestCase>`），任何 CI 的测试报告解析器都不认；`junitxml` 才产出
+   `<testsuite failures=... tests=...>`，失败用例清单才能被 CI 直接消费。
+2. **`make` 探测**：Windows（Git Bash）上没有 `make`，MinGW 装的是 `mingw32-make`。
+   按 `mingw32-make` → `make` → `gmake` 顺序探测，找不到就报「找不到 make/mingw32-make」
+   并以 2 退出。**不这么做的话现场是**每个套件都「构建失败」，而真实报错
+   （`make: command not found`）被 `>/dev/null 2>&1` 吞掉，看起来像代码编不过。
+   `MAKE` 同时是 make 的内建变量，显式传入的值仍被尊重（用于覆盖）。
+3. **`.exe` 后缀**：Windows 上可执行文件带 `.exe`，而 `[[ -x foo ]]` **不会**自动补后缀。
+   显式试一次 `${binary}.exe`，不让它一路掉到 `find -perm -u+x` 兜底。
+4. **可选依赖缺失时的显式排除**：新增 `LQCOMPARE_TEST_SKIP`（空格分隔的子串，匹配规则与
+   位置参数一致）。它**刻意不做成静默**——开头打一行排除清单，末尾把「全部套件通过」换成
+   「通过（已排除 N 个套件、未验证）：…」，全部被排除时仍以退出码 2 报「一个测试都没跑」。
+   理由是「排除掉」与「静默跳过」在日志上只差一句话，却会把「64 个已验证」读成「全部都验证过」。
+
+**反向验证：8 处变异 8 处检出、0 处漏检**（4 处打在 make 探测/`.exe`/MAKE 覆盖上，
+4 处打在排除机制上：忽略环境变量、命中不置位、边界判断失效、汇总掩盖排除）。驱动只在 `/tmp`，
+就地变异 + `finally` 无条件还原 + sha256 校验源文件。
+
+**明确还没做到的（不能勾）**：
+
+- 三条腿的**真实结果**要等 CI 跑完才知道。本机是 macOS，无法本地预演 Ubuntu/Windows 腿；
+  也没有 `MYCLASS_TOKEN`，所以「构建主程序 / 打包产物 / 上传主程序产物」三个步骤
+  **在公开 CI 上永远走不到**，它们的正确性目前只在 macOS 本地被间接验证过
+  （`dist/macos/LqCompare.app` 是本地构建出来的，打包命令按同一套路径写）。
+- **Windows 腿的打包分支是未验证代码**：`7z a -tzip dist/windows/LqCompare.exe` 从没被执行过
+  （需要 token 才走得到）。
+- ENG-003 还差的两项（**单套件超时**、**并行执行套件**）本轮没做，它们不属于 ENG-004。
+
+**平台限制**：本轮所有本地验证都在 macOS 上完成。Windows 侧的一切结论都必须来自 CI 的
+Windows 腿或目标机实测，**不能从 macOS 的绿推出来**。
+
 ## 2. 已验证的事实（不用再花时间确认）
 | 项目 | 结论 | 验证方式 |
 | --- | --- | --- |
 | 构建 | Qt 5.15.2 clang_64 上 qmake + make 通过，产出 `dist/macos/LqCompare.app` | `qmake && make -j8` |
 | 运行 | 主程序离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
-| 测试（全量） | **3598 passed / 0 failed / 2 skipped，66 个套件**（2026-09-21 07:3x 实测）。此前一轮是 3596；本轮为 FMT-001 补了两条用例（`Tests/Format` 80 → **82**）。再往前一轮为 OPT-010 新增 `Tests/LogDiagnostics`（89 个用例函数）并把 `Tests/Logging` 从 34 加到 43、`Tests/Options` 从 46 加到 50、`Tests/OptionsDialog` 从 17 加到 23。2 条跳过分别来自 `PathName` 与 `Registry`，都是按平台条件跳过的用例 | `Code/Tests/run-tests.sh` |
+| 测试（全量） | **3598 passed / 0 failed / 2 skipped，66 个套件**（2026-09-21 07:5x 实测，用了本轮改过的 `run-tests.sh`；全套 2 分 59 秒）。本轮没有增删用例，数字与上一轮一致是预期的。此前一轮是 3596；上上轮为 FMT-001 补了两条用例（`Tests/Format` 80 → **82**）。2 条跳过分别来自 `PathName`（40/0/1）与 `Registry`（61/0/1），都是按平台条件跳过的用例 | `Code/Tests/run-tests.sh` |
+| 主程序构建与启动（本轮改动不碰 C++，复测确认没被带坏） | 增量构建 0 条本仓 warning（`_build-lqcompare/`，产物 `dist/macos/LqCompare.app`）；离屏启动日志「单实例机制已由选项关闭」→「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」→「LqCompare 0.1.0 启动完成」 | `make -j8` + `QT_QPA_PLATFORM=offscreen …/LqCompare --log-level info --new-instance`（跑完记得 `pkill`） |
 | 文件格式定义与识别（FMT-001） | **82** 个用例函数（QTest 合计 82）全通过、0 跳过。这套件**刻意不链接 QtGui**（定义是纯数据、识别只读文件前缀）。覆盖：优先级顺序（覆盖 → 掩码 → 内容签名 → 未知兜底）、跨侧优先级与掩码冲突诊断、registry 工厂与平台可用性要求、未知兜底与拒绝打开、Unicode BOM / 截断 / 非法字节、真实文件前缀采样与 I/O 错误、18 类内置格式的具体 ID、JSON 继承与未知 `settings` 往返、坏条目跳过与坏文档拒绝、合并不变性与原子保存、以及**本轮新增的重复 ID 与 ID 格式两条**。交付记录见 `docs/development/team-format.md` | `Code/Tests/run-tests.sh Format` |
 | FMT-001 能反向验证 | **5 处变异 5 处检出、0 处漏检**。全部打在 `formatdefinition.cpp` 上：① 去掉 `ids.contains(id)` 的重复检查 → `duplicateIdsAreRejectedWithADiagnostic` 红；② 删掉 `ids.insert(id)`（不再记录已见 ID）→ 同一条红；③ 把 ID 正则放宽成允许大写/空格/点 → `idFormatRulesRejectUnstableIdentifiers` 红；④ 把 `if (!errors.isEmpty())` 改成恒假（有错也不跳过）→ 4 条红；⑤ 把版本校验从 `!= 1` 放宽成 `!= 0` → 7 条红。基线先确认 82/0/0，驱动在改之前与还原之后都删掉 `formatdefinition.o`（`shutil.copy2` 会连旧 mtime 一起还原，见 §6） | 变异测试（结论写在 issue #240 的落地说明里） |
 | 滚动与诊断（OPT-010） | 89 个用例函数（QTest 合计 91，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分九组：A 滚动策略与自检 12、B 纯函数滚动判定 14、C 真实文件的滚动与清空 13、D 历史枚举 8、E 脱敏 14、F 环境报告与文件名 8、G 导出前告知 6、H 诊断包 14、I 源码级护栏 4。这套件**刻意不链接 QtGui**：滚动与诊断都是纯文件工作，哪天有人往里面拽图形依赖，本工程立刻构建失败。C 组真的在 `QTemporaryDir` 里建日志文件、写到超限、断言 `.1` 出现且旧内容在里面 | `Code/Tests/run-tests.sh LogDiagnostics` |
@@ -1021,6 +1137,10 @@ inode，后续写入落在一个「谁也不认识的文件」上：磁盘不涨
 | Shell 可移植性 | 通过（16 个脚本，无 bash 4 内建与 GNU 工具扩展；含 `_test-build/` 与 `.codex-work/` 下各套件构建目录里的 `target_wrapper.sh`） | `python3 tools/check_shell.py` |
 | Windows 宽字符 API | 通过（**332** 个源文件、清单内 43 个 API；自测 17 个样本）。本轮从 326 涨到 332，正是 OPT-010 新增的两个模块（`logfiles` / `diagnostics` 的 `.h` 与 `.cpp`） | `python3 tools/check_winapi.py [--self-test]` |
 | 测试套件（无匹配视为失败） | 「无套件匹配」被视为失败（exit 2）——套件改名或过滤器拼错时不会报「全部通过」而实际 0 个用例执行。全量的实际数字见上面那一行 | `Code/Tests/run-tests.sh <不存在的套件名>` |
+| 测试套件被显式排除时也要报出来 | 有套件被 `LQCOMPARE_TEST_SKIP` 排除时，末尾汇总**不再**说「全部套件通过」，而是「通过（已排除 N 个套件、未验证）：…」；开头另有一行排除清单；全部被排除时仍以退出码 2 报「一个测试都没跑」。**4 处变异 4 处检出**（忽略环境变量、命中不置位、边界判断失效、汇总掩盖排除） | `LQCOMPARE_TEST_SKIP=Version Code/Tests/run-tests.sh Version`（期望 exit 2） |
+| 测试运行器的跨平台写法 | 输出格式是 `junitxml`（Qt 的 `xml` 是私有格式，CI 的解析器不认）；`make` 按 `mingw32-make` → `make` → `gmake` 探测；找不到时报错退出 2（而不是让每个套件「构建失败」并把真实原因吞掉）；Windows 上补试 `${binary}.exe`。**4 处变异 4 处检出**。驱动就地变异 + `finally` 还原 + sha256 校验 | `Code/Tests/run-tests.sh` 与 /tmp 下的两个变异驱动 |
+| CI 的降级范围（哪些套件真的依赖私有仓） | 66 个测试工程里**只有 2 个**依赖 LqRibbon：`Tests/AppIntegration`（include 了 `Views/views.pri` → `Page/ribbonlayout`）与 `Tests/CommandActions`；其余 **64 个**不依赖。这是**实测**出来的，不是 grep 推断 | 对每个 `.pro` 跑 `LQCOMPARE_MYCLASS_ROOT=/nonexistent qmake <pro>`，失败的即依赖方（66 个里失败 2 个） |
+| GitHub 托管 macOS 运行器的选型 | 只能用 `macos-15-intel`。Qt 5.15.2 只有 macOS x86_64（clang_64）官方包，而 arm64 运行器**没有预装 Rosetta 2**（x86_64 的 qmake 跑不起来）；`macos-13`（原 Intel 标签）已于 **2025-12-04 退役**，用了直接失败。该 Intel 标签可用到 2027-08，之后托管运行器不再有 x86_64 | GitHub 官方公告（2025-09-19）与 runner-images 的 EOL 表；本轮已写进 workflow 注释 |
 | 命令注册表自检 | 启动时 0 问题（说明不缺图标、不缺说明、无快捷键冲突） | 启动日志 |
 | 会话设置目录自检 | ⚠️ **不在启动时打印**（理由见本表「主程序运行」那一行的指令变更）。`SessionSettingsCatalog::describe()` 现在**只有测试调用点**，生产路径上没有；目录当前是**空的**（框架刻意不含具体设置项），`describe()` 会输出「会话设置目录：0 份声明，共 0 个设置项」。它查的是每一份会话设置声明是否字段齐备、键是否唯一；各会话类型登记声明时它会立刻开始替它们把关——**只要有人把调用点接上** | `Code/Tests/run-tests.sh Settings` |
 | 过滤层级表自检 | ⚠️ **不在启动时打印**：`validateFilterLayerTable()` 现在是个**孤儿函数**——全仓除测试外没有调用方，`architecture.md` §5 记下了「暂不加回 `main.cpp`」这个决定。它查三件事：三层是否齐、顺序是否是规格顺序、以及**视图层的落点是否仍然是「仅当前视图」**（这一条错了没有任何运行期现象）。它的判定**把表当参数**，所以 `Tests/FilterStack` 的 G 组能拿一份**故意写坏**的表证明它真会报 | `Code/Tests/run-tests.sh FilterStack` |
@@ -1218,7 +1338,10 @@ Code/
 │   │   PatchApply / PatchRegression / Registry(V) / Report / Script / SessionArea /
 │   │   SessionDocument / Snapshot / Special* / Sync* / Table* / Text(V) / Vcs(Blam)eView /
 │   │   Version* 等，属别的工作流，本表不逐个展开）
-│   └── run-tests.sh              统一测试运行器
+│   └── run-tests.sh              统一测试运行器（跨 macOS / Linux / Windows Git Bash：
+│                                 `mingw32-make` 探测、`.exe` 后缀、`-o results.txt,txt`
+│                                 `-o results.xml,junitxml` 双路输出、`LQCOMPARE_TEST_SKIP`
+│                                 显式排除可选依赖缺失的套件并**把排除报出来**）
 └── ThirdParty/                   myclasspath.pri（定位 LqRibbon）、lqribbon.pri
 
 tools/
@@ -1239,6 +1362,11 @@ docs/
 ├── development/                  交接、并行划分、GitHub 流程
 ├── github/                       issue 索引与发布记录（均为生成物）
 └── research/                     两份竞品测绘 + 开源实现参考 + 裁决规则
+
+.github/workflows/build.yml       CI：checks（五道静态护栏）+ build-and-test
+                                  （Ubuntu / macos-15-intel / Windows-MinGW 三条腿）。
+                                  拿不到私有仓 LqRibbon 时**降级**：跳过主程序构建与打包、
+                                  照跑 64 个套件、显式排除那 2 个依赖它的（见 §1.20）
 ```
 
 ## 3.1 基线提交与远端状态
@@ -1278,6 +1406,7 @@ docs/
 | `bdede29` | 文件操作的默认行为与「默认值必须保守」的可执行契约（`fileopsoptions.{h,cpp}` 纯数据策略对象 + 8 个 `fileops.*` 设置键 + 选项页的 `fileops` 分类与随草稿刷新的安全提示 + `Tests/FileOpsOptions` 92 个用例函数；另把规格的边界条款写成语义可执行的 `safetyContractViolations()`，25 处变异 25 处检出） | OPT-005 |
 | `d084060` | 日志滚动、清空与诊断包导出（新增 `logfiles.{h,cpp}` 与 `diagnostics.{h,cpp}` 两个纯 QtCore 模块 + 滚动检查放进写路径 + 4 个 `logging.*` 设置键 + 日志页的清空与导出按钮 + `Tests/LogDiagnostics` 89 个用例函数；另修掉一个真实的隐私缺陷——脱敏的右边界原本要求「后面必须是分隔符」，于是 `/Users/loren `（后面是空格）不会被替换，导出的包里带着真实家目录；17 处变异 17 处检出） | OPT-010 |
 | `a1cd3ee` | 文件格式定义模块（FMT-001）的**核对与闭环**：实做由夜间那批工作流落地，本轮逐条核对五条完成标准、补上此前**零覆盖**的「唯一稳定的 ID」两条用例（重复 ID 只保留第一个、非法 ID 逐条拒绝）、5 处变异 5 处检出，并删掉本文档里传染了四处的「文件格式定义模块未落地」。**没有新增生产代码** | FMT-001 |
+| `（待回填）` | **持续集成流水线（ENG-004）的修复**：这条流水线自建立起从没跑过构建与测试——匿名 clone 私有仓 `MyClass` 在第一跳就以 128 退出，它后面的「构建主程序」与「运行测试套件」从来没有开始过。本轮把它改成**降级开关**（拿不到私有依赖就跳过主程序构建与打包、照跑其余 64 个套件并**显式排除**那 2 个真的依赖它的套件），补齐四个阶段、三平台矩阵（Ubuntu / `macos-15-intel` / Windows MinGW 32 位）、失败时上传日志与 JUnit 用例清单、可执行产物上传、Qt 缓存与两种降级说明；`run-tests.sh` 顺带修掉四类跨平台问题（`junitxml` 输出、`mingw32-make` 探测、`.exe` 后缀、显式排除机制），8 处变异 8 处检出 | ENG-004 |
 
 > 上面这张表里，PLAT-005、FILT-001、SESS-001、SESS-002、SESS-006、SESS-007、
 > FILT-005、FILT-003、FILT-002、FILT-004、`ac32665`、`c03dc79`、`bdede29`、`d084060`
@@ -1358,9 +1487,32 @@ QtGui）；`Tests/Logging` 34 → **43**、`Tests/Options` 46 → **50**、
 五道护栏全绿（winapi 源文件数 326 → **332**）；主程序 `make -B -j8` 本仓 0 warning、
 离屏启动正常；**17 处变异 17 处检出、0 漏检**。
 
-### 4.0.1 更早一轮：OPT-005（issue #317）
+### 4.0.1 本轮（2026-09-21 07:4x）：ENG-004 持续集成流水线
 
-**再往上一轮（本轮）闭环了 `OPT-005`（文件操作选项，issue #317）**，它是「界面接通那一批」
+**本轮不是在做功能，是在修一条「看着存在、其实从来没跑过构建与测试」的流水线**，
+细节见 §1.0.6 与 §1.20。三句话版本：
+
+1. **它以前红在第一跳**：匿名 clone 私有仓 `MyClass` 拿 LqRibbon，必然 128 退出，
+   于是后面的「构建主程序」与「运行测试套件」**一次都没开始过**。五道静态护栏倒是
+   一直在跑（13 秒全绿）——所以「CI 全绿」这句话此前只覆盖了静态检查。
+   修法：把「拿不到私有依赖」写成降级开关，跳过主程序构建与打包、照跑其余 64 个套件。
+2. **降级范围要实测**：66 个测试工程里只有 `Tests/AppIntegration` 与 `Tests/CommandActions`
+   真的依赖 LqRibbon。此前 workflow 注释里那句「一个都不 include Views/，所以都不依赖它」
+   是**错的**，依据只是「没 grep 到」——见 §6 的两条新坑。
+3. **排除必须被看见**：新增 `LQCOMPARE_TEST_SKIP`，但被排除的套件会连同数量打在开头与
+   末尾汇总里，末尾不再说「全部套件通过」。**这一条比机制本身重要**：静默跳过与显式排除
+   在日志上只差一句话，却能让「64 个已验证」被读成「全部验证过」。
+
+**下一步（本节的核心用途）**：推上去之后**先看三条腿的真实结果**，再决定要不要动
+`ENG-003` 的那两项（单套件超时、并行执行套件）。看结果的命令是
+`/opt/homebrew/bin/gh run watch` 与 `/opt/homebrew/bin/gh run view <id> --log-failed`
+（本机 `gh` 不在默认 PATH 上）。若 Windows 腿因为平台原因红掉，**不要**用
+`continue-on-error` 把它盖住——那会把「Windows 交付目标从未被验证」这件事变成一句
+没人看得见的话；正确做法是让它在日志里说清楚原因。
+
+### 4.0.2 更早一轮：OPT-005（issue #317）
+
+**再往上一轮（那一轮）闭环了 `OPT-005`（文件操作选项，issue #317）**，它是「界面接通那一批」
 （下面第 1 条）里的第一张设置页，接手前先读 §1.17：
 
 - 落地方式可以当**后续所有 OPT-* 设置页的范式**：服务层出一个**纯数据策略对象**
@@ -1616,6 +1768,7 @@ Filters 页、面板的控件宿主、属性条件与名称过滤的输入框、
 | ~~`FMT-001` 文件格式定义模型与存储~~ | **已落地**（代码由夜间那批工作流产出，本轮**核对并闭环**，issue #240） | 五条完成标准全部已勾，证据见 §1.19。**它解除了两处被误记的阻塞**：`FILT-004` 第 5 条与 `FILT-005` 的「格式层」（此前都写成「等文件格式定义」）。注意它的**后续条目仍未做**：格式管理器 UI（`FMT-002` / #360）、语法高亮引擎、格式转换执行、归档解压器——**不要把这两件事混为一谈**，本文档之前就是这么错的 |
 | `FILT-006` 过滤结果的可见性与批量操作安全 | 第 4 条可做；其余要扫描器/状态栏 | 第 4 条（构造隐藏条目并断言两个选项下的行为差异）是纯逻辑，可做；「当前可见项」这类数量来源要等 `Folder/` 扫描器，状态栏常显要界面 |
 | `CLI-001` 起的命令行条目 | `SESS-002` 已落地，但**内置类型都没有工厂** | 解析部分可做（`ShellIntegration::parseShellInvocation()` 已是例子）；`--list-session-types` 这类**列出**类型的子命令现在也可做（注册表可枚举）。「执行」（真造出会话）仍要等第一个真正的会话类型 |
+| `ENG-004` 持续集成流水线 | ~~「没有 CI」~~ 本轮已修；剩下的是**验证** | 四个阶段、三平台矩阵、产物上传都已写进 `.github/workflows/build.yml`，`run-tests.sh` 的四类跨平台问题也已修（见 §1.20）。**但三条腿的真实结果必须等 CI 自己回答**——本机是 macOS，无法本地预演 Ubuntu 与 Windows 两条腿。另有一处**结构性限制**：主程序构建、打包、主程序产物上传这三步都要私有仓 LqRibbon，没有 `MYCLASS_TOKEN` 时在公开 CI 上永远走不到，Windows 腿的打包分支（`7z`）因此是**未验证代码**。`ENG-003` 还差的两项（单套件超时、并行执行）不属本条 |
 
 **`FILT-002` 第 2 条当时为什么需要先决策（已被解决，留作记录）**：那条要求
 「正则匹配有超时保护（默认 200ms/条），超时记录为错误条目并继续」。但
@@ -1896,3 +2049,10 @@ Filters 页、面板的控件宿主、属性条件与名称过滤的输入框、
 | 全局状态的测试必须逐个复位，**新加的开关也要算进去** | `Services/Log` 里日志级别 / 日志文件 / 接收者都是进程全局的，本轮又加了滚动策略与性能计时开关。若 `init()` 只复位旧的那几个，用例之间就会互相影响（前一条把计时开关打开、后一条断言关着）——而失败顺序看起来随机的 | 给模块加新的全局状态时，**同一轮里**把它补进该模块所有套件的 `init()` 与 `cleanupTestCase()`。`Tests/Logging` 的 `initTestCase` 现在会逐个断言初值，就是为了让「漏复位」立刻红 |
 | 「某模块未落地」这句话**本身会传染**，而且看起来像是「多处独立佐证」 | 本文档至少四处写「文件格式定义模块未落地」（§1.15、§4.0、§4.1 的两行），而 `docs/development/team-format.md` 一直躺在那儿说它落了、`Code/Services/Format/` 与 `Tests/Format` 也一直在磁盘上。第一处写错，后面几轮**复制**它——于是同一句错话在四个地方出现，读者会以为有四处独立证据 | 看到「X 模块未落地 / 没有宿主 / 要等 X」时，**先动手查三条**：`ls Code/Services/<模块>/`、`ls Code/Tests/<模块>/`、`grep -l <模块> docs/development/team-*.md`。夜间那批工作流有 **24 路**，本文档对它们的覆盖从来不完整；`team-*.md` 才是各路自己写的交付记录。改判之后，**把引用过这句话的每一处一起改掉**，否则它会继续传染 |
 | 把「该模块的**后续**条目没做」读成「该模块没做」 | `team-format.md` 结尾明确列了「未完成且不计为本轮实现」的一串（格式管理器 UI、语法高亮引擎、格式转换执行、归档解压器…）。这些是 `FMT-002` **及其后**条目的范围，与 `FMT-001` 的完成标准毫无重叠。一句话读快了就变成「Format 模块没做」——而这正是上面那条错话的源头 | 判断一个模块落没落，**看完成标准的逐条对应**，不要看「有没有后续条目没做」。issue 编号（`FMT-001` vs `FMT-002`）本来就是范围边界：`FMT-001` 只管**模型与存储**，识别算法的细节归它自己，界面归 `FMT-002` |
+| **编辑正在运行的 bash 脚本** | bash 是**按字节偏移惰性读**脚本文件的，不是一次性全读进内存。脚本跑到一半时改动它（哪怕只是往中间插几行），后续读到的就是错位的内容。本轮实测到的现象有两种：一句乱码的 `����: command not found`（正中文里打了字节），以及 `syntax error near unexpected token \`done'`。两次都出在**看起来完全无关的行号**上，很容易被当成「脚本被写坏了」 | 长任务（全套测试跑十几分钟）跑起来之后**不要再碰那个脚本**；要改就先停掉再改。心爱的备用做法是把待改的行先改好再启动。**判断依据**：`bash -n <脚本>` 在同一个文件上语法通过、而运行时却报括号错，就说明是「边跑边改」，不是语法问题 |
+| BSD grep 不支持 `\|` 交替（与 `\+` 同族） | `grep -rn "LqRibbon\|lqribbon" Code/` 在 macOS 上**静默返回空**——BRE 里 `\|` 不是交替符，整条模式被当成「一个字面量反斜杠」去找。本轮差点据此写下「没有任何代码引用 LqRibbon」这个**错误结论**（真实情况是 `App/RibbonWindow.{h,cpp}`、`Views/Page/ribbonlayout.{h,cpp}` 等六处引用它） | 交替一律用 `grep -E` 或 `grep -e A -e B`；跨平台脚本里更稳的是「不用交替，分两次搜」。这一条与坑表里那条 `sed` 的 `\+` 是同一族（**不报错，只给错答案**），`check_shell.py` 拦的是脚本，**命令行上手工敲的它管不到** |
+| **「没 grep 到」不等于「不存在」**——依赖清单必须实测 | CI 配置里曾断言「`Code/Tests/*/*.pro` 一个都不 include `Views/`，所以全部测试套件都不依赖 LqRibbon」。实测（对每个 `.pro` 跑一次 `LQCOMPARE_MYCLASS_ROOT=/nonexistent qmake`）**66 个里有 2 个依赖**：`Tests/AppIntegration`（include 了 `Views/views.pri`）与 `Tests/CommandActions`。两句错话（「都不 include Views/」+「都不依赖 LqRibbon」）叠在一起，差点让流水线的降级范围写错 | 问「谁依赖 X」时，**能跑就跑，不能跑才去读**：`qmake` 探一遍不会漏（它按的是真实的 include 链），grep 会漏（它只能看见写出来的字面量，看不见 `.pri` 的 `exists()` 条件 include、变量拼接、以及**你自己写错的正则**）。这条比它看起来更重要——同一个错误在这一轮里出现过两次，第一次是 grep 正则写错，第二次是推断代替实测 |
+| GitHub Actions 里 Windows 的 `run:` 默认走 **pwsh** | 每一步都写的是 bash 语法（`case` / `[ -n ]` / `>> "$GITHUB_OUTPUT"` / 多行 `if`），在 Windows 腿上会被 pwsh 解释，报的错与真实原因无关 | 作业级写 `defaults: { run: { shell: bash } }`（Windows 的 bash 由 Git for Windows 提供，运行器自带）。**三平台共用一份脚本时，shell 必须显式声明**，不能靠默认值 |
+| GitHub 托管 macOS 运行器的标签选错 | `macos-13`（原来的 x86_64 标签）已于 **2025-12-04 退役**，用了直接失败；`macos-latest` / `macos-14` / `macos-15` 都是 **arm64**，而 GitHub 托管的 arm64 运行器**没有预装 Rosetta 2**——本项目的 Qt 5.15.2 只有 x86_64（clang_64）官方包，qmake 在上面跑不起来 | 用 **`macos-15-intel`**（官方为「需要 x86_64 的标准运行器用户」新加的标签）跑这个 Qt 基线；它可用到 **2027-08**，之后托管运行器不再有 x86_64，届时必须整体迁 arm64 并自建 Qt（Qt 5.15.2 没有官方 arm64 macOS 包）。**推断「最新的就是最好的」在这件事上会直接翻车** |
+| 把「跳过依赖缺失的套件」做成**静默** | 「排除掉 2 个拿不到依赖的套件」与「静默跳过这 2 个」在日志上只差一句话，却让「64 个套件通过」被读成「全部 66 个都验证过」——而事实是那 2 个**从来没在公开 CI 上编译过**。这是 CI 里最危险的那种绿 | 排除机制（`LQCOMPARE_TEST_SKIP`）生效时：开头打一行排除清单，末尾把「全部套件通过」换成「通过（已排除 N 个套件、未验证）：…」，**全部被排除时仍以退出码 2 报「一个测试都没跑」**。4 处变异 4 处检出，其中一处专门变异「汇总掩盖排除」——**「报告缺口」这件事本身也要被反向验证**，否则它会随下一次重构悄悄消失 |
+| 用 Qt 的 `-o results.xml,xml` 当作 CI 的测试报告 | Qt 的 `xml` 是它**自己的私有格式**（根节点 `<TestCase>`），没有任何 CI 的测试报告解析器认它。看起来「有一个 XML 了」，实际上 CI 拿到它什么也做不了，而失败用例清单（ENG-004 第 3 条要的）也就无从消费 | 用 `-o results.xml,junitxml`：根节点是 `<testsuite failures=… tests=…>`，这才是 JUnit。**「有个同名文件」不等于「格式对」**——生成之后 `head -3` 看一眼根节点，成本两秒 |
