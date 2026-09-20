@@ -99,6 +99,22 @@ Qt 6.0 才有 `setMatchTimeout()`，本仓钉在 5.15，因此超时是自己做
 并且**解析、界面的实时校验、复验共用同一个 `analyzeNameFilterLine()`**——
 有读源码的护栏钉住这条，防止将来有人为了「界面快一点」再写第二份解析。
 界面还没接：名称过滤框与错误就地标红要等设置页 `OPT-*`。
+**内容过滤也定下来了（FILT-004）**，这是本模块里唯一**要读文件内容**的一段：
+一条**行过滤器**（整行 / 通配 / 正则三种模式，同样由行首前缀自己决定；`LineFilterResult`
+把留下的行与被丢掉的行连同行号一起交回，便于界面给「为什么这一行没了」一个答案），
+一条**关键字节过滤器**（`\xHH` 与 `\n \r \t \0` 的词法转义、任一 / 全部两种组合方式、
+结论是**三态**：接受 / 拒绝 / **不适用**——被指定按关键字节过滤而条目其实是文本时，
+正确结论是「这条规则与它无关，放行并报出来」，判成「不含那个序列所以拒绝」会让一批文本
+文件凭空消失）。它的代价与其余几段不同阶，因此**必须显式启用**：
+`ContentFilterEnablement::active()` 是「启用**且**有规则」，与 `FilterLayerState::active()`
+同形——「配过但关掉了」的过滤器必须是不生效的，而界面上「已配置未启用」与「未配置」
+要是两句不同的话。两条轴的**先后顺序**也定死在数据里（先过滤行、再应用忽略规则），
+`LineFilter::excludes()` 只接受**原始行**，因此「先过滤」在类型上就成立——反过来做会让
+参与比较的行集随忽略规则变化。它同样是纯 QtCore 的（`Tests/ContentFilter` 刻意 `QT -= gui`），
+并且**模块内不读任何文件**，这条由一条**成对**的读源码护栏钉住（护栏先去掉注释再判，
+另有「植入一行 `QFile(...).readAll()` 后必须报错」的反向用例）。
+界面还没接：状态栏那句「内容过滤已启用，比较速度会降低」、Filters 页的启用开关，
+以及把行过滤接进比对引擎的那一步（`Services/Text` 侧）都还没有做，见 §1.15。
 
 ### 1.0.1 夜间并行落地的模块（2026-09-20/21）
 
@@ -146,6 +162,7 @@ Qt 6.0 才有 `setMatchTimeout()`，本仓钉在 5.15，因此超时是自己做
 | `Services/Filter/`（三层叠加与落点） | FILT-005 | **部分完成**（第 1、4、5 条的服务层已完整落地并有启动自检；第 2、3 条的服务层部分——启用状态与四态文案、面板数据与全文——也已落地，**缺的只是显示控件**，住所是设置页 OPT-*） | `Tests/FilterStack`（84 个用例函数，**纯 QtCore**） |
 | `Services/Filter/`（属性条件） | FILT-003 | **部分完成**（第 1~4 条已落；第 5 条只落了能独立验证的那一半——「与内容比对解耦」由读源码的护栏钉住，「扫描阶段提前丢弃」要等 `Folder/` 扫描器） | `Tests/AttributeFilter`（89 个用例函数，**纯 QtCore**） |
 | `Services/Filter/`（名称过滤） | FILT-002 | **部分完成**（第 1、2、4、5 条已落；第 3 条只落服务层一半——组合语义与文案都已落地并被测试，「界面明确显示当前语义」要等界面接入） | `Tests/NameFilter`（93 个用例函数，**纯 QtCore**） |
+| `Services/Filter/`（内容过滤） | FILT-004 | **部分完成**（第 1、2 条已落；第 3 条落了一半——顺序定死成「先过滤行、再应用忽略规则」并有测试，但把行过滤接进比对引擎的那一步在 `Services/Text` 里，尚未接；第 4 条要状态栏、第 5 条要文件格式定义） | `Tests/ContentFilter`（85 个用例函数，**纯 QtCore**） |
 | `Services/Files/`（文件系统） | PLAT-002 | **部分完成**（Windows 实现未编译验证） | `Tests/FileSystem`（50 用例） |
 | `Services/Files/`（回收站） | PLAT-003 | **部分完成**（Windows 实现未编译验证） | `Tests/Trash`（35 用例） |
 | `Services/Files/`（名称与 Unicode） | PLAT-007 | **部分完成**（长路径只写在 Windows 侧，未编译验证） | `Tests/PathName`（40 用例 + 1 个仅 Linux 执行） |
@@ -179,7 +196,8 @@ SESS-002 见 [issue #37](https://github.com/LorenHan/LqCompare/issues/37)；
 SESS-007 见 [issue #42](https://github.com/LorenHan/LqCompare/issues/42)；
 FILT-005 见 [issue #233](https://github.com/LorenHan/LqCompare/issues/233)；
 FILT-003 见 [issue #230](https://github.com/LorenHan/LqCompare/issues/230)；
-FILT-002 见 [issue #229](https://github.com/LorenHan/LqCompare/issues/229)。
+FILT-002 见 [issue #229](https://github.com/LorenHan/LqCompare/issues/229)；
+FILT-004 见 [issue #231](https://github.com/LorenHan/LqCompare/issues/231)。
 
 ### 1.2 回收站（PLAT-003）落地到了什么程度
 
@@ -638,12 +656,63 @@ FILT-005（三层叠加与作用域）与 FILT-003（属性过滤）已在后续
   逐字核对过没有这两个成员）。直调 PCRE2 match limit 需要把第三方库带进交付物，
   与「一个 exe 分发」相冲，因此不采纳；相关理由与取舍已同时写进 `architecture.md` §4。
 
+### 1.15 FILT-004 落地到了什么程度
+
+规格的五条完成标准对应到代码（模块在 `Services/Filter/contentfilter.{h,cpp}`，
+是本模块里**唯一读文件内容**的一段）：
+
+| 完成标准 | 落在哪里 | 状态 |
+| --- | --- | --- |
+| 支持「行过滤器」：排除匹配指定模式的行后再比对（如日志时间戳行） | `LineFilter::parseDeclaration()`（一行一条表达式、`#` 注释、`\n`/`\r\n`/`\r` 都认）、三种模式 `LineFilterMode::{Exact,Wildcard,Regex}` 由**行首前缀**决定（`= ` 精确 / 无前缀 通配 / `re:` 正则）、`LineFilter::excludes(rawLine)` 判单行、`matchingPatternIndexes()` 给命中计数、`LineFilterResult` 把留下的行与被丢掉的行（连同行号）一起交回 | **已落**（服务层） |
+| 支持「关键字节过滤」：仅当二进制文件包含指定字节序列时才纳入比较 | `KeyByteFilter::parseDeclaration()`、`KeyByteCombineMode::{AnyOf,AllOf}`、`KeyByteFilter::decide(data, kind)` 返回**三态** `KeyByteOutcome::{Accepted,Rejected,NotApplicable}`；`\xHH` 与 `\n \r \t \0 \\` 的解码/编码（`decodeByteSequenceText()` / `encodeByteSequenceText()`）是往返逐字节一致的纯函数 | **已落**（服务层） |
+| 内容过滤与忽略规则的作用顺序明确（先过滤行再应用忽略规则）且有测试 | 顺序表 `contentFilterStageTable()`（两段：行过滤 → 忽略规则，含标识符与说明）+ `contentFilterStageOrder()` / `contentFilterStageIndex()` / 自检；`LineFilter::excludes()` 的输入**只接受原始行**，因此「先过滤」在类型上就成立。测试用**真的** `Text::compare` 钉住两条路径的差别 | **部分落**：顺序已明确且被测试；把它接进比对引擎（`Services/Text` 侧按此顺序调用）**未做** |
+| 启用内容过滤时状态栏提示「内容过滤已启用，比较速度会降低」 | 文案已落：`contentFilterEnablementNotice()` 对「未启用 / 已启用但没规则 / 已启用且有规则」三种状态各给一句不同的话，`contentFilterPerformanceNotice()` 是那句性能提示 | **部分落**：文案已落，**状态栏未接** |
+| 内容过滤条件可保存为文件格式定义的一部分 | 键名 `lineFilterDeclarationKey()`（`"line-filter"`）、`keyByteFilterDeclarationKey()`（`"key-byte-filter"`）、`contentFilterEnabledKey()`（`"content-filter-enabled"`）已定；`toDeclarationText()` 是各解析器的逆（往返逐字一致，可直接写回设置项） | **部分落**：键名与往返已落，**文件格式定义模块未落地**，没有宿主 |
+
+**还没做的**：
+
+1. **把「先过滤行、再应用忽略规则」接进比对引擎**（第 3 条剩下的那一半）。
+   顺序已经定死在 `contentFilterStageTable()` 里、`LineFilter` 的入参也已经是原始行，
+   缺的是 `Services/Text` 的比对入口在调用忽略规则**之前**先过一遍 `LineFilter`。
+   本轮的取舍是**不去改 `Services/Text`**（那会把 FILT-004 变成一次跨模块改动，
+   而本条目的其余部分还等着同一个位置的另外两处宿主），因此只在服务层把顺序与
+   证据准备好：测试里用真的 `Text::compare` 分别跑「先过滤再忽略空白」与
+   「只忽略空白」，前者差异为零、后者差异仍在。
+2. **状态栏那一行提示**（第 4 条）。住所是主窗口的状态栏（`MainWindow::setupStatusBar()`）
+   与 Filters 页，两者都要等 `OPT-*` 的界面批次；文案已经备好。
+3. **把两个声明键写进文件格式定义**（第 5 条）。`FILT` 系列的「格式层」目前
+   由 `filterstack` 的 `setBuiltinDeclaration()` 承载，而「文件格式定义」是
+   `Format/` 模块（尚未落地）。键名与文本往返都已经定好，接的时候直接放进去即可。
+4. **关键字节过滤在真实文件上的样本**。判定本身已被 85 个用例覆盖（含 NUL 字节、
+   代理对、`\xHH` 与词法转义混写），但「拿一个真的二进制文件（PNG / PDF）跑一遍」
+   要等我们把内容读进来的那一层（同第 1 条的位置）。
+
+**六条刻意的取舍**（改之前先读，前两条写在 `contentfilter.h` 顶部）：
+
+- **内容过滤默认不启用，而且「配了规则」不等于「启用」**。它是本模块里唯一
+  代价与文件大小同阶的一段（要把内容读进来）。`ContentFilterEnablement::active()`
+  是「启用**且**有规则」，与 FILT-005 的 `FilterLayerState::active()` 同形。
+- **行过滤器的输入是原始行**，不是在忽略规则处理之后的行。反过来做会让参与比较的
+  行集随忽略规则变化——同一条「排除时间戳行」的规则在「忽略空白」开着时命中、
+  关掉就不命中，而用户认为这两件事毫不相干。
+- **内容过滤的正则是子串匹配**（grep 语义），而名称过滤器的正则是整名匹配。
+  两侧问的问题不同：名称侧「这个名字符不符合一条命名规则」，
+  内容侧「这一行里有没有那一段」。刻意不一致，理由写在模块头。
+- **行首前缀要跳过行首缩进**，与 `namefilter.h` 刻意不一致。内容过滤的声明常常是
+  从日志里抄下来的一行（带着缩进），不跳缩进会让 `  =  ...` 静默退化成通配模式：
+  它照样解析成功、照样有一条表达式，只是永远不命中。
+- **只有通配模式命中不了空行**（掩码要求名字非空），`re:^$` 是唯一能表达
+  「去掉空行」的写法。曾经有一版在入口处对空行提前返回，把精确与正则也一起挡掉了。
+- **说不清的结论一律放行并报出来**：文本条目遇到关键字节规则给 `NotApplicable`
+  而不是 `Rejected`；一条规则都没写时给 `Accepted` 且不给理由（空规则集不构成约束）。
+  与 FILT-002 / FILT-003 的三态结论同源。
+
 ## 2. 已验证的事实（不用再花时间确认）
 | 项目 | 结论 | 验证方式 |
 | --- | --- | --- |
 | 构建 | Qt 5.15.2 clang_64 上 qmake + make 通过，产出 `dist/macos/LqCompare.app` | `qmake && make -j8` |
 | 运行 | 主程序离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
-| 测试（全量） | **3308 passed / 0 failed / 2 skipped，63 个套件**（2026-09-21 实测，连跑两次结果一致）。此前一轮是 978 passed / 17 套件；夜间的并行开发把套件数推到 60+，随后本轮补完 `PatchApply`（60）并把 `SpecialHexSearch` 从「39 通过 / 1 失败」修成 40 全通过，另有 2 条的净增量来自此处。2 条跳过分别来自 `PathName` 与 `Registry`，都是按平台条件跳过的用例 | `Code/Tests/run-tests.sh` |
+| 测试（全量） | **3393 passed / 0 failed / 2 skipped，64 个套件**（2026-09-21 实测，连跑两次结果一致）。此前一轮是 3308 passed / 63 套件；本轮新增 `Tests/ContentFilter`（85）并把 `tools/check_spec.py` 的文档计数护栏从「全仓 `os.walk`」收紧成「只扫被 git 跟踪的 `.md`」（它此前会扫到 `.workbuddy/` 下的工作日志，造成**本机红、CI 绿**）。2 条跳过分别来自 `PathName` 与 `Registry`，都是按平台条件跳过的用例 | `Code/Tests/run-tests.sh` |
 | 三层过滤叠加与落点 | 84 个用例函数（QTest 合计 84），0 失败 0 跳过。分七组：A 层级与落点 8、B 三层叠加 20、C 启用与生效 14、D 表达式与面板 15、E 视图层不落盘 11、F 计数 6、G 层级表自检 8（含 6 条对**故意写坏**的表跑同一个判定，证明护栏不是恒真的）。这套件**刻意不链接 QtGui**，但**必须**链接 `Services/Session`——第 4 条要拿真正的 `SessionSettings` 存储来断言，测试替身会连「存到哪个存储」一起替掉 | `Code/Tests/run-tests.sh FilterStack` |
 | 三层过滤能反向验证 | 十六处变异逐一被拦下：视图层落点改成随会话保存 → 多条红；`active()` 只看启用标志 → 多条红；去掉层间的排除优先 → 多条红；排除集合用 AND 连接 → 表达式红；原子一律不加引号 → 引号用例红；表达式不去重 → 去重用例红；视图存储缺失时退而写入会话存储 → 「不许退而写入」红；会话层也从视图存储读 → 「按存储分别读」红；`loadInto` 整份替换状态（丢掉启用标志）→ 红；`setLayerState` 不按声明重新解析 → 红；大小写覆盖在重新解析后不再应用 → 红；不统计 `decided` → 面板与计数红；不计入逐层统计 → 红；自检去掉「视图层落点」这一条 → 红；自检不查顺序 → 红；汇总文案改成另一句 → 红。**16 处全部检出，0 处漏检** | 变异测试（结论写在 issue #233 的落地说明里） |
 | 会话设置声明与草稿 | 65 个用例函数（QTest 合计 71，含 `initTestCase` 与六种控件的 6 行数据）。分六组：A 声明与六种控件 17、B 自检 11、C 草稿读写与脏判定 13、D 应用与恢复默认 10、E 询问策略 6、F 声明目录与反向验证 8。这套件**刻意不链接 QtGui**（声明与草稿都是纯数据），因此「任一会话设置 Tab 均可无界面构造与读写」这条标准是靠构建配置 + 用例两边一起钉住的 | `Code/Tests/run-tests.sh Settings` |
@@ -655,8 +724,8 @@ FILT-005（三层叠加与作用域）与 FILT-003（属性过滤）已在后续
 | 名称与 Unicode | 40 个用例通过 + 1 个跳过（无效 UTF-8 名字的用例只在 Linux 上执行，CI 会跑）。覆盖字节保真往返、UTF-8 边界与过长编码、Unicode 组合形式、六类文件名问题的原因与位置 | `Code/Tests/run-tests.sh PathName` |
 | 错误携带与批量处置 | 36 个用例全通过。其中 9 个验证错误码在三种域下的携带与显示（含「未识别的码只给数字」）、11 个验证失败清单分组、12 个验证执行流程（含「重试只跑失败项」与「停止不移除已完成进度」）、4 个走真实文件系统做一次「设为只读 → 解除只读」往返 | `Code/Tests/run-tests.sh Batch` |
 | 系统图标 | 46 个用例函数（QTest 合计 48，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分四组：17 个验证缓存键与尺寸规则（扩展名折叠 7 + 键的合成与解析 5 + DPI 缩放 4 + Windows 档位收拢 1）、9 个验证有界 LRU 的淘汰与命中统计、6 个验证请求去重队列、11 个验证服务层（同步/异步/去重/回退/换比例清缓存）；另有 **3 个走真实系统图标源**（macOS 上真实执行：断言拿到非空像素、断言文字文件与文件夹的图确实不同） | `Code/Tests/run-tests.sh PlatformIcon` |
-| 主程序构建 | 通过，**本仓库自己的代码 0 warning**。链接行里能看到 `patchapply.o`（补丁应用）与 `blameview.o` / `moc_blameview.o`（逐行追溯），`nm -C` 在产出的可执行文件里数到 `LqCompare::Patch::prepareApplication` 19 个、`executeApplication` 27 个、`LqCompare::BlameView` 193 个符号——即新模块**确实进了产物**而不只是躺在磁盘上。全量重建（`make -B`）时唯一的告警是第 3 方 `MyClass/3rd-party/LqRibbon/…/LqRibbon.cpp:569: unused function 'nativeWindowScaleFactor' [-Wunused-function]`，不在本仓改动范围内 | `cd _build-lqcompare && ~/Qt/5.15.2/clang_64/bin/qmake ../Code/LqCompare.pro && make -j8`（**注意是 `Code/LqCompare.pro`**，仓库根没有 `LqCompare.pro`） |
-| 主程序运行 | 离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」「LqCompare 0.1.0 启动完成」，且**一次 `qt.svg: Cannot open file` 都没有**。**⚠️ 指令变更**：夜间对 `main.cpp` 的重写（233 删 / 91 增）**不再调用**之前几轮加的启动自检——`validateSessionTypeTable` / `validateFilterLayerTable` / `validateAttributeConditionTable` / `validateNameFilterTables` 现在**全仓没有任何调用方**，日志里也不会再出现「会话类型注册表：…」「三层过滤：…」「属性过滤：…」「名称过滤：…」那四行。保留下来的只有 `CommandRegistry::instance().validate()`（`main.cpp` 里那一处 `LQCOMPARE_ERROR("command", …)`）。这些表的校验**仍然被单元测试覆盖**（例如 `Tests/FilterStack` G 组有 6 条把**故意写坏**的表喂进同一个判定），因此丢的是「启动时的一声警报」，不是唯一的防线；**要不要把这四行自检加回 `main.cpp` 是一个待定的决定**，加回之前不要在文档里声称启动时会打印它们 | `QT_QPA_PLATFORM=offscreen ./dist/macos/LqCompare.app/Contents/MacOS/LqCompare --log-level info`（**别用 `\| head` 收尾**，管道关闭会把进程直接杀掉、看不到真实退出码） |
+| 主程序构建 | 通过，**本仓库自己的代码 0 warning**。链接行里能看到 `contentfilter.o`（内容过滤）以及此前的 `patchapply.o`（补丁应用）与 `blameview.o` / `moc_blameview.o`（逐行追溯），`nm -C` 在产出的可执行文件里数到 `LqCompare::Filter::LineFilter` 64 个、`LqCompare::Filter::KeyByteFilter` 16 个符号（合计 80，`contentfilter` 单文件重编的输出里 0 warning）——即新模块**确实进了产物**而不只是躺在磁盘上。全量重建（`make -B`）时唯一的告警是第 3 方 `MyClass/3rd-party/LqRibbon/…/LqRibbon.cpp:569: unused function 'nativeWindowScaleFactor' [-Wunused-function]`，不在本仓改动范围内 | `cd _build-lqcompare && ~/Qt/5.15.2/clang_64/bin/qmake ../Code/LqCompare.pro && make -j8`（**注意是 `Code/LqCompare.pro`**，仓库根没有 `LqCompare.pro`） |
+| 主程序运行 | 离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」「LqCompare 0.1.0 启动完成」，且**一次 `qt.svg: Cannot open file` 都没有**。**⚠️ 指令变更**：夜间对 `main.cpp` 的重写（233 删 / 91 增）**不再调用**之前几轮加的启动自检——`validateSessionTypeTable` / `validateFilterLayerTable` / `validateAttributeConditionTable` / `validateNameFilterTables` 现在**全仓没有任何调用方**（本轮新增的 `validateContentFilterTables()` 从一开始就没有调用方，它落在同一个处境里），日志里也不会再出现「会话类型注册表：…」「三层过滤：…」「属性过滤：…」「名称过滤：…」那四行。保留下来的只有 `CommandRegistry::instance().validate()`（`main.cpp` 里那一处 `LQCOMPARE_ERROR("command", …)`）。这些表的校验**仍然被单元测试覆盖**（例如 `Tests/FilterStack` G 组有 6 条把**故意写坏**的表喂进同一个判定），因此丢的是「启动时的一声警报」，不是唯一的防线；**要不要把这四行自检加回 `main.cpp` 是一个待定的决定**，加回之前不要在文档里声称启动时会打印它们 | `QT_QPA_PLATFORM=offscreen ./dist/macos/LqCompare.app/Contents/MacOS/LqCompare --log-level info`（**别用 `\| head` 收尾**，管道关闭会把进程直接杀掉、看不到真实退出码）。另：**上一轮的离屏实例可能还活着**，那时这次启动会走转发路径、立刻以 **10** 退出且**不打任何日志**——要做一次干净的启动确认请加 `--new-instance`（本轮实测的日志是「单实例机制已由选项关闭：不占用标识、不建端点，直接启动」+「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」+「LqCompare 0.1.0 启动完成」），确认完记得把进程杀掉，详见 §6 |
 | Shell 集成 | 99 个用例函数（QTest 合计 101，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分十一组：A 动作与目标 14、B 选项 8、C 命令行引号 8、D 计划 13、E 安装 10、F 卸载与还原 9、G 校验 5、H 残留 6、I 能力 4、J 预演 3、K 命令行解析 9。**全部跑在功能完整的内存注册表上**，因此安装回滚与卸载还原是在本机真实执行的流程，不是桩 | `Code/Tests/run-tests.sh ShellIntegration` |
 | Shell 集成的命令行引号 | 用测试内置的 `CommandLineToArgvW` 参考实现做往返：`"C:\Program Files\…\LqCompare.exe" --shell-action=compare "%1"` 切回来必须还是两个原值，含「结尾反斜杠要翻倍」这条最容易写错的规则 | `Code/Tests/run-tests.sh ShellIntegration` |
 | 分级日志 | 32 个用例函数（QTest 合计 34，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分五组：A 级别与过滤 6、B 格式 4、C 输出目标 11、D 耗时辅助 6、E 级别名解析 4、以及 `initTestCase`/`cleanupTestCase`。这套件**刻意不链接 QtGui**：哪天有人往 `logging.cpp` 里加图形依赖，本工程会立刻构建失败 | `Code/Tests/run-tests.sh Logging` |
@@ -669,6 +738,8 @@ FILT-005（三层叠加与作用域）与 FILT-003（属性过滤）已在后续
 | 名称过滤（FILT-002） | 93 个用例函数（QTest 合计 93）全通过、0 跳过。分**十组**：A 模式与模式前缀 12、B 通配与精确语义 11、C 组合语义（含 / 不含 / 全含）11、D 判定结论与放行 11、E 超时保护与断路器 12、F 静态风险预检 9、G 声明文本与实时校验 10、H 具名预设与导出往返 8、I 表自检 5、J 与界面共用同一套解释 4。这套件**刻意不链接 QtGui**（判定是纯数据），因此「名称过滤不依赖界面」也是靠构建配置钉住的 | `Code/Tests/run-tests.sh NameFilter` |
 | 名称过滤能反向验证 | **二十九处**变异逐一被拦下（含精确名忽略大小写、整名匹配退回 `match()` 的部分匹配、只用 `anchoredPattern()` 覆盖用户自己的锚点、断路器阈值 +1、超时后不清零连续计数、超时后不放行、超时结论不给 `Timeout` 问题、连字符类里的量词也当变量量词报、`(?…)` 分组修饰里的量词也报、`{2}` 定长量词误报、模式前缀按错的优先级解析、组合语义 `NoneOf` 用「任一命中即排除」而不是「全部命中才排除」、预设往返多出末尾空行、记录开始前的空行也进正文、`disabledExpressionCount` 数槽位数而不是真被停用的条数、`nameFilterDeclarationKey()` 改成别的字符串、自检不查模式表顺序、自检不查共用解释、大小写选项在正则上不生效…）。**29 处全部检出，0 处漏检** | 变异测试（结论写在 issue #229 的落地说明里） |
 | 名称过滤的 Qt 5.15 现实 | `QRegularExpression` 在 Qt 5.15 **没有** `setMatchTimeout()` / `matchTimeout()`（逐字核对 `~/Qt/5.15.2/clang_64/lib/QtCore.framework/Versions/5/Headers/qregularexpression.h` 确认；这两个成员是 Qt 6.0 才加的）。因此 200ms 超时**不能**靠 Qt API 实现，只能自己做（工作线程 + 截止时间）；也不引第三方 PCRE2——那与「一个 exe 分发」相冲 | 头文件核对 + 实测 |
+| 内容过滤（FILT-004） | 85 个用例函数（QTest 合计 85）全通过、0 跳过。分**九组**：A 行过滤的模式与前缀 12、B 行过滤的判定与计数 11、C 行过滤的解析与往返 12、D 行过滤的校验与错误 9、E 关键字节的编解码 11、F 关键字节的判定与组合 10、G 两条轴与忽略规则的顺序 7、H 启用状态与提示文案 7、I 表自检与源码级护栏 6。这套件**刻意不链接 QtGui**（输入输出都是行与字节），因此「内容过滤不依赖界面」也是靠构建配置钉住的。它还**必须**额外 include `Services/Text` 的 `.pri`——G 组要拿真的 `Text::CompareOptions` 与 `Text::compare()` 才能证明「忽略空白救不了『多了一行』」 | `Code/Tests/run-tests.sh ContentFilter` |
+| 内容过滤能反向验证 | 源码级护栏成对出现：`moduleNeverReadsFiles` 读 `contentfilter.{h,cpp}`，一旦出现 `QFile` / `readAll` / `QTextStream` / `QDataStream` 即红；`sourceGuardWouldCatchAnInjectedRead` 对一段**故意植入** `QFile(path).readAll()` 的源码跑同一流程，证明判定不是恒真（这条是必需的——见 §6 里「护栏扫到自己的注释」那条）。另有 `touchesInclude` 成对用例钉住「本模块不许 include `Services/Text` 的头」。行为侧的差别由 G 组用真比对引擎给出：同一对输入，什么都不做时有两处差异；先按 `re:^\d{4}-\d{2}-\d{2} ` 把两侧的时间戳行都滤掉、再按 `Whitespace::IgnoreAll` 忽略剩下的空白，结果是**差异为空且 `ignoredBlocks > 0`**——后半句说明那处空白差异真实存在过、只是被忽略规则处理掉了，从而证明「先过滤行」不是「顺手把所有东西都过滤没了」 | 变异/源码护栏 + `Code/Tests/run-tests.sh ContentFilter` |
 | 会话抽象基类 | 46 个用例函数（QTest 合计 48，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分七组：A 生命周期与状态迁移 19、B 视图契约 5、C 三个公共出口 7、D 设置接口 7、E 可扩展性 2、F 源码级护栏 2、G 与类型注册表的衔接 4。**这是本仓库第一个链接 QtWidgets 的测试套件**（基类的 `createWidget()` 返回 `QWidget*`），跑在 offscreen 平台上 | `Code/Tests/run-tests.sh Session` |
 | 会话类型注册表 | 57 个用例函数（QTest 合计 59，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分六组：A 条目字段齐备 13、B ID 稳定性与登记校验 11、C 按掩码查询与注册顺序 14、D 可枚举 7、E 按名字查 5、F 自检与两道源码级护栏 7。这套件**刻意不链接 QtGui**（注册表是纯逻辑）——它是本仓库第一次有「服务层的会话框架测试」 | `Code/Tests/run-tests.sh SessionType` |
 | 会话类型注册表能反向验证 | 六处变异逐一被拦下：对调 `text` 与 `table` 的登记顺序 → 快照、重叠结论与 Home 页一致性三条红；改掉 `homepage.cpp` 里一个类型 ID → Home 页一致性红；给表格类型多加一条与文本重叠的掩码 → `onlyHtmlOverlaps` 红；把一条内置掩码写成大写 → `validate` 两条红；让 `findByFileMask` 不跳过当前平台不可用的类型 → 该条红；`add()` 不再校验 ID 格式 / 不再拒绝重复 ID / 不保存传入的工厂 / `byGroup` 不按可用性过滤 → 各自对应的用例红。全部检出 | 变异测试（结论写在 issue #37 的落地说明里） |
@@ -679,11 +750,11 @@ FILT-005（三层叠加与作用域）与 FILT-003（属性过滤）已在后续
 | 会话设置接口 | 接口与内存实现都在 `Services/Session/session.{h,cpp}`，只依赖 QtCore。用例覆盖「键不存在返回调用方给的回退值」「空键整条拒掉」「写入同一个值不算改动」「`clear()` 用空键承载全变」四条约定 | `Code/Tests/run-tests.sh Session` |
 | 日志级别真的生效 | 不带参数启动**不产生任何日志输出**（默认 `warning`，启动横幅是 `info`）；`--log-level info` 打印带线程 id 的完整启动序列；`--log-level debgu`（拼错）打印「无法识别的日志级别「debgu」，改用 warning」 | `QT_QPA_PLATFORM=offscreen ./LqCompare [--log-level …]` |
 | 分层检查 | 通过（Services 未反向依赖界面） | `python3 tools/check_layering.py` |
-| 图标检查 | 通过（27 个图标，声明/引用/文件三者一致） | `python3 tools/check_icons.py` |
+| 图标检查 | 通过（32 个图标，声明/引用/文件三者一致） | `python3 tools/check_icons.py` |
 | 规格自检 | 通过（369 条，P0 59 条，PRD 与数据同步） | `python3 tools/check_spec.py` |
-| Shell 可移植性 | 通过（1 个脚本，无 bash 4 内建与 GNU 工具扩展） | `python3 tools/check_shell.py` |
-| Windows 宽字符 API | 通过（**103** 个源文件、清单内 43 个 API；自测 17 个样本） | `python3 tools/check_winapi.py [--self-test]` |
-| 测试套件 | `885 passed / 0 failed / 1 skipped`（16 个套件），且「无套件匹配」被视为失败（exit 2） | `Code/Tests/run-tests.sh` |
+| Shell 可移植性 | 通过（16 个脚本，无 bash 4 内建与 GNU 工具扩展；含 `_test-build/` 与 `.codex-work/` 下各套件构建目录里的 `target_wrapper.sh`） | `python3 tools/check_shell.py` |
+| Windows 宽字符 API | 通过（**322** 个源文件、清单内 43 个 API；自测 17 个样本） | `python3 tools/check_winapi.py [--self-test]` |
+| 测试套件（无匹配视为失败） | 「无套件匹配」被视为失败（exit 2）——套件改名或过滤器拼错时不会报「全部通过」而实际 0 个用例执行。全量的实际数字见上面那一行 | `Code/Tests/run-tests.sh <不存在的套件名>` |
 | 命令注册表自检 | 启动时 0 问题（说明不缺图标、不缺说明、无快捷键冲突） | 启动日志 |
 | 会话设置目录自检 | 启动时 0 问题。目录当前是**空的**（框架刻意不含具体设置项），因此这一行眼下只会打印「0 个类型」；它的意义是把唯一的那个生产调用点摆好，各会话类型登记声明时立刻开始替它们把关 | 启动日志 |
 | 过滤层级表自检 | 启动时 0 问题，日志为「三层过滤：3 层，0 项问题；空栈保留条目=是」。查三件事：三层是否齐、顺序是否是规格顺序、以及**视图层的落点是否仍然是「仅当前视图」**（这一条错了没有任何运行期现象）。同时它也是 `FilterStack` 在**生产代码里的唯一调用点**——三层过滤真正接进界面属 OPT-* 与视图批次 | 启动日志 |
@@ -748,7 +819,15 @@ Code/
 │   │                             任一/不含/全含、三态结论与「不确定一律放行」、
 │   │                             200ms 超时保护（工作线程 + 截止时间）与连续超时
 │   │                             断路器、正则灾难性回溯静态预检、具名预设与导出
-│   │                             往返、两张表自检）
+│   │                             往返、两张表自检）、
+│   │                             contentfilter（行过滤器：整行/通配/正则三种模式、
+│   │                             缩进无关的行首前缀、逐行诊断与命中计数、
+│   │                             LineFilterResult 同时交回留下的行与被丢掉的行；
+│   │                             关键字节：`\xHH` 解码/编码、任一/全部两种组合方式、
+│   │                             文本输入判「不适用」、空规则集不构成约束；
+│   │                             两条轴与忽略规则的先后顺序表、启用与性能提示文案；
+│   │                             **输入永远是「已经读进来的行与字节」，自己不碰
+│   │                             文件系统**——有读源码的护栏成对盯着）
 │   ├── Files/                    filesystem（抽象层 + 错误携带）、pathutils（路径与名称规则）、
 │   │                             pathname（字节保真 / Unicode / 显示）、
 │   │                             trash（回收站服务 + XDG 规则）、
@@ -760,7 +839,7 @@ Code/
 │   │                             shellintegration（计划 / 安装回滚 / 卸载还原 / 校验 / 残留）、
 │   │                             iconservice_mac.mm/_win/_linux、registrystore_win.cpp/_stub.cpp
 │   ├── command.pri / log.pri / filter.pri / files.pri / platform.pri / services.pri
-├── Pictures/                     27 个 SVG 图标 + Pictures.qrc
+├── Pictures/                     32 个 SVG 图标 + Pictures.qrc
 ├── Tests/
 │   ├── Support/                  fakefilesystem（内存文件系统）、faketrashservice
 │   │                             （内存回收站），多套件共用
@@ -769,6 +848,10 @@ Code/
 │   │                             源码级护栏，靠 DEFINES 传进来的 LQCOMPARE_CODE_ROOT
 │   │                             直接读 Services/Filter/attributefilter.{h,cpp}）
 │   ├── CommandRegistry/          tst_commandregistry + .pro（14 用例）
+│   ├── ContentFilter/            tst_contentfilter + .pro（85 用例函数，**纯 QtCore**，
+│   │                             刻意不链接 QtGui；九组 A~I，含用真的 Text 比对引擎
+│   │                             验证「先过滤行再应用忽略规则」、以及读源码钉住
+│   │                             「本模块不读文件」两条成对护栏）
 │   ├── FileSystem/               tst_filesystem + .pro（50 用例）
 │   ├── Filter/                   tst_filter + .pro（87 用例函数，刻意不链接 QtGui；
 │   │                             自 FILT-005 起还要 include Session 的 .pri，
@@ -813,6 +896,7 @@ tools/
 ├── check_shell.py                ENG-003 脚本可移植性（bash 4 / GNU 扩展护栏）
 ├── check_winapi.py               PLAT-007 宽字符 API（禁止 ANSI 版与不带后缀的写法）
 └── check_spec.py                 规格自检 + PRD 同步 + 优先级策略 + 文档计数
+                                  （文档计数只扫**被 git 跟踪**的 `.md`，见 §6）
 
 docs/
 ├── PRD-actions.md                规格正文（生成物，勿手改）
@@ -909,6 +993,13 @@ git push --force-with-lease=main:<远端当前提交> \
 
 ### 4.0 2026-09-21 更新：夜间产出的收尾与下一步
 
+本轮（02:2x）在这一节的基础上又推进了一条：**`FILT-004` 内容过滤器的服务层**
+（`Services/Filter/contentfilter.{h,cpp}` + `Tests/ContentFilter` 85 个用例函数）。
+第 1、2 条已落，第 3 条落了一半（顺序定死并有用真比对引擎的证据，接进 `Services/Text`
+的那一步未做），第 4、5 条缺状态栏与文件格式定义。它**没有**解阻塞任何界面类条目——
+剩下的三半都需要别处的宿主，详见 §1.15 与 §4.1。因此下面第 1~5 条的排序不变，
+另外新增了第 6 条（内容过滤剩下的三处接线）。
+
 夜间那 24 个工作流已经把**服务层与视图层的主体骨架铺满了**（`SingleInstance` 104 条、
 `Snapshot` 114 条、`Media` 378 条、`Cli` 108 条、`Script` 112 条……），
 因此 §4 下面那张「从哪条 issue 开始」的表**有相当一部分已经过期**：它建议的
@@ -919,32 +1010,42 @@ git push --force-with-lease=main:<远端当前提交> \
 本轮之后，按性价比排序的下一步是：
 
 1. **把「界面接通」当一批来做**——这是目前最大的、也是唯一成片阻塞的缺口。它一口气
-   卡着五条：`SESS-007` 第 2、3 条（设置目标下拉的去向提示、关标签丢弃提示）、
+   卡着六条：`SESS-007` 第 2、3 条（设置目标下拉的去向提示、关标签丢弃提示）、
    `FILT-005` 第 2、3 条（每层启用开关、「查看最终生效过滤」面板）、
-   `FILT-003` 第 5 条与 `FILT-002` 第 3 条的界面部分、以及 `SESS-006` 的 Rules 按钮
+   `FILT-003` 第 5 条与 `FILT-002` 第 3 条的界面部分、`FILT-004` 第 4 条
+   （状态栏那句「内容过滤已启用，比较速度会降低」）、以及 `SESS-006` 的 Rules 按钮
    接线。**它们的共同住所是设置页 `OPT-*`**，所以先落 `OPT-*` 的设置页与 Filters 页，
    再回头把这些条目的界面部分一次性勾掉，比逐条零敲碎打划算得多。
-2. **决定那四条启动自检的去留**（见 §2「主程序运行」那条的 ⚠️）。要么加回 `main.cpp`，
+2. **决定那几条启动自检的去留**（见 §2「主程序运行」那条的 ⚠️）。要么加回 `main.cpp`，
    要么把顺序与落点的校验职责正式移交给单元测试并在文档里删掉「启动时打印」的说法。
-   悬着不决定，下一个人会照着 §2 的旧描述去找那四行日志。
+   悬着不决定，下一个人会照着 §2 的旧描述去找那几行日志。**注意本轮又添了一个**
+   （`validateContentFilterTables()`，它从一开始就没有调用方）：现在共五个
+   `validate*()` 处于「有实现、有单测、无生产调用点」的状态。
 3. **补 `VCS-012` 缺的两个选项**（「忽略空白改动」「跨重命名追溯」）需要先扩
    `Vcs::Backend::blame()` 的签名——这是跨层改动，不要只改视图层假装做了。
 4. **收紧 `tools/check_icons.py` 的裸名引用盲区**（见 §6 新增的那条）。
 5. 平台的「写了但没在目标平台编译/运行过」清单仍是 Windows 与 Linux 的薄层
    （`filesystem_win.cpp`、`trash_win.cpp`、`iconservice_win.cpp`、`registrystore_win.cpp`、
    `shellintegration` 的 Win32 路径、`iconservice_linux.cpp`），**这些一条都不得勾选完成标准**。
+6. **把内容过滤真正接上（`FILT-004` 剩下的三处）**：一是比对入口在应用忽略规则**之前**
+   先过一遍 `LineFilter`（`Services/Text` 侧，本模块已经把顺序与证据准备好，见 §1.15）；
+   二是 Filters 页启用开关与状态栏提示（等 `OPT-*`）；三是把
+   `line-filter` / `key-byte-filter` / `content-filter-enabled` 三个键写进文件格式定义
+   （等 `Format/` 模块）。三处的落地位置互不相同，**不要**为了「凑一条完整闭环」把它们
+   塞进同一轮。
 
 | 对话 | 工作流 | 从哪条 issue 开始 | 交付什么 |
 | --- | --- | --- | --- |
 | **B 会话框架** | 继续（**`SESS-001`、`SESS-002`、`SESS-006`、`SESS-007` 都已落地；SESS-007 剩下的全是「界面接通」，而界面要等第一个真正的会话类型**） | 先落一个具体会话类型（`TEXT-*` 或 `FOLD-*`），或改做 `SESS-008`（会话文件保存与加载） | 这里有一个**新产生的依赖链**：SESS-007 第 2、3 条被「第一个真正的会话类型」卡住（对话框要有设置目标才谈得上去向提示，标签要有持有设置的会话才谈得上关标签丢弃）。因此不要再往「框架」方向加条目 |
-| **H 过滤与格式** | 继续（同模块的自然延续） | `FILT-004`（内容过滤器：行过滤与关键字节）——第 1、2 条是纯判定（给一段文本/字节，决定要不要排除），本机可完整闭环；**第 3、4、5 条缺承接方**（「忽略规则」的比对引擎、状态栏、文件格式定义），见 §4.1。`FILT-006` 第 4 条可做、`FILT-007` 仍缺别的模块 | 仍在 `Services/Filter/` 内，纯逻辑，复用 `splitDeclarationLines()` 与「表当参数的自检」这套做法 |
-| **A 平台底座** | 继续（**本轮把 `FILT-002` 闭掉之后，H 里再无「纯判定、本机可完整闭环」的条目**，因此转 A 工作流） | `PLAT-006` 第 1、2、4 条（跨平台单实例、参数转发与退出码、首个实例无响应时超时降级）——**这一条能完整闭环并测试**（共享内存 + `QLocalServer` 在 macOS 上真跑），第 3、5 条见 §4.1 | 新增 `Services/Platform/` 下的单实例模块；需给 `platform.pri` 接上 `QtNetwork` |
+| **H 过滤与格式** | **本模块的「纯判定、本机可完整闭环」条目已经全数落地**（`FILT-001` / `FILT-002` / `FILT-003` / `FILT-005` / `FILT-004` 的服务层都在），继续往 H 加条目只会继续攒界面接口 | `FILT-006` 第 4 条（构造隐藏条目并断言两个选项下的行为差异，纯逻辑）；`FILT-007` 仍缺别的模块 | 仍在 `Services/Filter/` 内，纯逻辑，复用 `splitLines()` 那套与「表当参数的自检」做法；**不要**再去碰 `FILT-004` 剩下的三处——它们分别在 `Services/Text`、状态栏与 `Format/` |
+| **A 平台底座** | 继续（**H 里已无「纯判定、本机可完整闭环」的条目**，因此转 A 工作流） | `PLAT-006` 第 1、2、4 条（跨平台单实例、参数转发与退出码、首个实例无响应时超时降级）——**这一条能完整闭环并测试**（共享内存 + `QLocalServer` 在 macOS 上真跑），第 3、5 条见 §4.1 | 新增 `Services/Platform/` 下的单实例模块；需给 `platform.pri` 接上 `QtNetwork` |
 
-**为什么 H 的下一步不再是「先接 FILT-005 / FILT-003 / FILT-002 的界面」**：这三条的
+**为什么 H 的下一步不再是「先接 FILT-005 / FILT-003 / FILT-002 / FILT-004 的界面」**：这四条的
 服务层都已经落地（三层叠加、启用状态、合并表达式、面板数据、落点路由；大小/时间/
-属性位/所有者四类条件与三态结论；名称侧的模式/组合语义/超时保护），但它们剩下的
-全都是**界面接通**（设置页的过滤 Tab、Filters 页、面板的控件宿主、属性条件与名称
-过滤的输入框），而这些住所是设置页 `OPT-*`。`OPT-*` 一天不落地，这三件事一天接不上，
+属性位/所有者四类条件与三态结论；名称侧的模式/组合语义/超时保护；内容侧的行过滤与
+关键字节判定），但它们剩下的全都是**界面接通或其他模块的宿主**（设置页的过滤 Tab、
+Filters 页、面板的控件宿主、属性条件与名称过滤的输入框、状态栏那一行提示、
+比对引擎里应用忽略规则的那一步、文件格式定义）。`OPT-*` 一天不落地，这几件事一天接不上，
 再往 `Services/Filter/` 里加条目也只是继续攒界面接口。因此转 A 工作流。
 
 **为什么 A 的下一步是 `PLAT-006` 的第 1、2、4 条**：这一条的三条完成标准
@@ -952,9 +1053,9 @@ git push --force-with-lease=main:<远端当前提交> \
 ——`QSharedMemory` 与 `QLocalServer` / `QLocalSocket` 在 macOS 上都是真可用的，
 测试可以起一个真的本地套接字服务器做握手与超时用例，不必假装。它不依赖 `OPT-*`（第 5 条
 才依赖），也不依赖第一个真正的会话类型（第 3 条才依赖），因此是本轮之后唯一一条
-**能整条闭环并勾完成标准**的候选。同模块的 H 剩下 `FILT-004`（第 1、2 条可做，第 3、4、5 条
-缺比对引擎/状态栏/文件格式定义）与 `FILT-006`（第 4 条可做，其余要扫描器），
-都只能落在半截上，因此排在 `PLAT-006` 之后。
+**能整条闭环并勾完成标准**的候选。同模块的 H 现在只剩 `FILT-006` 第 4 条（纯逻辑，但没有
+「应用规则」这一层宿主，价值低于整条闭环的 `PLAT-006`）与 `FILT-007`（缺别的模块），
+因此排在 `PLAT-006` 之后。
 
 **FILT-005 留下的确切接口**：`FilterStack` 收三层声明（`setDeclaration`）与启用标志
 （`setLayerEnabled`），`decide()` / `accepts()` 出结论，`combinedExpression()` /
@@ -1054,7 +1155,7 @@ git push --force-with-lease=main:<远端当前提交> \
 | `FILT-005` 过滤器的层级与作用域 | **已落地**（提交见 §3.1，issue #233） | 第 1、4、5 条已勾；第 2、3 条的服务层部分（启用状态与四态文案、面板数据与全文）已落地并被测试，**缺的是显示控件**——两者的住所都是设置页（`OPT-*`），因此标签是「部分完成」。它**解除了一处阻塞**：`FILT-003` 第 4 条（「与名称过滤构成整体的与关系」）现在有一张三层的表可以挂。它**没有**解除任何「界面接入」类条目——那需要设置页 |
 | ~~`FILT-003` 属性过滤~~ | **已落地**（提交见 §3.1，issue #230） | 第 1~4 条已勾；第 5 条只勾得动一半——「与内容比对解耦」由 `Tests/AttributeFilter` 的读源码护栏钉住了，「扫描阶段提前丢弃」那半句要等 `Folder/` 的扫描器，因此标签是「部分完成」，理由与接手方式写在 §1.13。它**为 `Folder/` 的扫描器留好了接口**：扫描器拿到 `EntryMetadata` 后调 `decideEntry()`，`accepted == false` 直接跳过 |
 | ~~`FILT-002` 名称过滤器（正则与超时保护）~~ | **已落地**（提交见 §3.1，issue #229） | 第 1、2、4、5 条已勾（三种模式、**200ms 超时保护 + 连续超时断路器**、就地实时校验且非法表达式不生效、具名预设与导出往返）；第 3 条只勾得动服务层一半（组合语义与文案已落，「界面明确显示当前语义」要等界面），因此标签是「部分完成」，理由与接手方式写在 §1.14。它**解除了「Qt 版本卡住」这处阻塞**：超时走的是自建的工作线程 + 截止时间，不依赖任何 Qt 6 API。它**为 `Folder/` 的扫描器留好了接口**：扫描器拿到名字后调 `decide()`，`NotMatched` 跳过、`Undecided` 照常进入 |
-| `FILT-004` 内容过滤器（行过滤与关键字节） | 部分阻塞：第 3、4、5 条缺承接方 | 第 1 条（行过滤器：给一段文本，排除匹配模式的行）与第 2 条（关键字节：给一段字节，判断是否含指定序列）是**纯判定**，本机可完整闭环与测试；第 3 条（先过滤行再应用忽略规则，且顺序有测试）需要**比对引擎**里的忽略规则那一步，第 4 条（状态栏提示）要状态栏，第 5 条（存为文件格式定义的一部分）要文件格式定义模块。参照 FILT-003 的做法：只落能独立验证的部分，把依赖写清 |
+| ~~`FILT-004` 内容过滤器（行过滤与关键字节）~~ | **已落地（第 1、2 条）**（提交见 §3.1，issue #231） | 第 1 条（行过滤器：给一段文本，排除匹配模式的行）与第 2 条（关键字节：给一段字节，判断是否含指定序列）**已完全落地**，85 个用例函数、纯 QtCore，理由与接手方式写在 §1.15。第 3 条只勾得动一半——顺序已定死成「先过滤行、再应用忽略规则」，`LineFilter` 的入参也已经是原始行，并用**真的** `Text::compare` 给出了证据；缺的是**比对入口在应用忽略规则之前先过一遍行过滤**（`Services/Text` 侧）。第 4 条要状态栏、第 5 条要文件格式定义（`Format/` 模块）。它**没有**解除任何阻塞——那三处分别在 `Services/Text`、状态栏与 `Format/`，都不是本模块能自己接上的 |
 | `FILT-006` 过滤结果的可见性与批量操作安全 | 第 4 条可做；其余要扫描器/状态栏 | 第 4 条（构造隐藏条目并断言两个选项下的行为差异）是纯逻辑，可做；「当前可见项」这类数量来源要等 `Folder/` 扫描器，状态栏常显要界面 |
 | `CLI-001` 起的命令行条目 | `SESS-002` 已落地，但**内置类型都没有工厂** | 解析部分可做（`ShellIntegration::parseShellInvocation()` 已是例子）；`--list-session-types` 这类**列出**类型的子命令现在也可做（注册表可枚举）。「执行」（真造出会话）仍要等第一个真正的会话类型 |
 
@@ -1316,4 +1417,10 @@ git push --force-with-lease=main:<远端当前提交> \
 | `.pri` 已经引用了还没写出来的 `.cpp` | 并行开发被中途打断（额度/崩溃）时，最常见的残留形态是**接线先写完、实现没落盘**。`services.pri` 会 include 各模块 `.pri`，于是**整个应用工程编译不过**，而报错指向的是一个「不存在的文件」，很容易被当成环境问题 | 接手一次被打断的并行开发时，先做一次**引用完整性扫描**：把 `Code/**/*.pri` 与 `*.pro` 里 `HEADERS/SOURCES/FORMS/RESOURCES` 的每一项（**解析掉 `$$PWD`**）逐个判存在，缺失的就是断点。2026-09-21 用这个办法在 60+ 个 `.pri` 里只捞出 1 处（`patchapply.cpp`），比逐个模块读代码快得多 |
 | `check_icons.py` 看不见「文件在磁盘、裸名被引用、但 qrc 里被摘掉」 | 裸名引用（`icon("ribbon_copy.svg")` 这种由 App 补前缀的写法）只在**名字已在 qrc 里**时才被计入「已使用」，因此把某个图标从 `Pictures.qrc` 里摘掉之后，静态护栏**仍然是绿的**（31 个图标，一致） | 目前靠 `Tests/AppIntegration` 的运行期断言兜住（它真的去 `QFile::exists` 每个命令的图标）。这是**护栏的已知缺口**，不是「已经安全」——收紧它要扫描裸名引用并反向校验「磁盘存在但未声明」，尚未做 |
 | 命令的图标路径指向不存在的资源 | 界面上一排 Ribbon 按钮是空图标，但**编译期与静态护栏都不报错**，只有两种途径能发现：离屏启动日志里刷 `qt.svg: Cannot open file ':/Pictures/xxx.svg'`，或 `Tests/AppIntegration` 的 `QFile::exists(command.icon)` 断言 | 新增带图标的命令时，要么真的按同一套视觉语言补一张 SVG 并登记进 `Pictures.qrc`，要么指向一张已有的、语义合适的图。`check_icons.py` 只校验「qrc 声明 ↔ 文件 ↔ 源码引用」三者一致，**不校验「命令引用的路径真的存在」**——这一条只有运行期能抓 |
+| 离屏启动的「成功」有两种含义，退出码 10 不是失败 | 单实例机制默认开着。若上一轮那个离屏实例**还活着**（不带管道重定向地跑 `LqCompare`，它会一直待在事件循环里，不会自己退出），再启动一次会走**转发**路径：立刻退出、**日志文件是空的**（转发那一侧什么也不打印）、退出码 **10**。看起来像「启动失败」或「日志没接上」，实际是 `RelayStatus::Delivered`（参数已转交给正在运行的实例） | 退出码含义看 `relayExitCodeTable()`：0 未发生转发 / **10 已转交** / 11 被拒绝 / 12 无人应答 / 13 握手超时。要做一次干净的启动确认，就带 `--new-instance`（日志里会印「单实例机制已由选项关闭」）并在确认后把进程杀掉；或先 `pgrep -fl 'MacOS/LqCompare'` 看一眼有没有残留实例 |
 | 重写 `main.cpp` 会静默带走启动自检 | 夜间把 `main.cpp` 从 233 行删到 91 行增添之后，之前几轮加的四条 `validate*Tables()` 启动自检**没有任何调用方了**，但函数本体还在、文档也还写着「启动时会打印」，于是文档与行为悄悄分家 | 重构 `main.cpp` / 装配路径时，**顺手 grep 一下那些 `validate*()` 还有没有调用方**（`grep -rn 'validate.*Table' Code/`）。自检函数留在模块里不等于它会跑；这类「文档说会跑、实际不跑」的漂移没有任何机制会自动发现 |
+| 在入口处「顺手」对空行提前返回 | `LineFilter::excludes()` 开头写了一句 `if (rawLine.isEmpty()) return false;`（看着像无害的快速路径），它把精确与正则模式**也**一起挡掉了——于是 `re:^$` 永远不生效，而 `re:^$` 恰恰是报错提示里教用户写的「去掉空行」的**唯一**写法。用户按提示写了、没有任何报错、空行照旧留着 | 入口不做任何模式无关的提前返回，让每种模式自己决定（空行只有通配模式命中不了，因为掩码要求名字非空）。这类 bug 的共性是**「快速路径」的判据与真正的语义无关**；写这种分支前先问「它在所有模式下都成立吗」 |
+| 行首前缀匹配没跳过缩进 | `= EXACT LINE` 缩进成 `  =   EXACT LINE  ` 之后，前缀要求「行首是 `= `」的实现匹配不上，于是那一行被解析成**通配模式**。它照样解析成功、照样产出一条表达式、界面上看不出任何异常——只是它从此变成「匹配字面量 `= EXACT LINE` 的行」，永远不命中。内容过滤的声明常常是从日志里抄下来的一行（带着缩进） | 前缀匹配前先 `ltrimAscii` 再匹配，并把跳过的长度记进 `textOffset` 让列号算回原始行。注意这与 `namefilter.h` **刻意不一致**（那里的表达式是用户从头写的，没有这个来源），改动前先读两边的模块头注释 |
+| 源码级护栏扫到自己的注释 | 新加的「本模块不许读文件」护栏直接报错，而它扫到的是 `contentfilter.h` **自己说明里**逐字写的 `QFile` / `readAll`。与 `check_icons.py` 那条同源（护栏认的是**形状**，不区分代码与注释），但这次的代价更隐蔽：人会顺手把护栏放宽或删掉 | 护栏先 `stripComments()`（去 `//` 与 `/* */`）再判；并且**成对**断言「原文里有 `QFile`、去注释后没有」——这样 `stripComments()` 写错时用例会红，而不是**静默通过**（一个去注释做过头、把所有内容都丢掉的实现同样能让「去注释后没有 `QFile`」成立） |
+| `check_spec.py` 的文档计数护栏扫到 gitignored 目录 | 护栏原本 `os.walk(REPO_ROOT)` 扫全仓 `.md`（含 `.md` 的宽匹配模式），于是扫到了 `.workbuddy/` 下的工作日志——那里写的数字是**测试用例条数**，不是规格条目数。结果是**本机红、CI 绿**：CI 只 checkout 被跟踪的文件，本地多出的工作日志只在开发机上触发误报 | `doc_count_candidates()` 优先用 `git ls-files -z '*.md'`（退化到「仓库根 + docs/」），只扫被跟踪的文档。**「本机与 CI 结论不一致」的护栏要优先修**——本机红会让人习惯性忽略它，而那一天之后它连真问题也拦不住了 |
+| `QRegularExpression::patternErrorOffset()` 指向出错点**之后** | 用它算列号（`issue.column = textColumn + offset`）会指向出错字符的下一位：`(` 报 `offset == 1`，而 `(` 在位置上只占 0 那一格。断言写成「列号等于 3」时才看得出这半格偏差 | 要么按「下一格」的语义写注释与断言（本模块目前就是这么处理的，并在用例里注明），要么减 1 再交出去。**先测一次再定语义**，不要照直觉写期望值 |

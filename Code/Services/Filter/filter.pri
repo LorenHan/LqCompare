@@ -7,6 +7,8 @@
 #   attributefilter.{h,cpp} —— 属性过滤：大小 / 修改时间 / 属性位 / 所有者（FILT-003）
 #   namefilter.{h,cpp}      —— 名称过滤：精确名 / 通配符 / 正则，三种组合语义，
 #                              超时保护与静态回溯风险预检（FILT-002）
+#   contentfilter.{h,cpp}   —— 内容过滤：行过滤与关键字节、两个阶段的作用顺序
+#                              （FILT-004）
 #
 # 为什么五层要分开：
 #   * `mask.h` 回答「这一段掩码命中这个条目吗」——失败是「你的掩码写错了」，
@@ -23,6 +25,10 @@
 #     （`maskfilter` 带 `-` 排除前缀与「排除优先」，`namefilter` 没有前缀、
 #     排除语义由组合语义承担）。合成的代价是任何一处界面改动都会波及另一处，
 #     理由写在 namefilter.h 顶部。
+#   * `contentfilter.h` 回答「这个文件的内容该不该进比较」——它是四条过滤轴里
+#     **唯一要读文件内容**的一条，代价比前三条高一个量级，因此「启用」是一件
+#     显式的事（见该文件顶部）。它与前三条之间没有合成关系：前三条决定
+#     「这个条目要不要看」，它决定「看了之后要不要比」。
 #
 # 本模块依赖 QtCore（namefilter 另用 QtCore 的线程原语），
 # 另加 **Services/Session 的存储抽象**（只有 filterstack 用到）。
@@ -49,11 +55,13 @@ HEADERS += \
     $$PWD/maskfilter.h \
     $$PWD/filterstack.h \
     $$PWD/attributefilter.h \
-    $$PWD/namefilter.h
+    $$PWD/namefilter.h \
+    $$PWD/contentfilter.h
 
 SOURCES += \
     $$PWD/mask.cpp \
     $$PWD/maskfilter.cpp \
     $$PWD/filterstack.cpp \
     $$PWD/attributefilter.cpp \
-    $$PWD/namefilter.cpp
+    $$PWD/namefilter.cpp \
+    $$PWD/contentfilter.cpp

@@ -160,6 +160,49 @@ def git_tracked_prd() -> list[str]:
     return problems
 
 
+def doc_count_candidates() -> list[str]:
+    """列出需要核对条目数的手写文档（相对仓库根的路径）。
+
+    为什么是「**被 git 跟踪**的 `.md`」而不是「仓库下所有 `.md`」
+    -----------------------------------------------------------
+    本护栏的模式是刻意**宽匹配**的（`（60 条）` 这种形状一律命中，宁误报不漏报，
+    它正是靠这一点抓到了几处真正的过期数字）。宽匹配遇到「数字 + 条」的
+    其他含义就会误报：
+
+      * `.workbuddy/`（工作区助手状态，已 gitignore）里的工作日志写的是
+        **测试用例条数**，例如「`Tests/PatchApply`（60 条）」；
+      * `.codex-work/`、各 `_test-build/`、`build/` 下的 `.md` 是本地草稿与构建产物。
+
+    这些目录都不进版本库，于是同一份代码在**本机会红、CI 上会绿**——
+    而 CI 绿正是最不该出现的那一侧（本仓 §6 有一条同源的坑：
+    「静态护栏从不报错也没人发现」）。按「被跟踪」筛选之后，
+    口径与本节开头那句「手写文档」逐字对齐，也不必再维护一张不断变长的忽略清单。
+
+    非 git 环境（例如把一个目录拷贝出去单独跑）退回到「仓库根 + `docs/`」——
+    这两处是手写文档的全部住所。
+    """
+    try:
+        output = subprocess.check_output(
+            ["git", "ls-files", "-z", "*.md"], cwd=REPO_ROOT, text=True, stderr=subprocess.DEVNULL
+        )
+        tracked = [name for name in output.split("\0") if name]
+        if tracked:
+            return sorted(tracked)
+    except Exception:  # noqa: BLE001 - 非 git 环境下退回到目录枚举
+        pass
+
+    candidates: list[str] = []
+    for name in sorted(os.listdir(REPO_ROOT)):
+        if name.endswith(".md"):
+            candidates.append(name)
+    docs_root = os.path.join(REPO_ROOT, "docs")
+    for root, _dirs, files in os.walk(docs_root):
+        for name in files:
+            if name.endswith(".md"):
+                candidates.append(os.path.relpath(os.path.join(root, name), REPO_ROOT))
+    return sorted(candidates)
+
+
 def check_doc_counts(actions) -> list[str]:
     """手写文档里写的条目数必须与真实条目数一致。
 
@@ -183,28 +226,23 @@ def check_doc_counts(actions) -> list[str]:
 
     expected = len(actions)
     problems: list[str] = []
-    for root, dirs, files in os.walk(REPO_ROOT):
-        dirs[:] = [d for d in dirs if d not in (".git", "dist", "_references")]
-        for name in files:
-            if not name.endswith(".md"):
-                continue
-            path = os.path.join(root, name)
-            rel = os.path.relpath(path, REPO_ROOT)
-            if rel in generated or rel.startswith(skip_prefixes):
-                continue
-            try:
-                with open(path, encoding="utf-8") as handle:
-                    text = handle.read()
-            except OSError:
-                continue
-            for line_number, line in enumerate(text.splitlines(), 1):
-                for pattern in patterns:
-                    for found in pattern.findall(line):
-                        if int(found) != expected:
-                            problems.append(
-                                "%s:%d 写着 %s，实际规格条目数为 %d"
-                                % (rel, line_number, found, expected)
-                            )
+    for rel in doc_count_candidates():
+        if rel in generated or rel.startswith(skip_prefixes):
+            continue
+        path = os.path.join(REPO_ROOT, rel)
+        try:
+            with open(path, encoding="utf-8") as handle:
+                text = handle.read()
+        except OSError:
+            continue
+        for line_number, line in enumerate(text.splitlines(), 1):
+            for pattern in patterns:
+                for found in pattern.findall(line):
+                    if int(found) != expected:
+                        problems.append(
+                            "%s:%d 写着 %s，实际规格条目数为 %d"
+                            % (rel, line_number, found, expected)
+                        )
     return problems
 
 
