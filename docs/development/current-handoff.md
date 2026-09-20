@@ -276,6 +276,14 @@ docs/
 远端：369 个 issue 全部创建，标签为 `需求 / 待实现 / <模块> / <优先级>`，
 其中 P0 59 条。反查入口是 `docs/github/prd-issues.json`。
 
+**核对「本地与远端是否一致」时走 SSH**：`git fetch origin` 走的是 https，
+在本机网络下偶发 `Error in the HTTP2 framing layer`（同一个仓库的 SSH 推送却正常）。
+用下面这条更稳，且不依赖任何配置：
+
+```bash
+git ls-remote git@github.com:LorenHan/LqCompare.git refs/heads/main
+```
+
 **推送必须走 SSH。** `gh` 登录的 token 只有 `gist`、`read:org`、`repo` 三个 scope，
 推 `.github/workflows/` 下的文件会被拒（`refusing to allow an OAuth App to create or
 update workflow ... without workflow scope`）。走 SSH 不受这个限制：
