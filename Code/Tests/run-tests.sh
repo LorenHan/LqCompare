@@ -17,7 +17,10 @@
 #   2. 在 `set -u` 下对空数组取值（`${arr[@]}`）会被当成未定义变量而报错。
 #   3. BSD sed 不支持 GNU 的 `\+`；写成 `\([0-9]\+\)` 会静默匹配不上，
 #      导致每行显示「14 passed」但合计是 0 —— 看起来还挺正常，最难发现。
-# 下面用可移植写法规避这三点。
+#   4. macOS + Rosetta 上未签名的 x86_64 二进制**跑不起来**（进程卡在 `U`
+#      状态、CPU 恒为 0、连 `SIGKILL` 都进不去），因此构建完要补一次
+#      ad-hoc 签名。详见下面构建成功之后那段注释。
+# 下面用可移植写法规避这四点。
 set -uo pipefail
 
 CODE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -100,6 +103,17 @@ for project in "${PROJECTS[@]}"; do
         failed_suites="${failed_suites}${suite} "
         total_fail=$((total_fail + 1))
         continue
+    fi
+
+    # macOS + Rosetta：**未签名的 x86_64 二进制在 Apple Silicon 上跑不起来**。
+    # 现象很有欺骗性——进程进入 `U`（不可中断等待）状态、CPU 时间恒为 0，
+    # `SIGKILL` 与 `SIGALRM` 都进不去，于是既跑不完也超时不了，看起来像
+    # 「测试挂住了」或「qmake/链接器坏了」，很容易被误判成代码问题。
+    # Qt 5.15.2 clang_64 产出的是 x86_64，链接器不会自动补签名，因此每次
+    # 构建完都补一次 ad-hoc 签名。签名是幂等的，失败也不该让测试跑不起来
+    # （arm64 原生构建上根本没有这个问题），所以这里只静默重试。
+    if [[ "$(uname -s)" == "Darwin" ]]; then
+        codesign -f -s - "${binary}" >/dev/null 2>&1 || true
     fi
 
     output="$("${binary}" -o -,txt 2>&1)"
