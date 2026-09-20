@@ -7,11 +7,12 @@
 
 规格（369 条）与 GitHub issue 已全部铺好；Qt 工程骨架已在 macOS 上编译通过、
 主程序可启动、测试全绿。**服务层开始有真实功能**：文件系统抽象层（PLAT-002）、
-回收站服务（PLAT-003）、名称处理（PLAT-007）与批量操作的失败处置（PLAT-008）
-已落地。其中回收站在本机是**真的能删进废纸篓再还原回来**的；名称处理连
-「无效 UTF-8 的文件名」这种只在 Linux 上出现的输入都写好了测试（CI 上会真实执行）；
+回收站服务（PLAT-003）、名称处理（PLAT-007）、批量操作的失败处置（PLAT-008）
+与系统图标服务（PLAT-004）已落地。其中回收站在本机是**真的能删进废纸篓再还原回来**的；
+名称处理连「无效 UTF-8 的文件名」这种只在 Linux 上出现的输入都写好了测试（CI 上会真实执行）；
 错误路径现在携带**原始系统错误码**（errno / Win32 / Cocoa），批量操作会给出
-按原因分组的失败清单并支持只重试失败项。
+按原因分组的失败清单并支持只重试失败项；系统图标是按**类型**缓存 + 后台解析 + 去重的，
+在本机能真的拿到 Finder 那一套图标。
 界面上仍是 169 个按钮里 31 条带处理器，其余点击后提示对应 ACTION-ID。
 
 ## 1.1 已落地的服务层模块
@@ -24,12 +25,14 @@
 | `Services/Files/`（回收站） | PLAT-003 | **部分完成**（Windows 实现未编译验证） | `Tests/Trash`（35 用例） |
 | `Services/Files/`（名称与 Unicode） | PLAT-007 | **部分完成**（长路径只写在 Windows 侧，未编译验证） | `Tests/PathName`（40 用例 + 1 个仅 Linux 执行） |
 | `Services/Files/`（错误携带与批量处置） | PLAT-008 | **部分完成**（界面动作尚未接上） | `Tests/Batch`（36 用例） |
+| `Services/Platform/`（系统图标） | PLAT-004 | **部分完成**（Windows / Linux 实现未在目标平台验证；界面尚未取用） | `Tests/PlatformIcon`（46 个用例函数，含 3 条走真实图标源） |
 
 PLAT-002 的详细说明与其「第 2 条完成标准为何不勾选」见
 [issue #325](https://github.com/LorenHan/LqCompare/issues/325)；
 PLAT-003 见 [issue #324](https://github.com/LorenHan/LqCompare/issues/324)；
 PLAT-007 见 [issue #328](https://github.com/LorenHan/LqCompare/issues/328)；
-PLAT-008 见 [issue #330](https://github.com/LorenHan/LqCompare/issues/330)。
+PLAT-008 见 [issue #330](https://github.com/LorenHan/LqCompare/issues/330)；
+PLAT-004 见 [issue #329](https://github.com/LorenHan/LqCompare/issues/329)。
 
 ### 1.2 回收站（PLAT-003）落地到了什么程度
 
@@ -68,23 +71,43 @@ PLAT-008 见 [issue #330](https://github.com/LorenHan/LqCompare/issues/330)。
 这一步要等 SESS（会话）与视图层就位，因为「失败清单」需要一个可停留的对话框，
 而「重试失败项」需要一次批量操作作为上下文。
 
+### 1.4 PLAT-004 落地到了什么程度
+
+规格的五条完成标准对应到代码：
+
+| 完成标准 | 落在哪里 | 在本机验证过 |
+| --- | --- | --- |
+| 按扩展名获取系统关联图标（Win `SHGetFileInfoW` / mac `UTType`+`NSWorkspace` / Linux 主题图标） | `iconservice_mac.mm` / `iconservice_win.cpp` / `iconservice_linux.cpp` | **macOS 是**（三条真机用例拿到真实像素，且文字文件与文件夹的图不同）；Windows 侧**从未编译过**；Linux 侧未在 Linux 上跑过 |
+| 图标缓存按扩展名而非按文件，缓存命中率高 | `IconKey::cacheKey()`（键 = `f|txt` / `d|<dir>`）、`IconCache`（有界 LRU，带 `Stats::hitRate()`） | **是**——`serviceCachesByExtensionNotByFile` 断言同一类型的多个文件只解析一次，`serviceDoesNotLetDirectoryPoisonFileKey` 断言带扩展名的目录不会污染同名类型的文件 |
+| 图标获取在后台线程，缺失时回退到内置的通用图标 | `IconService::requestIcon()` + 专属单线程 `QThreadPool` + `IconRequestQueue` 去重；`IconSource::Builtin` 是回退 | **是**（用可替换的假提供者断言调用次数与去重；另有真机用例） |
+| 系统图标不可用时（无桌面环境）回退到内置图标集，不崩溃 | `createNativeIconProvider()` 在无可用图标源时返回 `HeadlessIconProvider`（Linux）；macOS 老系统走 `@available` 之外的分支；提供者抛异常由 `WorkItem` 吞掉 | **部分**——回退路径（`serviceFallsBackToBuiltinWhenProviderHasNothing`）与「有在途请求时析构」（`serviceDestructsWithPendingWork`）有覆盖；「真的没有桌面环境」只能靠注入假提供者模拟，本机没法真跑 |
+| 图标大小随 DPI 与界面缩放正确获取 | `iconPixelSize(baseSize, devicePixelRatio)`、`Win32IconSize::nearest()`、`IconEntry::actualPixelSize` 如实报出真实尺寸 | **部分**——缩放算法与档位收拢是纯逻辑、已覆盖；Windows 上真实拿到的尺寸未验证 |
+
+**还没有做的**：界面还没取用。`IconService` 目前只有测试在用，文件夹树与列表
+还没接上（会话与视图层就位后一起做）。另外 Windows 只接了 16/32 两档，
+48/256 需要 `IImageList` COM——代码里已注明，`actualPixelSize` 会如实报出
+「其实只拿到了 32」，不会假装请求的尺寸就是拿到的尺寸。
+
 ## 2. 已验证的事实（不用再花时间确认）
 
 | 项目 | 结论 | 验证方式 |
 | --- | --- | --- |
 | 构建 | Qt 5.15.2 clang_64 上 qmake + make 通过，产出 `dist/macos/LqCompare.app` | `qmake && make -j8` |
 | 运行 | 主程序离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
-| 测试（全量） | **175 passed / 0 failed / 1 skipped**（Batch 36 + FileSystem 50 + PathName 40 + Trash 35 + CommandRegistry 14） | `Code/Tests/run-tests.sh` |
+| 测试（全量） | **223 passed / 0 failed / 1 skipped**（Batch 36 + CommandRegistry 14 + FileSystem 50 + PathName 40 + PlatformIcon 48 + Trash 35） | `Code/Tests/run-tests.sh` |
 | 文件系统抽象层 | 47 个纯逻辑用例 + 3 个真实文件系统用例全通过；其中 20 个覆盖 **Windows** 路径规则（盘符 / UNC / 长路径前缀 / 大小写），在 macOS 上真实执行 | `Code/Tests/run-tests.sh FileSystem` |
 | 回收站 | 35 个用例全通过。其中 9 个验证 XDG（Linux）的路径与 `.trashinfo` 规则、2 个是**真实**的废纸篓往返与冲突拒绝、多个断言「不可用时搬移函数一次都没被调用」 | `Code/Tests/run-tests.sh Trash` |
 | 名称与 Unicode | 40 个用例通过 + 1 个跳过（无效 UTF-8 名字的用例只在 Linux 上执行，CI 会跑）。覆盖字节保真往返、UTF-8 边界与过长编码、Unicode 组合形式、六类文件名问题的原因与位置 | `Code/Tests/run-tests.sh PathName` |
 | 错误携带与批量处置 | 36 个用例全通过。其中 9 个验证错误码在三种域下的携带与显示（含「未识别的码只给数字」）、11 个验证失败清单分组、12 个验证执行流程（含「重试只跑失败项」与「停止不移除已完成进度」）、4 个走真实文件系统做一次「设为只读 → 解除只读」往返 | `Code/Tests/run-tests.sh Batch` |
+| 系统图标 | 46 个用例函数（QTest 合计 48，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分四组：17 个验证缓存键与尺寸规则（扩展名折叠 7 + 键的合成与解析 5 + DPI 缩放 4 + Windows 档位收拢 1）、9 个验证有界 LRU 的淘汰与命中统计、6 个验证请求去重队列、11 个验证服务层（同步/异步/去重/回退/换比例清缓存）；另有 **3 个走真实系统图标源**（macOS 上真实执行：断言拿到非空像素、断言文字文件与文件夹的图确实不同） | `Code/Tests/run-tests.sh PlatformIcon` |
+| 主程序构建 | 通过，`iconservice_mac.mm` 编进主程序，**0 warning**（原先 7 条 `-Wunguarded-availability-new` 已用 `API_AVAILABLE` 消掉，不是压掉） | `qmake && make -j8` |
+| 主程序运行 | 离屏启动正常，日志 `Ribbon 构建完成：10 页 / 45 组 / 169 个按钮`，注册表自检 0 问题 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
 | 分层检查 | 通过（Services 未反向依赖界面） | `python3 tools/check_layering.py` |
 | 图标检查 | 通过（27 个图标，声明/引用/文件三者一致） | `python3 tools/check_icons.py` |
 | 规格自检 | 通过（369 条，P0 59 条，PRD 与数据同步） | `python3 tools/check_spec.py` |
 | Shell 可移植性 | 通过（1 个脚本，无 bash 4 内建与 GNU 工具扩展） | `python3 tools/check_shell.py` |
 | Windows 宽字符 API | 通过（40 个源文件、清单内 43 个 API；自测 17 个样本） | `python3 tools/check_winapi.py [--self-test]` |
-| 测试套件 | `175 passed / 0 failed`，且「无套件匹配」被视为失败（exit 2） | `Code/Tests/run-tests.sh` |
+| 测试套件 | `223 passed / 0 failed`，且「无套件匹配」被视为失败（exit 2） | `Code/Tests/run-tests.sh` |
 | 命令注册表自检 | 启动时 0 问题（说明不缺图标、不缺说明、无快捷键冲突） | 启动日志 |
 
 **已知未验证**：Windows MinGW 32 位构建未在本机验证（无该环境）；
@@ -112,7 +135,10 @@ Code/
 │   │                             trash（回收站服务 + XDG 规则）、
 │   │                             batch（失败清单 / 重试 / 进度）、
 │   │                             filesystem_posix/_win、trash_mac.mm/_linux/_win
-│   ├── command.pri / log.pri / files.pri / services.pri
+│   ├── Platform/                 iconkey（缓存键与尺寸）、iconcache（有界 LRU + 去重队列）、
+│   │                             iconservice（同步/异步/回退 + 提供者接口）、
+│   │                             iconservice_mac.mm/_win/_linux
+│   ├── command.pri / log.pri / files.pri / platform.pri / services.pri
 ├── Pictures/                     27 个 SVG 图标 + Pictures.qrc
 ├── Tests/
 │   ├── Support/                  fakefilesystem（内存文件系统）、faketrashservice
@@ -122,6 +148,7 @@ Code/
 │   ├── PathName/                 tst_pathname + .pro（40 用例 + 1 个仅 Linux）
 │   ├── Trash/                    tst_trash + .pro（35 用例）
 │   ├── Batch/                    tst_batch + .pro（36 用例）
+│   ├── PlatformIcon/             tst_platformicon + .pro（48 用例）
 │   └── run-tests.sh              统一测试运行器
 └── ThirdParty/                   myclasspath.pri（定位 LqRibbon）、lqribbon.pri
 
@@ -160,7 +187,8 @@ docs/
 | `e456c83` | 文件系统服务抽象层与可替换的假实现 | PLAT-002 |
 | `de1ba13` | 回收站与可逆删除服务 | PLAT-003 |
 | `ad7f004` | Unicode、特殊文件名与名称的字节保真 | PLAT-007 |
-| 见 `git log` | 错误携带（分类 + 原始系统码）与批量操作的失败处置 | PLAT-008 |
+| `03a481c` | 错误携带（分类 + 原始系统码）与批量操作的失败处置 | PLAT-008 |
+| `ffa093a` | 系统图标的缓存、去重与异步解析 | PLAT-004 |
 
 远端：369 个 issue 全部创建，标签为 `需求 / 待实现 / <模块> / <优先级>`，
 其中 P0 59 条。反查入口是 `docs/github/prd-issues.json`。
@@ -177,21 +205,23 @@ git push git@github.com:LorenHan/LqCompare.git main
 
 | 对话 | 工作流 | 从哪条 issue 开始 | 交付什么 |
 | --- | --- | --- | --- |
-| **A 平台底座** | 继续 | `PLAT-004`（系统图标）→ `PLAT-005`（Shell 集成） | 在 `Services/Platform/` 内新增文件；`.pri` 已在 `services.pri` 里接好 |
+| **A 平台底座** | 继续 | `PLAT-005`（Shell 集成） | 在 `Services/Platform/` 内新增文件；`.pri` 已接好，`QT += gui` 已在 `platform.pri` 里 |
 | **B 会话框架** | 新开 | `SESS-001`（会话基类）→ `SESS-002`（类型注册表）→ `SESS-006`（设置框架） | `Services/Session/`、`Views/Session/`，含测试 |
 | **H 过滤与格式** | 新开 | `FILT-001`（掩码解析器，纯算法、最容易写出完整测试） | `Services/Filter/`、`Services/Format/` |
 
 三个工作流的目录互不重叠，`services.pri` 的 include 已一次加齐（`exists()` 保护），
 因此三方都不需要改共享文件。详见 [parallel-workstreams.md](parallel-workstreams.md) §1。
 
-**A 工作流的四件要紧事：**
+**A 工作流的六件要紧事：**
 
-1. `trash_linux.cpp` 与 `trash_win.cpp` 需要在各自的平台上首次构建并修正。
-   它们与 `filesystem_win.cpp` 是当前唯一**从未被编译过**的代码，
-   PLAT-002 / PLAT-003 / PLAT-007 的各一条完成标准因此未勾选。拿到 Windows
+1. `trash_linux.cpp`、`trash_win.cpp`、`filesystem_win.cpp`、`iconservice_win.cpp`
+   需要在各自的平台上首次构建并修正。它们是当前唯一**从未被编译过**的代码，
+   PLAT-002 / PLAT-003 / PLAT-004 / PLAT-007 的各一条完成标准因此未勾选。拿到 Windows
    机器时一次性过一遍——几份文件共用同一套手写常量 + `static_assert` 模式，
    错法也相似（先看 `NSFileManagerUnmountBusyError` 写成 768 那件事就知道，
    这类错误编译期会直接报出来，不必等运行）。
+   `iconservice_linux.cpp` 未在 Linux 上跑过，但它只依赖 QtGui 的 `QMimeDatabase`
+   与 `QIcon::fromTheme`，风险低于 Windows 那几个。
 2. **删除只有一条入口：`TrashService`**。`FileSystem::deleteToTrash` 已经移除，
    不要再加回来——理由写在 `filesystem.h` 的注释里（无状态的 `FileSystem` 留不住
    撤销点，用户点撤销会永远报「没有可还原的删除」）。
@@ -219,6 +249,17 @@ git push git@github.com:LorenHan/LqCompare.git main
    默认策略是 `SkipAndContinue`（PLAT-008 第 4 条）；有序批次才用 `StopOnFirstError`。
    界面上给用户两条出路时对应的是：`retryFailed()`（重试失败项）与
    直接接受当前报告（跳过并继续）——**两条路都不要重跑整批**。
+7. **界面取图标走 `IconService`，不要在视图里自己调 `QFileIconProvider`**。
+   理由不是「统一风格」，而是三件会真实发生的事：一是按路径取图标没有缓存，
+   滚动一个 5000 个文件的目录就是 5000 次系统调用；二是同步取会让界面
+   卡在文件名上；三是取不到图标时视图要自己决定「显示什么」，
+   于是每个用到图标的地方都会长出自己的一套回退逻辑。
+   接线的正确姿势是：构造期给 `IconService` 一个 `setBaseSize()` / `setDevicePixelRatio()`，
+   列表里调 `requestIcon(path)`，收到 `iconReady(cacheKey)` 后用**条目自己记住的 cacheKey**
+   去 `iconForPath()`（命中即 O(1) 哈希查找）刷新那一行。
+   **不要**把「哪个键对应哪些行」维护在服务里——那是第二份事实来源。
+   另外记得 `IconService` 是从 `Platform::` 拿 `Files::PathUtils::Style` 的，
+   与 `Files/` 的路径规则共用同一个事实来源，别在视图里自己拼扩展名。
 
 三个并行对话不是硬性数量，也可以只开两个（A + B），或把 B 换成 **O 工程与文档**
 （`ENG-002` 模块构建守卫、`DOC-001` 用户手册）。**H 建议早做**：掩码解析器是纯算法，
@@ -291,3 +332,18 @@ git push git@github.com:LorenHan/LqCompare.git main
 | 用「重试后全部成功」验证「只重试失败项」 | 一个「整批重跑」的实现同样会全部成功，断言照样通过——而这正是 PLAT-008 第 2 条要防的（对批量复制就是覆盖用户刚确认过的结果） | 断言必须落在**调用次数**上：`callsFor(成功路径) == 1`、`callsFor(失败路径) == 2`。替身记录调用日志就是为了这个 |
 | 同一件事的两种错误文案实现 | `filesystem_win.cpp` 里原本自己拼 `"Win32 错误码 %1（%2）"`，与新的 `errorDetail()` 是同一件事的两份实现；两份必然演化成界面上同时出现「Win32 错误码 32（busy）」与「Win32 32（ERROR_SHARING_VIOLATION）」，用户以为是两个不同故障 | 删掉自拼的那份（它当时还没有任何调用点），统一用 `errorDetail(fromWindowsError(code))` |
 | 给认不出的错误码编一个「名字」 | 拼出 `UNKNOWN_1234` 这类字符串会让用户拿一个根本不存在的符号去搜，比只看到数字更糟；同理「原始错误码：（无）」也只是噪声 | `rawErrorName()` 认不出就返回 `nullptr`；`errorDetail()` 在没有原始码时返回**空串**，由界面决定不显示这一段 |
+| `QImage(uchar*, w, h, bpr, fmt)` 是**浅引用** | 它不接管那块内存。用完就 `release` 源缓冲（如 `NSBitmapImageRep`）之后，QImage 指向已释放的内存——表现为「图标偶尔是花的」，只在内存被复用时出现，且几乎不可复现 | 立刻 `.copy()` 一份再释放源；`iconservice_mac.mm` 里写明了这一条。**任何**用这个构造函数包外部缓冲的地方都要这样处理 |
+| `NSBitmapImageRep` 的像素格式要配 `Format_RGBA8888_Premultiplied` | 配成 `Format_ARGB32_Premultiplied`（直觉上「更 Qt」）会在小端机器上把通道读反，图标变成「蓝脸」。而灰度图标上完全看不出来 | 用 `RGBA8888` 与 NSBitmapImageRep 的内存布局逐字节对应。这类错误要靠**彩色**测试样本才能发现 |
+| 后台线程里用 AppKit 不开 `@autoreleasepool` | 图标解析跑在 `QThreadPool` 的线程上，Qt 不会为它建池。`NSWorkspace` 返回的自动释放对象一直不释放，控制台有抱怨，表现为「滚动大目录时内存一直涨」 | 解析函数体整体包在 `@autoreleasepool { }` 里 |
+| `UTType` 要 macOS 11+，部署目标却是 10.13 | 编译器为函数体内每个 `UTType` 各报一条 `-Wunguarded-availability-new`（本次 7 条）。`@available` 检查明明写在调用点，编译器却看不到——因为用的是**独立函数**，警告报在函数体内 | 给该函数加 `API_AVAILABLE(macos(11.0))`，把契约写进签名：漏检查时报错落在**调用行**。**不要**用 `#pragma clang diagnostic ignored` 压掉——那会连同「调用点漏检查」一起静音，而后果是用户在 10.15 上点一下列表就崩 |
+| `SHGetFileInfo` 默认会去**访问磁盘** | 对没有对应文件的名字（枚举一个还没访问过的目录）它会去实际查找，网络盘上一次卡几百毫秒、U 盘没插时直接失败。而这里问的只是「`.cpp` 该长什么样」 | 加 `SHGFI_USEFILEATTRIBUTES` 只按名字问；Linux 侧同理用 `QMimeDatabase::MatchExtension` 而不是 `MatchDefault` |
+| `SHGetFileInfo` 只能给 16/32/48/256 几档 | 请求 20 会拿到 32。把「接近的尺寸」当成「就是这个尺寸」写进结果，调用方会以为拿到了精确尺寸，拼高 DPI 图集时用错比例 | 如实报出 `actualPixelSize`；需要精确尺寸的地方自己再缩一次。Windows 侧 48/256 还需要 `IImageList` COM，本次没做，代码里已注明 |
+| 用 `QCache` 当图标缓存 | 它的淘汰策略**没有对外契约**（文档只说「某条策略」），于是「缓存上限 256 个类型」这个约束无法写测试，也无法预测谁被淘汰 | 自己写有界 LRU，带 `keysByRecency()` 与 `Stats`，淘汰行为可断言。图标缓存总量本来就不大（上界是扩展名数），几十行的代价换来确定性 |
+| 图标缓存键只写扩展名 | `notes.txt` 这个**目录**会拿到文本文件图标——因为「是否目录」没进键。这类错误只在「目录名带扩展名」时出现，测试里如果只用 `foo.txt` 这种文件样本，永远发现不了 | 键形如 `f|txt` / `d|<dir>`，把两个事实都编进去；并专门写一条「目录与同名扩展名的文件拿到不同格子」的用例 |
+| 缓存命中时也走异步发信号 | 命中率高的目录（全是 `.cpp`）里绝大多数条目本来能同步拿到图，一律异步会让滚动时可见闪烁：先放占位、几十毫秒后换真图 | 命中就同步返回并同步发信号；只有未命中才排后台 |
+| 服务里维护「哪些路径引用了这个键」 | 一次解析产出一个**类型**的图标，可能 200 行在等它。按路径发信号就要维护这份映射，即第二份事实来源，且随视图增删要同步改——改漏了就是「部分行永远不刷新」 | 信号只带 `cacheKey`，视图按需重查。列表项自己记住 cacheKey，刷新是 O(1) 哈希查找 |
+| 图标请求不去重 | 一次解析的代价与「多少文件引用这个类型」无关，却与「多少文件」成正比。滚动一个全 `.cpp` 的目录就是几百次系统调用换回同一张图 | `IconRequestQueue` 按缓存键去重，把在途请求数从文件数压到扩展名数 |
+| 让缓存层直接吃 `QIcon` | 缓存淘汰顺序、去重、命中统计是最容易写错的部分，而一旦它们依赖 `QIcon`，测试就得有一个能跑图形栈的环境 | `IconEntry::payload` 用不透明的 `QVariant`：生产放 `QIcon`，测试放 `QString`。于是这批逻辑能在只链接 QtCore 的套件里完整覆盖。代价是 `usable()` 只回答「有没有」，所以真实图标源另有三条走真机的用例 |
+| 图标解析与其他后台工作共用线程池 | 一个耗时任务（枚举大目录、读压缩包）会把所有图标请求排到它后面，界面上表现为「整个列表都不出图标」——用户会以为是图标功能坏了，而不是「有个任务在跑」 | `IconService` 用**专属**的单线程 `QThreadPool`；池容量设 1 也顺便免除「提供者实现各自考虑并发」的负担 |
+| 对真实系统图标源做「一定不是回退图标」的断言 | macOS 对未知扩展名（`.zzzznope`）会给**通用文档图标**，来源是 `System` 而不是 `Builtin`——与 Finder 的行为一致，这是正确行为。断言 `hasFallback() == true` 会失败，而看起来像代码有 bug | 按来源分支断言：`System` 时断言 `usable()` 且 `actualPixelSize > 0`；`Builtin` 时才断言 `hasFallback()`。**教训**：对「外部系统会怎么回答」的断言，先确认外部系统的真实行为，不要按自己的直觉写期望值 |
+| `check_spec.py` 的文档计数护栏会误报「N 个条目」这种口语 | 我在架构文档里写「一个 5000 个文件的目录会有 5000 个条目」当例子，护栏的 `(\d+)\s*个条目` 把它当成规格条目数，直接报错 | 该护栏的模式是刻意宽进严出的（宁可误报也不漏报过期数字）。**写文档时别用「N 个条目」表达非规格含义**，换成「N 格」「N 项」；反过来也不要把这个模式改窄——它正是靠宽匹配才抓到了 5 处过期数字 |
