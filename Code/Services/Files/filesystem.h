@@ -46,6 +46,109 @@ QString errorAdvice(FileSystemError error);
 bool isRetryable(FileSystemError error);
 
 ///
+/// \brief 原始系统错误码所属的「域」（PRD: PLAT-008 完成标准第 5 条）。
+///
+/// 为什么分类之外还要留着原始码
+/// --------------------------
+/// PLAT-008 要求「错误信息包含原始系统错误码便于排查」。这件事不能只靠分类，
+/// 因为分类是**有损**的：
+///   - errno 与 Win32 错误码之间是多对一的。Windows 会把「文件被占用」映射成
+///     EACCES，按 errno 归类就会给出「请提权」这种完全错误的建议。
+///   - 同一个分类里的原因可能完全不同。1（EPERM，操作本身被禁止）与
+///     13（EACCES，权限位不允许）都归 PermissionDenied，但排查方向不同：
+///     前者常常是文件带不可变标志或 SELinux 拦截，后者才是 chmod 能解决的。
+///   - 用户拿着原始码能直接搜到系统的官方解释，也能贴进工单——而「操作失败」
+///     这三个字搜不出任何东西。
+///
+/// 所以结论是：分类用于**决定怎么办**，原始码用于**查清为什么**，两者都要留。
+///
+enum class ErrorDomain {
+    None = 0,   ///< 没有原始码（例如成功，或本地产生的分类）
+    Posix,      ///< errno 风格的值
+    Win32,      ///< GetLastError() 的返回值
+    Cocoa,      ///< NSCocoaErrorDomain 的值
+};
+
+/// 稳定的机器可读标识（"none" / "posix" / "win32" / "cocoa"）。
+const char *errorDomainIdentifier(ErrorDomain domain);
+
+///
+/// \brief 一个错误的完整表示：分类 + 原始系统码（PRD: PLAT-008）。
+///
+/// 为什么把出参从 FileSystemError 换成这个结构体，而不是加一个新函数
+/// ------------------------------------------------------------------
+/// 「错误信息包含原始系统错误码」听起来像是个显示层需求，加个函数就够了。
+/// 但真正做到需要原始码**在系统调用出错的那一刻**被记下来，然后一路传到界面。
+/// 如果接口上只有 FileSystemError，那个码在读出来的下一行就被丢掉了，
+/// 后面任何地方都补不回来——这正是改造前 filesystem_posix.cpp 里每处
+/// `*error = classifySystemError(errno)` 的状态。
+///
+/// 于是把出参本身换成携带原始码的类型。为了让这个改动不至于把调用方全部推倒：
+///   - 提供了从 FileSystemError 的隐式构造，因此 `*error = FileSystemError::None`
+///     这类既有写法仍然有效；
+///   - 提供了到 FileSystemError 的隐式转换，因此 `if (error == FileSystemError::Busy)`
+///     这类既有比较也仍然有效。
+///
+/// 但**只有**真正拿到系统错误码的地方必须改用 fromSystemError()（而不是
+/// classifySystemError()），否则原始码仍然是丢的——这一点没法靠类型系统强制，
+/// 因此写在这里：`from*Error()` 是唯一正确的写法，`classify*()` 只用于分类本身。
+///
+struct ErrorCode
+{
+    /// 「该怎么办」。界面文案与建议由它决定。
+    FileSystemError category = FileSystemError::None;
+
+    /// 原始码属于哪个域。没有原始码时为 None。
+    ErrorDomain domain = ErrorDomain::None;
+
+    /// 原始码的字面值。含义由 domain 决定。
+    qint64 raw = 0;
+
+    ErrorCode() = default;
+
+    /// 只带分类、不带原始码。**不是** explicit：让既有的
+    /// `*error = FileSystemError::X` 写法继续可用。
+    ErrorCode(FileSystemError onlyCategory) : category(onlyCategory) {}
+
+    /// 是否表示成功。
+    bool ok() const { return category == FileSystemError::None; }
+
+    /// 是否带着一个可以拿去排查的原始码。
+    bool hasRawCode() const { return domain != ErrorDomain::None; }
+
+    /// 隐式转回分类。让既有比较（`error == FileSystemError::Busy`）继续可用。
+    operator FileSystemError() const { return category; }
+};
+
+///
+/// \brief 原始码的可读名字，例如 "EACCES" / "ERROR_SHARING_VIOLATION" /
+///        "NSFileWriteFileExistsError"。不认识的取值返回 nullptr。
+///
+/// 刻意返回 nullptr 而不是拼一个 "UNKNOWN_13" 出来：拿到 nullptr 的调用方
+/// 会退化成「只显示数字」，而一个看起来像名字的假名字会让人以为是官方叫法。
+///
+const char *rawErrorName(ErrorDomain domain, qint64 raw);
+
+///
+/// \brief 原始码的一行描述，例如 `errno 13（EACCES）`。
+///
+/// 没有原始码（domain == None）时返回空串——界面据此决定要不要显示这一段，
+/// 而不是显示一句「原始错误码：（无）」。
+///
+QString errorDetail(const ErrorCode &code);
+
+///
+/// \brief 面向用户的一句话说明，末尾附上原始系统错误码（PRD: PLAT-008 第 5 条）。
+///
+/// 与 errorMessage() 的分工：
+///   - errorMessage() 只讲「出了什么事」，用于不希望出现技术细节的场合；
+///   - errorReport() 在其后补上「系统到底说了什么」，用于排查与日志。
+/// 处置建议不在这里拼接，因为它取决于上下文（单条 vs 批量，见 batch.h），
+/// 由调用方用 errorAdvice() 决定怎么显示。
+///
+QString errorReport(const ErrorCode &code, const QString &path = QString());
+
+///
 /// \brief 把 errno 风格的系统错误码归类。
 ///
 /// 放在平台无关层而不是各自的平台实现里，理由有两条：
@@ -126,6 +229,19 @@ constexpr long ManagerUnmountBusy = 769;    ///< NSFileManagerUnmountBusyError
 
 /// 把 Cocoa 错误码归类。POSIX 域的错误码请走 classifySystemError()。
 FileSystemError classifyCocoaError(long code);
+
+///
+/// \brief 构造一个「分类 + 原始码」都齐全的 ErrorCode。
+///
+/// 这三个函数是**唯一正确的错误出口**：凡是真正拿到了系统错误码的地方，
+/// 都必须用它们，而不是用上面的 classify*()（后者只回答「属于哪一类」，
+/// 原始码会被丢掉，第 5 条完成标准也就落空了）。
+///
+/// 传 0 表示成功：此时 category 与 domain 都为空，raw 为 0。
+///
+ErrorCode fromSystemError(int systemError);
+ErrorCode fromWindowsError(unsigned long code);
+ErrorCode fromCocoaError(long code);
 
 ///
 /// \brief 时间戳：内部统一为「UTC 纪元起的纳秒数」（PRD: PLAT-002）。
@@ -235,6 +351,11 @@ struct FileInfo
 /// 传了指针时，成功必须写 FileSystemError::None，失败必须写具体分类——
 /// 不允许出现「返回 false 但 error 仍是 None」的情况，否则调用方拿不到原因。
 ///
+/// 出参类型是 ErrorCode 而不是 FileSystemError：后者只能说明「属于哪一类」，
+/// 而 PLAT-008 还要求把系统给出的原始错误码交给用户便于排查。分类与原始码
+/// 必须一起从系统调用处传出来，所以它们在同一个结构体里（见 ErrorCode 的说明）。
+/// 平台实现应使用 fromSystemError() / fromWindowsError() 填这个出参。
+///
 class FileSystem
 {
 public:
@@ -252,7 +373,7 @@ public:
 
     /// 规范化：统一分隔符、去掉冗余分隔符与结尾分隔符（根目录除外）、
     /// 解析 `.` 与 `..`。不做符号链接解析（那是 realPath 的事）。
-    virtual QString pathNormalize(const QString &path, FileSystemError *error = nullptr) const = 0;
+    virtual QString pathNormalize(const QString &path, ErrorCode *error = nullptr) const = 0;
 
     virtual bool isAbsolutePath(const QString &path) const = 0;
 
@@ -275,21 +396,21 @@ public:
     /// 跟随会把这个区别永久抹掉，无法在更上层恢复。
     ///
     /// 需要目标的元数据时，先 linkTarget() 取出指向，再对它调用 stat()。
-    virtual FileInfo stat(const QString &path, FileSystemError *error = nullptr) const = 0;
+    virtual FileInfo stat(const QString &path, ErrorCode *error = nullptr) const = 0;
 
     /// 读取符号链接指向的原始路径（不解析其中的相对部分，也不递归）。
     /// 路径不是符号链接、或读取失败时返回空串并写 error。
-    virtual QString linkTarget(const QString &path, FileSystemError *error = nullptr) const = 0;
+    virtual QString linkTarget(const QString &path, ErrorCode *error = nullptr) const = 0;
 
     /// 判断存在性。比 stat 便宜（某些平台可以只查目录项）。
-    virtual bool exists(const QString &path, FileSystemError *error = nullptr) const = 0;
+    virtual bool exists(const QString &path, ErrorCode *error = nullptr) const = 0;
 
     /// 枚举目录内容。**不递归**，且不含 `.` 与 `..`。
     ///
     /// 返回顺序不做保证：上层若需要稳定顺序必须自己排序。这样实现可以按平台
     /// 最快的方式枚举，而不必为了「看起来有序」做一遍额外排序。
     virtual QVector<FileInfo> enumerateDirectory(const QString &path,
-                                                 FileSystemError *error = nullptr) const = 0;
+                                                 ErrorCode *error = nullptr) const = 0;
 
     // --- 写入 --------------------------------------------------------------
     //
@@ -300,11 +421,11 @@ public:
 
     /// 设置时间戳。不需要修改的那一项传 isValid() == false 的 FileTime。
     virtual bool setTimes(const QString &path, const FileTime &lastModified,
-                          const FileTime &lastAccessed, FileSystemError *error = nullptr) const = 0;
+                          const FileTime &lastAccessed, ErrorCode *error = nullptr) const = 0;
 
     /// 设置属性。未包含在 attributes 里的属性**保持不变**（不是清零）。
     virtual bool setAttributes(const QString &path, FileAttributes attributes,
-                               FileSystemError *error = nullptr) const = 0;
+                               ErrorCode *error = nullptr) const = 0;
 
     // 说明：这里曾经有一个 deleteToTrash()。PLAT-003 落地时它被移到了
     // TrashService（见 trash.h），而不是留在这里转发。

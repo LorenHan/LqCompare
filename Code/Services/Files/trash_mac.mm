@@ -50,25 +50,40 @@ static_assert(CocoaError::ManagerUnmountBusy == NSFileManagerUnmountBusyError, "
 
 namespace {
 
-/// 把 NSError 归类成本项目的错误分类。
+/// 把 NSError 归类成本项目的 ErrorCode（分类 + 原始系统码）。
 ///
 /// 先看 domain 再看 code：160 与 22 这类数字在两个域里含义完全不同，
 /// 不分域直接比数字会把「文件正在被写入」误判成「无效参数」。
-FileSystemError classifyNSError(NSError *error)
+///
+/// 为什么要连原始码一起交出来（PLAT-008 第 5 条）
+/// -------------------------------------------
+/// macOS 的回收站失败几乎总是 NSError，而 NSError 的 domain + code 就是系统
+/// 给出的原话。用户拿 `NSCocoaErrorDomain 513` 能直接搜到官方解释，
+/// 也能贴进工单；拿「没有权限」这四个字什么都查不到。
+/// 而且同一个分类下原因可能不同：513（写无权限）与 257（读无权限）都归
+/// PermissionDenied，但一个是 chmod +w 能解决，另一个要先看目录的 ACL。
+///
+ErrorCode fromNSError(NSError *error)
 {
-    if (error == nil)
-        return FileSystemError::Unknown;
+    if (error == nil) {
+        // 没拿到 NSError 对象却报告失败：这本身是异常情况。
+        // 仍然给一个明确的分类，绝不让调用方在失败路径上拿到「成功」。
+        return ErrorCode(FileSystemError::Unknown);
+    }
 
     if ([error.domain isEqualToString:NSCocoaErrorDomain])
-        return classifyCocoaError(static_cast<long>([error code]));
+        return fromCocoaError(static_cast<long>([error code]));
 
     // POSIX 域里放的就是 errno，直接交给已有的分类函数。
     // `NSPOSIXErrorDomain` 与 `NSOSStatusErrorDomain` 是另外两个常见的域，
-    // 后者（Carbon 时代的 OSStatus）在文件系统操作里极少出现，落到 Unknown。
+    // 后者（Carbon 时代的 OSStatus）在文件系统操作里极少出现。
+    //
+    // 这里刻意**不**为未知域硬凑一个 domain：把 OSStatus 的数字标成
+    // NSCocoaErrorDomain 会让用户拿着一个错误的域名去搜，比只给数字更误导。
     if ([error.domain isEqualToString:NSPOSIXErrorDomain])
-        return classifySystemError(static_cast<int>([error code]));
+        return fromSystemError(static_cast<int>([error code]));
 
-    return FileSystemError::Unknown;
+    return ErrorCode(FileSystemError::Unknown);
 }
 
 /// 路径所在的卷根 URL（例如 / 或 /Volumes/USB）。
@@ -102,7 +117,7 @@ public:
         return QDir::homePath() + QStringLiteral("/.Trash");
     }
 
-    bool undoLastDelete(FileSystemError *error) const override;
+    bool undoLastDelete(ErrorCode *error) const override;
 
 protected:
     TrashReport trashPaths(const QStringList &paths) const override;
@@ -186,7 +201,7 @@ TrashReport MacTrashService::trashPaths(const QStringList &paths) const
                 record.error = FileSystemError::None;
                 record.trashedPath = QString::fromNSString([resultingURL path]);
             } else {
-                record.error = classifyNSError(error);
+                record.error = fromNSError(error);
             }
 
             report.records.append(record);
@@ -196,7 +211,7 @@ TrashReport MacTrashService::trashPaths(const QStringList &paths) const
     return report;
 }
 
-bool MacTrashService::undoLastDelete(FileSystemError *error) const
+bool MacTrashService::undoLastDelete(ErrorCode *error) const
 {
     const TrashReport report = lastDelete();
 
@@ -233,7 +248,7 @@ bool MacTrashService::undoLastDelete(FileSystemError *error) const
 
             if (![manager moveItemAtURL:fromURL toURL:toURL error:&moveError]) {
                 if (error)
-                    *error = classifyNSError(moveError);
+                    *error = fromNSError(moveError);
                 return false;
             }
         }

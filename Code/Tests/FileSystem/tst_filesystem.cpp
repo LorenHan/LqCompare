@@ -23,6 +23,18 @@ char *toString(const FileSystemError &error)
     return qstrdup(errorIdentifier(error));
 }
 
+/// ErrorCode 的显示：分类 + 原始系统码。
+///
+/// 只显示分类是不够的：PLAT-008 要区分的正是「同一分类下的不同原始码」
+/// （EPERM 与 EACCES 都归 PermissionDenied，但排查方向完全不同）。
+/// 断言失败时看不到原始码，就等于看不到区别。
+template <>
+char *toString(const ErrorCode &error)
+{
+    const QString text = errorReport(error);
+    return qstrdup(qPrintable(text.isEmpty() ? QStringLiteral("none") : text));
+}
+
 } // namespace QTest
 
 namespace {
@@ -506,7 +518,7 @@ void TstFileSystem::fakeStatReportsInjectedError()
     Test::FakeFileSystem fileSystem;
     fileSystem.addFile(QStringLiteral("/data/report.txt"), 128);
 
-    FileSystemError error = FileSystemError::None;
+    ErrorCode error;
     const FileInfo ok = fileSystem.stat(QStringLiteral("/data/report.txt"), &error);
     QVERIFY(ok.exists);
     QCOMPARE(ok.size, quint64(128));
@@ -525,7 +537,7 @@ void TstFileSystem::fakeStatOnMissingPathIsNotFound()
     Test::FakeFileSystem fileSystem;
     fileSystem.addFile(QStringLiteral("/a/b.txt"));
 
-    FileSystemError error = FileSystemError::None;
+    ErrorCode error;
     const FileInfo missing = fileSystem.stat(QStringLiteral("/a/does-not-exist.txt"), &error);
     QVERIFY(!missing.exists);
     QCOMPARE(error, FileSystemError::NotFound);
@@ -537,7 +549,7 @@ void TstFileSystem::fakeEnumerateInjectedBusyStopsEnumeration()
     fileSystem.addFile(QStringLiteral("/locked/a.txt"));
     fileSystem.addFile(QStringLiteral("/locked/b.txt"));
 
-    FileSystemError error = FileSystemError::None;
+    ErrorCode error;
     QCOMPARE(fileSystem.enumerateDirectory(QStringLiteral("/locked"), &error).size(), 2);
     QCOMPARE(error, FileSystemError::None);
 
@@ -555,7 +567,7 @@ void TstFileSystem::fakeEnumerateOnFileIsNotDirectory()
     Test::FakeFileSystem fileSystem;
     fileSystem.addFile(QStringLiteral("/a/b.txt"));
 
-    FileSystemError error = FileSystemError::None;
+    ErrorCode error;
     const QVector<FileInfo> entries = fileSystem.enumerateDirectory(QStringLiteral("/a/b.txt"), &error);
     QVERIFY(entries.isEmpty());
     QCOMPARE(error, FileSystemError::NotDirectory);
@@ -567,7 +579,7 @@ void TstFileSystem::fakeExistsDistinguishesMissingFromDenied()
     fileSystem.addFile(QStringLiteral("/secret/keys.txt"));
 
     // 「不存在」是确定的答案，不是失败。
-    FileSystemError error = FileSystemError::None;
+    ErrorCode error;
     QVERIFY(!fileSystem.exists(QStringLiteral("/secret/nope.txt"), &error));
     QCOMPARE(error, FileSystemError::NotFound);
 
@@ -591,7 +603,7 @@ void TstFileSystem::fakeSetTimesHonoursInjectedReadOnly()
     fileSystem.fail(Test::FakeFileSystem::Operation::SetTimes, QStringLiteral("/a/b.txt"),
                     FileSystemError::ReadOnly);
 
-    FileSystemError error = FileSystemError::None;
+    ErrorCode error;
     const bool ok = fileSystem.setTimes(QStringLiteral("/a/b.txt"),
                                         FileTime::fromSecondsSinceEpoch(2000), FileTime(), &error);
     QVERIFY(!ok);
@@ -599,7 +611,7 @@ void TstFileSystem::fakeSetTimesHonoursInjectedReadOnly()
 
     // 失败后原值必须保持不变——不能出现「报错了但其实改了一半」。
     fileSystem.clearFailures();
-    FileSystemError readError = FileSystemError::None;
+    ErrorCode readError;
     QCOMPARE(fileSystem.stat(QStringLiteral("/a/b.txt"), &readError).lastModified, original);
 }
 
@@ -611,7 +623,7 @@ void TstFileSystem::fakeSetTimesLeavesUnspecifiedTimestampAlone()
     const FileTime accessed = FileTime::fromSecondsSinceEpoch(500);
     fileSystem.setModifiedTime(QStringLiteral("/a/b.txt"), FileTime::fromSecondsSinceEpoch(1000));
 
-    FileSystemError error = FileSystemError::None;
+    ErrorCode error;
     // 只传「修改时间」，访问时间传无效值表示「不要动它」。
     QVERIFY(fileSystem.setTimes(QStringLiteral("/a/b.txt"), FileTime::fromSecondsSinceEpoch(2000),
                                FileTime(), &error));
@@ -630,7 +642,7 @@ void TstFileSystem::fakeChecksCaseInsensitivityUnderWindowsSemantics()
     fileSystem.useWindowsSemantics();
     fileSystem.addFile(QStringLiteral("C:\\Data\\Report.TXT"), 10);
 
-    FileSystemError error = FileSystemError::None;
+    ErrorCode error;
     // Windows 语义下不同大小写指向同一个文件。
     QVERIFY(fileSystem.stat(QStringLiteral("c:\\data\\report.txt"), &error).exists);
     QCOMPARE(error, FileSystemError::None);
@@ -652,7 +664,7 @@ void TstFileSystem::fakeReproducesHeldFileScenario()
     fileSystem.fail(Test::FakeFileSystem::Operation::SetAttributes,
                     QStringLiteral("/work/output.bin"), FileSystemError::Busy);
 
-    FileSystemError error = FileSystemError::None;
+    ErrorCode error;
     const bool ok = fileSystem.setAttributes(QStringLiteral("/work/output.bin"),
                                              FileAttribute::ReadOnly, &error);
     QVERIFY(!ok);
@@ -668,7 +680,7 @@ void TstFileSystem::fakeAddDirectoryBuildsAncestors()
     Test::FakeFileSystem fileSystem;
     fileSystem.addDirectory(QStringLiteral("/a/b/c"));
 
-    FileSystemError error = FileSystemError::None;
+    ErrorCode error;
     QVERIFY(fileSystem.stat(QStringLiteral("/a"), &error).exists);
     QVERIFY(fileSystem.stat(QStringLiteral("/a/b"), &error).exists);
     const FileInfo leaf = fileSystem.stat(QStringLiteral("/a/b/c"), &error);
@@ -693,7 +705,7 @@ void TstFileSystem::fakeEnumerateListsOnlyDirectChildren()
     fileSystem.addFile(QStringLiteral("/root/a.txt"));
     fileSystem.addFile(QStringLiteral("/root/sub/deep.txt"));
 
-    FileSystemError error = FileSystemError::None;
+    ErrorCode error;
     const QVector<FileInfo> entries = fileSystem.enumerateDirectory(QStringLiteral("/root"), &error);
     QCOMPARE(error, FileSystemError::None);
 
@@ -745,7 +757,7 @@ void TstFileSystem::nativeFileSystemReadsRealDirectory()
 
     const std::unique_ptr<FileSystem> fileSystem(createNativeFileSystem());
 
-    FileSystemError error = FileSystemError::None;
+    ErrorCode error;
     QVERIFY(fileSystem->exists(root, &error));
     QCOMPARE(error, FileSystemError::None);
 

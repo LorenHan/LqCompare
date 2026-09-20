@@ -81,13 +81,15 @@ LPCWSTR toWide(const QString &path)
     return reinterpret_cast<LPCWSTR>(path.utf16());
 }
 
-QString lastErrorMessage()
-{
-    const DWORD code = ::GetLastError();
-    return QStringLiteral("Win32 错误码 %1（%2）")
-        .arg(static_cast<uint>(code))
-        .arg(QString::fromLatin1(errorIdentifier(classifyWindowsErrorCode(code))));
-}
+// 这里曾经有一个自己拼字符串的 lastErrorMessage()（"Win32 错误码 %1（%2）"）。
+// PLAT-008 落地时把它去掉了，原因有两个：
+//   1. 它和新的 errorDetail() 是同一件事的两份实现。两份实现的必然结果是
+//      界面上同时出现「Win32 错误码 32（busy）」与
+//      「Win32 32（ERROR_SHARING_VIOLATION）」两种写法——用户看到的是
+//      两个系统在报错，排查时会以为是不同的故障。
+//   2. 它当时没有任何调用点（grep 确认过）。留着一段没人用、又要跟着分类
+//      一起改的重复实现，比删掉更容易出问题。
+// 现在需要把 Win32 原始码变成可读文本时，用 errorDetail(fromWindowsError(code))。
 
 /// 把 WIN32_FIND_DATAW 的属性位翻译成 FileAttributes。
 FileAttributes attributesFromWin32(DWORD win32Attributes)
@@ -136,12 +138,12 @@ FileInfo infoFromWin32(const QString &path, const WIN32_FIND_DATAW &data)
 /// 用 FindFirstFile 而不是 GetFileAttributesEx，是为了让 stat 与
 /// enumerateDirectory 拿到**完全相同**的字段集合与语义——
 /// 两条路径若用不同 API，就可能出现「列表里的时间和属性面板里的时间不一致」。
-bool findFirst(const QString &path, WIN32_FIND_DATAW *out, FileSystemError *error)
+bool findFirst(const QString &path, WIN32_FIND_DATAW *out, ErrorCode *error)
 {
     const HANDLE handle = ::FindFirstFileW(toWide(path), out);
     if (handle == INVALID_HANDLE_VALUE) {
         if (error)
-            *error = classifyWindowsErrorCode(::GetLastError());
+            *error = fromWindowsError(::GetLastError());
         return false;
     }
     ::FindClose(handle);
@@ -166,7 +168,7 @@ public:
 
     QChar separator() const override { return QLatin1Char('\\'); }
 
-    QString pathNormalize(const QString &path, FileSystemError *error) const override
+    QString pathNormalize(const QString &path, ErrorCode *error) const override
     {
         if (error)
             *error = FileSystemError::None;
@@ -187,7 +189,7 @@ public:
         return PathUtils::toExtendedPath(normalized, windowsStyle());
     }
 
-    FileInfo stat(const QString &path, FileSystemError *error) const override
+    FileInfo stat(const QString &path, ErrorCode *error) const override
     {
         // FindFirstFileW 对符号链接返回的是链接自身的属性，
         // 与 POSIX 的 lstat 语义一致（不是 GetFileAttributesEx 的跟随语义）。
@@ -197,7 +199,7 @@ public:
         return infoFromWin32(path, data);
     }
 
-    QString linkTarget(const QString &path, FileSystemError *error) const override
+    QString linkTarget(const QString &path, ErrorCode *error) const override
     {
         WIN32_FIND_DATAW data;
         if (!findFirst(path, &data, error))
@@ -218,7 +220,7 @@ public:
 
         if (handle == INVALID_HANDLE_VALUE) {
             if (error)
-                *error = classifyWindowsErrorCode(::GetLastError());
+                *error = fromWindowsError(::GetLastError());
             return QString();
         }
 
@@ -233,7 +235,7 @@ public:
 
         if (!ok) {
             if (error)
-                *error = classifyWindowsErrorCode(::GetLastError());
+                *error = fromWindowsError(::GetLastError());
             return QString();
         }
 
@@ -250,13 +252,13 @@ public:
         return PathUtils::normalize(raw, windowsStyle());
     }
 
-    bool exists(const QString &path, FileSystemError *error) const override
+    bool exists(const QString &path, ErrorCode *error) const override
     {
         WIN32_FIND_DATAW data;
         return findFirst(path, &data, error);
     }
 
-    QVector<FileInfo> enumerateDirectory(const QString &path, FileSystemError *error) const override
+    QVector<FileInfo> enumerateDirectory(const QString &path, ErrorCode *error) const override
     {
         QVector<FileInfo> entries;
 
@@ -276,9 +278,11 @@ public:
             // 这是「空目录」而不是「失败」。把它当失败会让文件夹比对
             // 把「目标为空」误判成「读不到目标」。
             if (error) {
-                *error = (code == Win32Error::FileNotFound)
-                             ? FileSystemError::None
-                             : classifyWindowsErrorCode(code);
+                // ERROR_FILE_NOT_FOUND 时用空的 ErrorCode 表示成功（读到了「空目录」）。
+                // 这里刻意不给它带原始码：带上的话，一个成功的路径上会残留
+                // 一个看起来像故障的错误码，排查时反而误导。
+                *error = (code == Win32Error::FileNotFound) ? ErrorCode()
+                                                            : fromWindowsError(code);
             }
             return entries;
         }
@@ -307,7 +311,7 @@ public:
     }
 
     bool setTimes(const QString &path, const FileTime &lastModified,
-                  const FileTime &lastAccessed, FileSystemError *error) const override
+                  const FileTime &lastAccessed, ErrorCode *error) const override
     {
         // 需要 FILE_WRITE_ATTRIBUTES 才能改时间戳。用 BACKUP_SEMANTICS
         // 以便对目录也生效（否则目录会因缺少 FILE_FLAG_BACKUP_SEMANTICS 而无法打开）。
@@ -318,7 +322,7 @@ public:
 
         if (handle == INVALID_HANDLE_VALUE) {
             if (error)
-                *error = classifyWindowsErrorCode(::GetLastError());
+                *error = fromWindowsError(::GetLastError());
             return false;
         }
 
@@ -343,7 +347,7 @@ public:
 
         if (!ok) {
             if (error)
-                *error = classifyWindowsErrorCode(::GetLastError());
+                *error = fromWindowsError(::GetLastError());
             return false;
         }
         if (error)
@@ -352,7 +356,7 @@ public:
     }
 
     bool setAttributes(const QString &path, FileAttributes attributes,
-                       FileSystemError *error) const override
+                       ErrorCode *error) const override
     {
         WIN32_FIND_DATAW data;
         if (!findFirst(path, &data, error))
@@ -376,7 +380,7 @@ public:
 
         if (!::SetFileAttributesW(toWide(toNativePath(path)), win32Attributes)) {
             if (error)
-                *error = classifyWindowsErrorCode(::GetLastError());
+                *error = fromWindowsError(::GetLastError());
             return false;
         }
         if (error)

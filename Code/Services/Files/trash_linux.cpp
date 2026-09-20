@@ -185,7 +185,7 @@ public:
         return directory.isEmpty() ? QString() : directory;
     }
 
-    bool undoLastDelete(FileSystemError *error) const override;
+    bool undoLastDelete(ErrorCode *error) const override;
 
 protected:
     TrashReport trashPaths(const QStringList &paths) const override;
@@ -291,7 +291,7 @@ TrashReport LinuxTrashService::trashPaths(const QStringList &paths) const
         // 顺序不能反：先写 .trashinfo 而搬移失败的话，回收站里会留下一条
         // 指向不存在条目的记录，桌面环境的回收站里就会出现一个点不开的幽灵条目。
         if (::rename(encoded(path).constData(), encoded(target).constData()) != 0) {
-            record.error = classifySystemError(errno);
+            record.error = fromSystemError(errno);
             report.records.append(record);
             continue;
         }
@@ -308,6 +308,12 @@ TrashReport LinuxTrashService::trashPaths(const QStringList &paths) const
         const QByteArray contents =
                 xdgTrashInfoContents(path, QDateTime::currentDateTime()).toUtf8();
 
+        // 先把 errno 清零：QFile 的 open/write 内部会调用若干系统调用，
+        // 失败时**不一定**把 errno 设成有意义的值（Qt 自己可能已经覆盖过）。
+        // 不清零的话，下面读到的可能是上一次 rename 残留的值——
+        // 那会把一个「磁盘满」报成「没有权限」，比不给原始码更误导。
+        errno = 0;
+
         bool infoWritten = false;
         if (infoFile.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
             infoWritten = infoFile.write(contents) == contents.size();
@@ -317,7 +323,11 @@ TrashReport LinuxTrashService::trashPaths(const QStringList &paths) const
         if (!infoWritten) {
             ::rename(encoded(target).constData(), encoded(path).constData());
             infoFile.remove();
-            record.error = classifySystemError(errno);
+            // 只有当 errno 确实被设置时才带上原始码；否则明确报一个不带原始码的
+            // Unknown。PLAT-008 要求「错误信息包含原始系统错误码便于排查」，
+            // 前提是那个码**确实是这次失败的原因**——凑一个数字出来反而更难查。
+            record.error = (errno != 0) ? fromSystemError(errno)
+                                        : ErrorCode(FileSystemError::Unknown);
             report.records.append(record);
             continue;
         }
@@ -330,7 +340,7 @@ TrashReport LinuxTrashService::trashPaths(const QStringList &paths) const
     return report;
 }
 
-bool LinuxTrashService::undoLastDelete(FileSystemError *error) const
+bool LinuxTrashService::undoLastDelete(ErrorCode *error) const
 {
     const TrashReport report = lastDelete();
 
@@ -380,7 +390,7 @@ bool LinuxTrashService::undoLastDelete(FileSystemError *error) const
 
         if (::rename(encoded(record.trashedPath).constData(), encoded(original).constData()) != 0) {
             if (error)
-                *error = classifySystemError(errno);
+                *error = fromSystemError(errno);
             return false;
         }
 

@@ -60,12 +60,12 @@ void FakeTrashService::setAvailabilityFor(const QString &path, TrashAvailability
     m_availabilityByPath.insert(normalize(path), availability);
 }
 
-void FakeTrashService::failTrashPath(const QString &path, FileSystemError error)
+void FakeTrashService::failTrashPath(const QString &path, const ErrorCode &error)
 {
     m_trashFailures.insert(normalize(path), error);
 }
 
-void FakeTrashService::failUndo(FileSystemError error)
+void FakeTrashService::failUndo(const ErrorCode &error)
 {
     m_undoFailure = error;
 }
@@ -196,7 +196,7 @@ TrashReport FakeTrashService::trashPaths(const QStringList &paths) const
     return report;
 }
 
-bool FakeTrashService::undoLastDelete(FileSystemError *error) const
+bool FakeTrashService::undoLastDelete(ErrorCode *error) const
 {
     m_callLog.append(QStringLiteral("undoLastDelete:"));
 

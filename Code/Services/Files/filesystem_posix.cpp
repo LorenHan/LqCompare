@@ -124,7 +124,7 @@ FileInfo infoFromStat(const QString &path, const struct stat &status)
 }
 
 /// 执行 lstat 并把 errno 归类。
-bool lstatPath(const QString &path, struct stat *out, FileSystemError *error)
+bool lstatPath(const QString &path, struct stat *out, ErrorCode *error)
 {
     errno = 0;
     if (::lstat(toNative(path).constData(), out) == 0) {
@@ -133,7 +133,7 @@ bool lstatPath(const QString &path, struct stat *out, FileSystemError *error)
         return true;
     }
     if (error)
-        *error = classifySystemError(errno);
+        *error = fromSystemError(errno);
     return false;
 }
 
@@ -168,7 +168,7 @@ public:
 
     QChar separator() const override { return QLatin1Char('/'); }
 
-    QString pathNormalize(const QString &path, FileSystemError *error) const override
+    QString pathNormalize(const QString &path, ErrorCode *error) const override
     {
         if (error)
             *error = FileSystemError::None;
@@ -187,7 +187,7 @@ public:
         return path;
     }
 
-    FileInfo stat(const QString &path, FileSystemError *error) const override
+    FileInfo stat(const QString &path, ErrorCode *error) const override
     {
         struct stat status;
         if (!lstatPath(path, &status, error))
@@ -195,7 +195,7 @@ public:
         return infoFromStat(path, status);
     }
 
-    QString linkTarget(const QString &path, FileSystemError *error) const override
+    QString linkTarget(const QString &path, ErrorCode *error) const override
     {
         // PATH_MAX 是系统对单次 readlink 缓冲的实际上限。不写死 4096：
         // 用动态增长的小缓冲循环读，避免在极长链接上截断。
@@ -210,7 +210,7 @@ public:
             const ssize_t length = ::readlink(native.constData(), buffer.data(), buffer.size());
             if (length < 0) {
                 if (error)
-                    *error = classifySystemError(errno);
+                    *error = fromSystemError(errno);
                 return QString();
             }
             if (length < buffer.size()) {
@@ -232,7 +232,7 @@ public:
         }
     }
 
-    bool exists(const QString &path, FileSystemError *error) const override
+    bool exists(const QString &path, ErrorCode *error) const override
     {
         struct stat status;
         if (lstatPath(path, &status, error))
@@ -242,7 +242,7 @@ public:
         return false;
     }
 
-    QVector<FileInfo> enumerateDirectory(const QString &path, FileSystemError *error) const override
+    QVector<FileInfo> enumerateDirectory(const QString &path, ErrorCode *error) const override
     {
         QVector<FileInfo> entries;
 
@@ -250,7 +250,7 @@ public:
         DIR *directory = ::opendir(native.constData());
         if (directory == nullptr) {
             if (error)
-                *error = classifySystemError(errno);
+                *error = fromSystemError(errno);
             return entries;
         }
 
@@ -265,7 +265,7 @@ public:
             struct dirent *entry = ::readdir(directory);
             if (entry == nullptr) {
                 if (errno != 0 && error)
-                    *error = classifySystemError(errno);
+                    *error = fromSystemError(errno);
                 break;
             }
 
@@ -300,7 +300,7 @@ public:
     }
 
     bool setTimes(const QString &path, const FileTime &lastModified,
-                  const FileTime &lastAccessed, FileSystemError *error) const override
+                  const FileTime &lastAccessed, ErrorCode *error) const override
     {
         // utimensat 一次设置两个时间戳，且支持纳秒精度。
         // 不修改的那一项用 UTIME_OMIT 明确表示「保持原值」——
@@ -318,12 +318,12 @@ public:
             return true;
         }
         if (error)
-            *error = classifySystemError(errno);
+            *error = fromSystemError(errno);
         return false;
     }
 
     bool setAttributes(const QString &path, FileAttributes attributes,
-                       FileSystemError *error) const override
+                       ErrorCode *error) const override
     {
         struct stat status;
         if (!lstatPath(path, &status, error))
@@ -346,7 +346,7 @@ public:
             return true;
         }
         if (error)
-            *error = classifySystemError(errno);
+            *error = fromSystemError(errno);
         return false;
     }
 

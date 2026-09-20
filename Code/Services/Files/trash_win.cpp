@@ -116,7 +116,7 @@ public:
         return QStringLiteral("shell:RecycleBinFolder");
     }
 
-    bool undoLastDelete(FileSystemError *error) const override;
+    bool undoLastDelete(ErrorCode *error) const override;
 
 protected:
     TrashReport trashPaths(const QStringList &paths) const override;
@@ -209,7 +209,12 @@ TrashReport WindowsTrashService::trashPaths(const QStringList &paths) const
             // 而这里正确的处置正是「过一会儿再试一次」。
             record.error = FileSystemError::Busy;
         } else {
-            record.error = classifyWindowsErrorCode(static_cast<unsigned long>(shellResult));
+            // 注意这里的原始码不是 GetLastError()，而是 SHFileOperationW 的返回值，
+            // 也就是 Shell 的 DE_* 系列（例如 0x7C = DE_INVALIDFILES）。
+            // 它们不在 Win32Error 的常量表里，因此 rawErrorName() 会返回 nullptr，
+            // 用户看到的是「Win32 124」这样的数字——但至少能拿去搜 DE_INVALIDFILES，
+            // 而改造前这里连数字都不会留下。
+            record.error = fromWindowsError(static_cast<unsigned long>(shellResult));
         }
 
         report.records.append(record);
@@ -218,7 +223,7 @@ TrashReport WindowsTrashService::trashPaths(const QStringList &paths) const
     return report;
 }
 
-bool WindowsTrashService::undoLastDelete(FileSystemError *error) const
+bool WindowsTrashService::undoLastDelete(ErrorCode *error) const
 {
     // Windows 上无法还原「最近一次删除」——这是平台能力限制，不是没实现。
     //

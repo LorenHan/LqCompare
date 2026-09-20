@@ -81,7 +81,7 @@ public:
 
     /// 让某个操作在某个路径上失败并返回指定错误。
     /// 同一个操作不同路径可以注入不同错误；对父目录注入不影响的子路径。
-    void fail(Operation operation, const QString &path, FileSystemError error);
+    void fail(Operation operation, const QString &path, const ErrorCode &error);
 
     /// 取消全部故障注入。
     void clearFailures();
@@ -112,17 +112,17 @@ public:
 
     Qt::CaseSensitivity caseSensitivity() const override;
     QChar separator() const override;
-    QString pathNormalize(const QString &path, FileSystemError *error) const override;
+    QString pathNormalize(const QString &path, ErrorCode *error) const override;
     bool isAbsolutePath(const QString &path) const override;
     QString toNativePath(const QString &path) const override;
-    FileInfo stat(const QString &path, FileSystemError *error) const override;
-    QString linkTarget(const QString &path, FileSystemError *error) const override;
-    bool exists(const QString &path, FileSystemError *error) const override;
-    QVector<FileInfo> enumerateDirectory(const QString &path, FileSystemError *error) const override;
+    FileInfo stat(const QString &path, ErrorCode *error) const override;
+    QString linkTarget(const QString &path, ErrorCode *error) const override;
+    bool exists(const QString &path, ErrorCode *error) const override;
+    QVector<FileInfo> enumerateDirectory(const QString &path, ErrorCode *error) const override;
     bool setTimes(const QString &path, const FileTime &lastModified, const FileTime &lastAccessed,
-                  FileSystemError *error) const override;
+                  ErrorCode *error) const override;
     bool setAttributes(const QString &path, FileAttributes attributes,
-                       FileSystemError *error) const override;
+                       ErrorCode *error) const override;
     QString platformName() const override;
 
     /// 稳定标识，用于错误信息与测试名称。
@@ -131,7 +131,7 @@ public:
 private:
     /// 记录一次调用并查询是否注入了故障。
     /// 返回 true 表示「已注入故障」，此时 error 被写入注入的错误。
-    bool intercept(Operation operation, const QString &path, FileSystemError *error) const;
+    bool intercept(Operation operation, const QString &path, ErrorCode *error) const;
 
     bool hasEntry(const QString &path) const;
 
@@ -148,7 +148,7 @@ private:
     // m_entries 与 m_linkTargets 标为 mutable 的原因见 findEntry 的说明：
     // 接口把写操作定义为 const，而假实现需要真的改动自己的内存树。
     mutable QHash<QString, FileInfo> m_entries;          ///< 规范化路径 -> 元数据
-    QHash<QString, FileSystemError> m_failures;          ///< 注入的故障
+    QHash<QString, ErrorCode> m_failures;          ///< 注入的故障
     mutable QHash<QString, QString> m_linkTargets;       ///< 链接路径 -> 指向
 
     // 这些字段在 const 方法里也要写，因此标为 mutable。

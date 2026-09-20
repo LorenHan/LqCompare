@@ -114,6 +114,17 @@ FileSystemError TrashReport::firstError() const
     return FileSystemError::None;
 }
 
+ErrorCode TrashReport::firstErrorCode() const
+{
+    for (const TrashRecord &record : records) {
+        if (!record.succeeded())
+            return record.error;
+    }
+    // 全部成功时返回一个空的 ErrorCode（ok() 为真），而不是「最后一个错误」——
+    // 后者会让调用方在成功路径上拿到一个过期的失败原因。
+    return ErrorCode();
+}
+
 QStringList TrashReport::trashedPaths() const
 {
     QStringList result;
@@ -362,7 +373,7 @@ public:
 
     QString displayLocation() const override { return QString(); }
 
-    bool undoLastDelete(FileSystemError *error) const override
+    bool undoLastDelete(ErrorCode *error) const override
     {
         if (error)
             *error = FileSystemError::NotSupported;

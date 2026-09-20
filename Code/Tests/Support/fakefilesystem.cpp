@@ -165,7 +165,7 @@ QString FakeFileSystem::failureKey(Operation operation, const QString &path)
     return QString::fromLatin1(operationIdentifier(operation)) + QLatin1Char('|') + path;
 }
 
-void FakeFileSystem::fail(Operation operation, const QString &path, FileSystemError error)
+void FakeFileSystem::fail(Operation operation, const QString &path, const ErrorCode &error)
 {
     m_failures.insert(failureKey(operation, PathUtils::normalize(path, m_style)), error);
 }
@@ -175,7 +175,7 @@ void FakeFileSystem::clearFailures()
     m_failures.clear();
 }
 
-bool FakeFileSystem::intercept(Operation operation, const QString &path, FileSystemError *error) const
+bool FakeFileSystem::intercept(Operation operation, const QString &path, ErrorCode *error) const
 {
     const QString normalized = PathUtils::normalize(path, m_style);
 
@@ -247,7 +247,7 @@ QChar FakeFileSystem::separator() const
     return m_style.separator;
 }
 
-QString FakeFileSystem::pathNormalize(const QString &path, FileSystemError *error) const
+QString FakeFileSystem::pathNormalize(const QString &path, ErrorCode *error) const
 {
     if (intercept(Operation::PathNormalize, path, error))
         return QString();
@@ -266,7 +266,7 @@ QString FakeFileSystem::toNativePath(const QString &path) const
     return PathUtils::toExtendedPath(PathUtils::normalize(path, m_style), m_style);
 }
 
-FileInfo FakeFileSystem::stat(const QString &path, FileSystemError *error) const
+FileInfo FakeFileSystem::stat(const QString &path, ErrorCode *error) const
 {
     if (intercept(Operation::Stat, path, error))
         return FileInfo();
@@ -297,7 +297,7 @@ FileInfo FakeFileSystem::stat(const QString &path, FileSystemError *error) const
     return *info;
 }
 
-QString FakeFileSystem::linkTarget(const QString &path, FileSystemError *error) const
+QString FakeFileSystem::linkTarget(const QString &path, ErrorCode *error) const
 {
     if (intercept(Operation::LinkTarget, path, error))
         return QString();
@@ -317,19 +317,19 @@ QString FakeFileSystem::linkTarget(const QString &path, FileSystemError *error) 
     return it.value();
 }
 
-bool FakeFileSystem::exists(const QString &path, FileSystemError *error) const
+bool FakeFileSystem::exists(const QString &path, ErrorCode *error) const
 {
     if (intercept(Operation::Exists, path, error))
         return false;
 
-    FileSystemError statError = FileSystemError::None;
+    ErrorCode statError;
     const FileInfo info = stat(path, &statError);
     if (error)
         *error = statError;
     return info.exists;
 }
 
-QVector<FileInfo> FakeFileSystem::enumerateDirectory(const QString &path, FileSystemError *error) const
+QVector<FileInfo> FakeFileSystem::enumerateDirectory(const QString &path, ErrorCode *error) const
 {
     QVector<FileInfo> entries;
     if (intercept(Operation::Enumerate, path, error))
@@ -365,7 +365,7 @@ QVector<FileInfo> FakeFileSystem::enumerateDirectory(const QString &path, FileSy
 }
 
 bool FakeFileSystem::setTimes(const QString &path, const FileTime &lastModified,
-                              const FileTime &lastAccessed, FileSystemError *error) const
+                              const FileTime &lastAccessed, ErrorCode *error) const
 {
     if (intercept(Operation::SetTimes, path, error))
         return false;
@@ -390,7 +390,7 @@ bool FakeFileSystem::setTimes(const QString &path, const FileTime &lastModified,
 }
 
 bool FakeFileSystem::setAttributes(const QString &path, FileAttributes attributes,
-                                   FileSystemError *error) const
+                                   ErrorCode *error) const
 {
     if (intercept(Operation::SetAttributes, path, error))
         return false;

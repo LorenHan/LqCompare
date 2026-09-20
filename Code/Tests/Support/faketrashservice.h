@@ -59,10 +59,10 @@ public:
 
     /// 让搬移某个路径时失败。其余条目不受影响——批量删除里
     /// 「一部分进了回收站、一部分没进」是真实存在的现场，必须能测。
-    void failTrashPath(const QString &path, FileSystemError error);
+    void failTrashPath(const QString &path, const ErrorCode &error);
 
     /// 让撤销失败（例如原位置已被别的文件占用）。
-    void failUndo(FileSystemError error);
+    void failUndo(const ErrorCode &error);
 
     // --- 观察 --------------------------------------------------------------
 
@@ -89,7 +89,7 @@ public:
     QString platformName() const override { return QStringLiteral("fake"); }
     TrashAvailability availabilityFor(const QString &path) const override;
     QString displayLocation() const override { return QStringLiteral("/fake/.Trash"); }
-    bool undoLastDelete(FileSystemError *error) const override;
+    bool undoLastDelete(ErrorCode *error) const override;
 
 protected:
     TrashReport trashPaths(const QStringList &paths) const override;
@@ -109,13 +109,13 @@ private:
     /// 注入的可用性：路径 -> 答案。查找时会向上找最近的祖先，
     /// 因此注入 "/mnt/net" 就能覆盖它下面的所有条目（按卷生效）。
     QHash<QString, TrashAvailability> m_availabilityByPath;
-    QHash<QString, FileSystemError> m_trashFailures;
+    QHash<QString, ErrorCode> m_trashFailures;
 
     mutable QVector<QString> m_trashedOriginals;
     mutable QStringList m_callLog;
 
     TrashAvailability m_defaultAvailability = TrashAvailability::Available;
-    FileSystemError m_undoFailure = FileSystemError::None;
+    ErrorCode m_undoFailure;
 };
 
 } // namespace Test

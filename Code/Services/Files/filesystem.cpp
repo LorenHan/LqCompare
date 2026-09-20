@@ -180,6 +180,127 @@ bool isRetryable(FileSystemError error)
 }
 
 // -----------------------------------------------------------------------------
+// 原始系统错误码（PLAT-008 完成标准第 5 条）
+// -----------------------------------------------------------------------------
+
+const char *errorDomainIdentifier(ErrorDomain domain)
+{
+    switch (domain) {
+    case ErrorDomain::None:  return "none";
+    case ErrorDomain::Posix: return "posix";
+    case ErrorDomain::Win32: return "win32";
+    case ErrorDomain::Cocoa: return "cocoa";
+    }
+    return "unknown-domain";
+}
+
+const char *rawErrorName(ErrorDomain domain, qint64 raw)
+{
+    switch (domain) {
+    case ErrorDomain::None:
+        return nullptr;
+
+    case ErrorDomain::Posix:
+        // 这里用 errno 常量而不是数字，与 classifySystemError() 同理：
+        // 同一个名字在不同平台上可能是不同的值，只有 <cerrno> 知道本平台的正确值。
+        // 因此这个函数在 macOS 上也能正确地为 Linux 的取值命名。
+        switch (static_cast<int>(raw)) {
+        case ENOENT:      return "ENOENT";
+        case EACCES:      return "EACCES";
+        case EPERM:       return "EPERM";
+        case EBUSY:       return "EBUSY";
+        case EROFS:       return "EROFS";
+        case EEXIST:      return "EEXIST";
+        case ENAMETOOLONG:return "ENAMETOOLONG";
+        case EISDIR:      return "EISDIR";
+        case ENOTDIR:     return "ENOTDIR";
+#ifdef ETXTBSY
+        case ETXTBSY:     return "ETXTBSY";
+#endif
+#ifdef ENOSPC
+        case ENOSPC:      return "ENOSPC";
+#endif
+#ifdef EDQUOT
+        case EDQUOT:      return "EDQUOT";
+#endif
+#ifdef ENOTSUP
+        case ENOTSUP:     return "ENOTSUP";
+#endif
+        default:
+            return nullptr;
+        }
+
+    case ErrorDomain::Win32:
+        switch (static_cast<unsigned long>(raw)) {
+        case Win32Error::FileNotFound:           return "ERROR_FILE_NOT_FOUND";
+        case Win32Error::PathNotFound:           return "ERROR_PATH_NOT_FOUND";
+        case Win32Error::AccessDenied:           return "ERROR_ACCESS_DENIED";
+        case Win32Error::WriteProtect:           return "ERROR_WRITE_PROTECT";
+        case Win32Error::SharingViolation:       return "ERROR_SHARING_VIOLATION";
+        case Win32Error::LockViolation:          return "ERROR_LOCK_VIOLATION";
+        case Win32Error::NotSupported:           return "ERROR_NOT_SUPPORTED";
+        case Win32Error::FileExists:             return "ERROR_FILE_EXISTS";
+        case Win32Error::DiskFull:               return "ERROR_DISK_FULL";
+        case Win32Error::InvalidName:            return "ERROR_INVALID_NAME";
+        case Win32Error::FilenameExceededRange:  return "ERROR_FILENAME_EXCED_RANGE";
+        case Win32Error::DirectoryNotEmpty:      return "ERROR_DIR_NOT_EMPTY";
+        default:
+            return nullptr;
+        }
+
+    case ErrorDomain::Cocoa:
+        switch (static_cast<long>(raw)) {
+        case CocoaError::NoSuchFile:            return "NSFileNoSuchFileError";
+        case CocoaError::FileLocking:           return "NSFileLockingError";
+        case CocoaError::ReadNoPermission:      return "NSFileReadNoPermissionError";
+        case CocoaError::WriteNoPermission:     return "NSFileWriteNoPermissionError";
+        case CocoaError::WriteInvalidFileName:  return "NSFileWriteInvalidFileNameError";
+        case CocoaError::WriteFileExists:       return "NSFileWriteFileExistsError";
+        case CocoaError::WriteOutOfSpace:       return "NSFileWriteOutOfSpaceError";
+        case CocoaError::WriteVolumeReadOnly:   return "NSFileWriteVolumeReadOnlyError";
+        case CocoaError::ManagerUnmountBusy:    return "NSFileManagerUnmountBusyError";
+        default:
+            return nullptr;
+        }
+    }
+    return nullptr;
+}
+
+QString errorDetail(const ErrorCode &code)
+{
+    if (!code.hasRawCode())
+        return QString();
+
+    const char *domainName = nullptr;
+    switch (code.domain) {
+    case ErrorDomain::Posix: domainName = "errno"; break;
+    case ErrorDomain::Win32: domainName = "Win32"; break;
+    case ErrorDomain::Cocoa: domainName = "NSCocoaErrorDomain"; break;
+    case ErrorDomain::None:  return QString();
+    }
+
+    const char *name = rawErrorName(code.domain, code.raw);
+    if (name == nullptr) {
+        // 不认识的取值只给数字。刻意不拼一个看起来像官方名字的假名字——
+        // 那样用户会拿一个不存在的符号去搜，比只看到数字更糟。
+        return QStringLiteral("%1 %2").arg(QString::fromLatin1(domainName)).arg(code.raw);
+    }
+    return QStringLiteral("%1 %2（%3）")
+        .arg(QString::fromLatin1(domainName))
+        .arg(code.raw)
+        .arg(QString::fromLatin1(name));
+}
+
+QString errorReport(const ErrorCode &code, const QString &path)
+{
+    const QString message = errorMessage(code.category, path);
+    const QString detail = errorDetail(code);
+    if (detail.isEmpty())
+        return message;
+    return QStringLiteral("%1（%2）").arg(message, detail);
+}
+
+// -----------------------------------------------------------------------------
 // 系统错误码 -> 分类
 // -----------------------------------------------------------------------------
 
@@ -304,6 +425,43 @@ FileSystemError classifyCocoaError(long code)
         return FileSystemError::Busy;
 
     return FileSystemError::Unknown;
+}
+
+// -----------------------------------------------------------------------------
+// 分类 + 原始码 一起打包（PLAT-008 完成标准第 5 条）
+// -----------------------------------------------------------------------------
+
+ErrorCode fromSystemError(int systemError)
+{
+    ErrorCode code;
+    code.category = classifySystemError(systemError);
+    if (systemError != 0) {
+        code.domain = ErrorDomain::Posix;
+        code.raw = systemError;
+    }
+    return code;
+}
+
+ErrorCode fromWindowsError(unsigned long errorCode)
+{
+    ErrorCode code;
+    code.category = classifyWindowsErrorCode(errorCode);
+    if (errorCode != 0) {
+        code.domain = ErrorDomain::Win32;
+        code.raw = static_cast<qint64>(errorCode);
+    }
+    return code;
+}
+
+ErrorCode fromCocoaError(long errorCode)
+{
+    ErrorCode code;
+    code.category = classifyCocoaError(errorCode);
+    if (errorCode != 0) {
+        code.domain = ErrorDomain::Cocoa;
+        code.raw = static_cast<qint64>(errorCode);
+    }
+    return code;
 }
 
 #ifdef Q_OS_WIN

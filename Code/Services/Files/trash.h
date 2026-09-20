@@ -94,9 +94,13 @@ struct TrashRecord
     QString originalPath;  ///< 用户给的原始路径
     QString trashedPath;   ///< 删除成功后条目在回收站中的实际路径；失败时为空
 
-    FileSystemError error = FileSystemError::None;
+    /// 失败原因。类型是 ErrorCode 而不是 FileSystemError：回收站失败最常见的是
+    /// 「无权限」（回收站目录属于别人）与「被占用」，这两种恰恰是用户要拿着
+    /// 原始错误码去搜才能查清的情形（例如 macOS 的 513 与 257 都归无权限，
+    /// 但一个是读、一个是写）。见 filesystem.h 里 ErrorCode 的说明。
+    ErrorCode error;
 
-    bool succeeded() const { return error == FileSystemError::None; }
+    bool succeeded() const { return error.ok(); }
 };
 
 ///
@@ -118,6 +122,10 @@ struct TrashReport
     /// 而用户接下来要做的是从第一批没成功的条目继续处理，顺序上
     /// 更容易和界面上看到的一致。
     FileSystemError firstError() const;
+
+    /// 第一个失败条目的完整错误（含原始系统码），供排查用。
+    /// 全成功时返回一个 ok() 为真的 ErrorCode。
+    ErrorCode firstErrorCode() const;
 
     /// 成功进入回收站的条目在回收站中的路径（按原顺序）。
     QStringList trashedPaths() const;
@@ -186,7 +194,8 @@ public:
     ///
     /// 返回 false 时 error 给出原因。受平台能力限制无法还原时返回
     /// NotSupported，并在 errorMessage 里说明——而不是假装成功。
-    virtual bool undoLastDelete(FileSystemError *error = nullptr) const = 0;
+    /// 出参类型是 ErrorCode，便于把原始系统错误码一起交出来（PLAT-008）。
+    virtual bool undoLastDelete(ErrorCode *error = nullptr) const = 0;
 
     /// 最近一次删除的记录（可能包含失败条目）。从未删除过时 records 为空。
     ///

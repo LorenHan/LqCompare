@@ -32,6 +32,15 @@ char *toString(const FileSystemError &error)
     return qstrdup(errorIdentifier(error));
 }
 
+/// ErrorCode 的显示：分类 + 原始系统码（PLAT-008 第 5 条）。
+/// 删除失败最常见的是权限与占用，而二者的原始码是查清原因的唯一线索。
+template <>
+char *toString(const ErrorCode &error)
+{
+    const QString text = errorReport(error);
+    return qstrdup(qPrintable(text.isEmpty() ? QStringLiteral("none") : text));
+}
+
 } // namespace QTest
 
 namespace {
@@ -456,7 +465,7 @@ void TstTrash::undoUsesTheActualTrashedPath()
 
     QVERIFY2(firstName != secondName, "替身没有模拟重名改名，这个用例就白写了");
 
-    FileSystemError error = FileSystemError::None;
+    ErrorCode error;
     QVERIFY(service.undoLastDelete(&error));
     QCOMPARE(error, FileSystemError::None);
 
@@ -468,7 +477,7 @@ void TstTrash::undoWithoutPriorDeleteIsNotFound()
 {
     Test::FakeTrashService service;
 
-    FileSystemError error = FileSystemError::None;
+    ErrorCode error;
     QVERIFY(!service.undoLastDelete(&error));
 
     // 「还没删除过」与「还原失败」必须能区分：前者界面该显示
@@ -484,7 +493,7 @@ void TstTrash::undoClearsTheUndoPoint()
     Test::FakeTrashService service;
     service.deleteToTrash(QStringList{QStringLiteral("/a.txt")});
 
-    FileSystemError error = FileSystemError::None;
+    ErrorCode error;
     QVERIFY(service.undoLastDelete(&error));
     QCOMPARE(error, FileSystemError::None);
 
@@ -606,7 +615,7 @@ void TstTrash::nativeTrashRoundTripRestoresTheFile()
     // 放在两次删除之间而不是最后，是因为它必须覆盖所有失败路径。
     TrashCleanupGuard guard(inTrash, victim);
 
-    FileSystemError error = FileSystemError::None;
+    ErrorCode error;
     QVERIFY2(service->undoLastDelete(&error),
              qPrintable(QStringLiteral("还原失败：%1").arg(errorMessage(error))));
     QCOMPARE(error, FileSystemError::None);
@@ -647,7 +656,7 @@ void TstTrash::nativeTrashRestoreRefusesToOverwrite()
                                                     QByteArrayLiteral("a file the user cares about"));
     QVERIFY(!replacement.isEmpty());
 
-    FileSystemError error = FileSystemError::None;
+    ErrorCode error;
     QVERIFY2(!service->undoLastDelete(&error), "原位置已被占用时还原必须失败，而不是覆盖");
 
     // 覆盖会删掉一个用户没打算碰、而且**不在废纸篓里**的文件——比「还原失败」
