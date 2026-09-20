@@ -2,6 +2,7 @@
 
 #include "commandregistry.h"
 #include "logging.h"
+#include "settingschema.h"
 #include "sessiontype.h"
 
 #include <QApplication>
@@ -114,6 +115,28 @@ int main(int argc, char *argv[])
                    QStringLiteral("会话类型注册表：%1 个类型，%2 项问题")
                            .arg(registeredTypes)
                            .arg(typeProblems.size()));
+
+    // 会话设置声明目录自检（SESS-006）：查「键格式、说明缺失、枚举取值表与控件
+    // 类型不匹配、默认值过不了自己的校验」这几件事——它们都属「手写那张表时容易
+    // 写错、写错了也不影响登记成功」的一类，在界面上表现为「某个设置项没生效」
+    // 或「恢复默认之后反而报错」，很难归因。
+    //
+    // 目录目前是**空的**（框架刻意不含任何具体设置项：文本比对有哪些设置是
+    // TEXT-* / FOLD-* 的产品决定），所以这条自检现在只会打印「0 份声明」。
+    // 它在这里的意义不是「眼下有问题可查」，而是把唯一的那个生产调用点摆好：
+    // 各会话类型落地时只要往目录里登记声明，这条自检立刻开始替它们把关。
+    // 与上面那个注册表自检同一个手法，同样不做成单例。
+    LqCompare::SessionSettingsCatalog settingsCatalog;
+    const QStringList settingsProblems = settingsCatalog.validate();
+    for (const QString &problem : settingsProblems) {
+        LQCOMPARE_ERROR("session", problem);
+    }
+    LQCOMPARE_INFO("session",
+                   QStringLiteral("会话设置目录：%1 个类型（含 %2），%3 项问题")
+                           .arg(settingsCatalog.count())
+                           .arg(settingsCatalog.common() ? QStringLiteral("通用声明")
+                                                         : QStringLiteral("无通用声明"))
+                           .arg(settingsProblems.size()));
 
     window.resize(1280, 820);
     window.show();
