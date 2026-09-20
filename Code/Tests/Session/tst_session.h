@@ -14,6 +14,7 @@
 ///   D 设置接口           —— 标准第 1 条（sessionSettings）
 ///   E 可扩展性           —— 标准第 2 条（新增一种会话类型只需实现基类契约）
 ///   F 源码级护栏         —— 标准第 4 条（基类不依赖任何具体视图头文件）
+///   G 与类型注册表的衔接 —— 标准第 2 条里「并注册」那半句
 ///
 /// **本套件同时承担一条编译期校验**：`SessionTests.pro` 只把
 /// `Views/Session` 与 `Services/Session` 放进 INCLUDEPATH，因此
@@ -82,6 +83,12 @@ private slots:
     // ---------- F 源码级护栏（标准第 4 条） ----------
     void baseModuleIncludesStayInTheirOwnModules();
     void theIncludeGuardWouldCatchAConcreteViewInclude();
+
+    // ---------- G 与类型注册表的衔接（标准第 2 条「并注册」那半句） ----------
+    void aTypeRegisteredWithAFactoryProducesARealSession();
+    void aSessionCreatedThroughTheRegistryRunsItsWholeLifecycle();
+    void theCreatedSessionAgreesWithItsRegistryEntry();
+    void typesWithoutAFactoryCannotBeCreated();
 };
 
 #endif // LQCOMPARE_TST_SESSION_H

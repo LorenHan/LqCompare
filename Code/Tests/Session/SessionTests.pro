@@ -36,6 +36,16 @@ CODE_ROOT = $$clean_path($$PWD/../..)
 include($$CODE_ROOT/Views/Session/sessionview.pri)
 include($$CODE_ROOT/Services/Session/session.pri)
 
+# Filter 也必须显式 include：Services/Session 从 SESS-002 起用到了掩码语言
+# （sessiontype.h 会 #include "mask.h"），而 session.pri 只把 Filter 目录加进
+# 搜索路径、不嵌套 include filter.pri（理由见 session.pri）。
+# 少了这一行，sessiontype.cpp 能编过但链接时报「Filter::Mask::compile 未定义」。
+#
+# 注意这不削弱上面的编译期护栏：护栏守的是「Views 层的具体视图不许被 include」，
+# 而这里加进来的是**服务层**的另一个目录（Services/Filter）。
+# 界面头文件一旦被 include，本工程照样构建失败。
+include($$CODE_ROOT/Services/Filter/filter.pri)
+
 # 供 F 组用例定位源码文件。刻意不用相对路径去猜：从构建目录往上数几层，
 # 换个构建目录就失效，而那种失效表现为「用例静默跳过」——最糟的一种绿。
 DEFINES += LQCOMPARE_CODE_ROOT=\\\"$$CODE_ROOT\\\"

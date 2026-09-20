@@ -2,6 +2,7 @@
 
 #include "commandregistry.h"
 #include "logging.h"
+#include "sessiontype.h"
 
 #include <QApplication>
 #include <QCommandLineOption>
@@ -90,6 +91,29 @@ int main(int argc, char *argv[])
         LQCOMPARE_WARN("cli", QStringLiteral("命令行数据源尚未接入（CLI-001）：%1")
                                       .arg(positional.join(QLatin1Char(' '))));
     }
+
+    // 会话类型注册表自检（SESS-002）：ID 格式、英文原名缺失、掩码写成大写
+    // 这些「手写那张表时容易写错、写错了也不影响登记成功」的地方在这里暴露。
+    //
+    // 与命令注册表自检同一个手法，但注册表是**局部对象**而不是单例：
+    // 单例会让「这一次测试往表里加了什么」泄漏到下一处，而注册表要被反复
+    // 构造（合成的小表验证优先级、内置的大表验证快照）。
+    // 它的生命周期目前到此为止——把条目喂给 Home 页与新建向导是 SESS-003 /
+    // SESS-005 的事；在那之前，这台自检加上 Tests/SessionType 就是它的调用方。
+    LqCompare::SessionTypeRegistry sessionTypes;
+    QString sessionTypeError;
+    const int registeredTypes = sessionTypes.addBuiltInTypes(&sessionTypeError);
+    if (!sessionTypeError.isEmpty()) {
+        LQCOMPARE_ERROR("session", sessionTypeError);
+    }
+    const QStringList typeProblems = sessionTypes.validate();
+    for (const QString &problem : typeProblems) {
+        LQCOMPARE_ERROR("session", problem);
+    }
+    LQCOMPARE_INFO("session",
+                   QStringLiteral("会话类型注册表：%1 个类型，%2 项问题")
+                           .arg(registeredTypes)
+                           .arg(typeProblems.size()));
 
     window.resize(1280, 820);
     window.show();

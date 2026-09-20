@@ -2,6 +2,7 @@
 
 #include "comparesession.h"
 #include "probesession.h"
+#include "sessiontype.h"
 
 #include <QFile>
 #include <QMetaType>
@@ -11,6 +12,7 @@
 #include <QVector>
 #include <QWidget>
 
+#include <memory>
 #include <type_traits>
 
 using LqCompare::CompareSession;
@@ -18,6 +20,9 @@ using LqCompare::MemorySessionSettings;
 using LqCompare::SessionError;
 using LqCompare::SessionProgress;
 using LqCompare::SessionSettings;
+using LqCompare::SessionType;
+using LqCompare::SessionTypeEntry;
+using LqCompare::SessionTypeRegistry;
 using LqCompare::TestSupport::MinimalSession;
 using LqCompare::TestSupport::ProbeSession;
 using LqCompare::TestSupport::ProbeSettings;
@@ -884,7 +889,7 @@ void TstSession::aNewTypeNeedsOnlyTheBaseContract()
     QVERIFY(session.createWidget(&container) == nullptr);
 
     // 注意：本条只覆盖「实现基类契约」这半句。契约里那半句「并注册」
-    // 依赖类型注册表（SESS-002），本条**不做**，见 issue #36 的落地说明。
+    // 由 G 组（类型注册表 SESS-002）接着做——见 issue #36 的落地说明。
 }
 
 void TstSession::differentTypesShareTheSameBaseBehaviour()
@@ -956,6 +961,142 @@ void TstSession::theIncludeGuardWouldCatchAConcreteViewInclude()
                                         "#include <QWidget>\n"
                                         "#include \"session.h\"\n");
     QVERIFY(foreignQuotedIncludes(clean).isEmpty());
+}
+
+// ===========================================================================
+// G 与类型注册表的衔接（标准第 2 条里「并注册」那半句）
+//
+// E 组证明了「新增一种会话类型只需实现基类契约」；这里接着证明后半句
+// **「并注册」**：把一个只实现基类契约的类型登记进注册表，就能按类型 ID 造出
+// 真的会话，并把它走完整个生命周期。两组合起来才是 SESS-001 第 2 条的完整含义。
+//
+// 这一步要等 SESS-002 的类型注册表落地（本组就是它落地后补上的）。
+// 注册表在服务层、会话基类在视图层，因此**只有本套件能同时看到两者**——
+// 它链接 QtWidgets，而 Tests/SessionType 刻意只链接 QtCore。
+// ===========================================================================
+
+namespace {
+
+/// 造一条指向 `MinimalSession` 的描述子。
+///
+/// 描述子的 ID 与 MinimalSession 自己报的 typeId() 都是 `minimal`——这不是巧合
+/// 而是契约：会话文件的入口是「类型 ID → 工厂 → 会话」，若两处 ID 不一致，
+/// 造出来的会话就会在保存时被记成另一个类型，而界面上看不出任何异常。
+SessionType minimalTypeDescriptor()
+{
+    SessionType type;
+    type.id = QStringLiteral("minimal");
+    type.displayName = QStringLiteral("最小会话（测试替身）");
+    type.englishName = QStringLiteral("Minimal Session");
+    type.summary = QStringLiteral("只实现 createView() 的会话类型。");
+    return type;
+}
+
+LqCompare::SessionFactory minimalFactory()
+{
+    return [](QObject *parent) -> CompareSession * { return new MinimalSession(parent); };
+}
+
+} // namespace
+
+void TstSession::aTypeRegisteredWithAFactoryProducesARealSession()
+{
+    SessionTypeRegistry registry;
+    QString error;
+    QVERIFY2(registry.add(minimalTypeDescriptor(), minimalFactory(), &error), qPrintable(error));
+
+    const SessionTypeEntry *entry = registry.find(QStringLiteral("minimal"));
+    QVERIFY(entry != nullptr);
+    QVERIFY(entry->hasFactory());
+
+    std::unique_ptr<CompareSession> session(entry->factory(nullptr));
+    QVERIFY(session != nullptr);
+    QCOMPARE(session->typeId(), QStringLiteral("minimal"));
+    QCOMPARE(session->state(), CompareSession::State::Created);
+}
+
+void TstSession::aSessionCreatedThroughTheRegistryRunsItsWholeLifecycle()
+{
+    SessionTypeRegistry registry;
+    registry.add(minimalTypeDescriptor(), minimalFactory());
+    const SessionTypeEntry *entry = registry.find(QStringLiteral("minimal"));
+    QVERIFY(entry != nullptr);
+
+    // 真正的重点在这里：这个会话**不是**在用例里直接 new 出来的，而是从注册表
+    // 拿工厂造出来的。也就是说「实现基类契约 + 注册」这一条路真的能通到
+    // 「打开 → 拿视图 → 标脏 → 保存 → 重载 → 关闭」。
+    std::unique_ptr<CompareSession> session(entry->factory(nullptr));
+    QVERIFY(session != nullptr);
+
+    QVERIFY(session->open());
+    QCOMPARE(session->state(), CompareSession::State::Open);
+
+    QWidget container;
+    QWidget *view = session->createWidget(&container);
+    QVERIFY(view != nullptr);
+    QCOMPARE(view->parentWidget(), &container);
+
+    session->setDirty(true);
+    QVERIFY(session->canSave());
+    QVERIFY(session->save());
+    QVERIFY(!session->isDirty());
+
+    QVERIFY(session->reload());
+    QCOMPARE(session->state(), CompareSession::State::Open);
+
+    session->close();
+    QCOMPARE(session->state(), CompareSession::State::Closed);
+    QVERIFY(session->createWidget(&container) == nullptr);
+}
+
+void TstSession::theCreatedSessionAgreesWithItsRegistryEntry()
+{
+    SessionTypeRegistry registry;
+    registry.add(minimalTypeDescriptor(), minimalFactory());
+    registry.addBuiltInTypes();
+
+    const SessionTypeEntry *entry = registry.find(QStringLiteral("minimal"));
+    QVERIFY(entry != nullptr);
+
+    std::unique_ptr<CompareSession> session(entry->factory(nullptr));
+    QVERIFY(session != nullptr);
+
+    // 「会话自己报的类型 ID」必须能在注册表里查回同一个条目。
+    // 这是「按类型 ID 造会话」能成立的前提：会话文件只存 ID，加载时靠它反查。
+    // 两处 ID 一旦分家，现象是「双击会话没反应」——最难归因的一类故障。
+    const SessionTypeEntry *lookedUp = registry.find(session->typeId());
+    QVERIFY(lookedUp != nullptr);
+    QCOMPARE(lookedUp->type.id, entry->type.id);
+    QCOMPARE(lookedUp->type.englishName, QStringLiteral("Minimal Session"));
+
+    // 内置的 14 种类型此刻**还没有实现**，因此它们查得到、但造不出来。
+    // 「类型已登记」与「这一版还没有这个视图」是两件事，注册表要能把它们分开。
+    const SessionTypeEntry *hex = registry.find(QStringLiteral("hex"));
+    QVERIFY(hex != nullptr);
+    QVERIFY(!hex->hasFactory());
+    QVERIFY(hex->isAvailableHere());
+}
+
+void TstSession::typesWithoutAFactoryCannotBeCreated()
+{
+    SessionTypeRegistry registry;
+    registry.addBuiltInTypes();
+
+    // 内置表只登记描述子，工厂由各会话类型的实现方给。因此「按 ID 造会话」
+    // 对它们应当返回空，而不是造出一个没有视图、打开就崩的东西。
+    for (const SessionTypeEntry *entry : registry.entries()) {
+        QVERIFY2(!entry->hasFactory(), qPrintable(entry->type.id));
+    }
+
+    // 反面：给了工厂的那一条是能造的。不写这一句的话，上面那个循环
+    // 在一个「工厂永远为空」的实现下也会通过。
+    SessionTypeRegistry withFactory;
+    QVERIFY(withFactory.add(minimalTypeDescriptor(), minimalFactory()));
+    const SessionTypeEntry *entry = withFactory.find(QStringLiteral("minimal"));
+    QVERIFY(entry != nullptr);
+    QVERIFY(entry->hasFactory());
+    std::unique_ptr<CompareSession> session(entry->factory(nullptr));
+    QVERIFY(session != nullptr);
 }
 
 // Q_OBJECT 声明在头文件里，因此这里不需要 #include "xxx.moc"：

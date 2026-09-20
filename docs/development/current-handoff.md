@@ -25,8 +25,16 @@ Shell 集成的注册表计划、安装回滚、卸载还原与残留检查全�
 它是本仓库第一个链接 QtWidgets 的模块，也是第一个跑在 offscreen 上的测试套件。
 会话的设置接口单独落在 `Services/Session/`：作用域链与落盘还没做，但接口先定下来了，
 因此后续的过滤器与选项页不必各自发明一套「会话设置」。
+**会话类型的登记处（SESS-002）也补上了**：14 种内置类型（ID / 显示名 / 英文原名 /
+图标键 / 默认文件掩码 / 分组 / Pro 归属 / 平台限定）落成一张**纯数据**的表，注册表按
+「注册顺序 = 优先级」回答「这个文件该用哪个视图打开」，并按分组枚举出 Home 页与新建
+向导需要的入口。它的默认文件掩码**复用** FILT-001 那套掩码语言，而不是再写一份
+「看扩展名」的匹配；「创建工厂」的返回类型只前向声明了 `CompareSession`，
+因此这个模块是纯 QtCore 的——本仓库第一次有「服务层的会话框架测试」（`QT -= gui`）。
+界面尚未接它：那批代码目前的生产调用方只有启动自检，把条目喂给 Home 页与新建向导
+属于 SESS-003 / SESS-005。
 界面上仍是 169 个按钮里 31 条带处理器，其余点击后提示对应 ACTION-ID；
-会话基类目前**只有测试在用**，容器还没有拿它去建标签（那要等 SESS-002 的类型注册表）。
+会话基类与类型注册表都还没有被容器拿去建标签。
 
 ## 1.1 已落地的服务层模块
 
@@ -42,7 +50,8 @@ Shell 集成的注册表计划、安装回滚、卸载还原与残留检查全�
 | `Services/Platform/`（系统图标） | PLAT-004 | **部分完成**（Windows / Linux 实现未在目标平台验证；界面尚未取用） | `Tests/PlatformIcon`（46 个用例函数，含 3 条走真实图标源） |
 | `Services/Platform/`（Shell 集成） | PLAT-005 | **部分完成**（Windows 注册表薄层未编译过；界面尚未接入；本机平台能力置灰说明已落地） | `Tests/ShellIntegration`（101 个用例函数） |
 | `Services/Session/`（会话设置接口） | SESS-001 | **部分完成**（只有接口与内存实现；作用域链与落盘留给 SESS-006 / SESS-007） | `Tests/Session`（42 个用例函数，与下一行同一套件） |
-| `Views/Session/`（会话基类） | SESS-001 | **部分完成**（第 2 条里「并注册」那半句依赖 SESS-002；界面尚未取用） | `Tests/Session`（42 个用例函数） |
+| `Views/Session/`（会话基类） | SESS-001 | **部分完成**（第 2 条里「并注册」那半句依赖 SESS-002，已落地但基类尚未接上注册表；界面尚未取用） | `Tests/Session`（42 个用例函数） |
+| `Services/Session/`（类型注册表） | SESS-002 | **部分完成**（第 2 条里「并注册」的前半句——按类型 ID 造会话——要等各会话类型实现出来；界面尚未取用） | `Tests/SessionType`（57 个用例函数，**纯 QtCore**） |
 
 PLAT-002 的详细说明与其「第 2 条完成标准为何不勾选」见
 [issue #325](https://github.com/LorenHan/LqCompare/issues/325)；
@@ -53,7 +62,8 @@ PLAT-004 见 [issue #329](https://github.com/LorenHan/LqCompare/issues/329)；
 PLAT-005 见 [issue #326](https://github.com/LorenHan/LqCompare/issues/326)；
 ENG-006 见 [issue #338](https://github.com/LorenHan/LqCompare/issues/338)；
 FILT-001 见 [issue #228](https://github.com/LorenHan/LqCompare/issues/228)；
-SESS-001 见 [issue #36](https://github.com/LorenHan/LqCompare/issues/36)。
+SESS-001 见 [issue #36](https://github.com/LorenHan/LqCompare/issues/36)；
+SESS-002 见 [issue #37](https://github.com/LorenHan/LqCompare/issues/37)。
 
 ### 1.2 回收站（PLAT-003）落地到了什么程度
 
@@ -205,21 +215,28 @@ FILT-002（正则与超时保护）、FILT-003（属性过滤）、FILT-005（�
 | 完成标准 | 落在哪里 | 状态 |
 | --- | --- | --- |
 | 基类定义统一契约：createWidget、open、close、reload、save、isDirty、canSave、sessionSettings | `CompareSession`（`Views/Session/comparesession.h`）。`sessionSettings` 的返回类型是 `Services/Session/session.h` 里的 `SessionSettings` 接口 | **已落** |
-| 新增一种会话类型只需实现基类契约并注册，不需要改动已有会话代码 | 「实现基类契约」那半句：`Tests/Session` 里的 `MinimalSession` 只写了 `createView()` 一个实现点，就走通了「打开 → 拿视图 → 标脏 → 保存 → 重载 → 关闭」全部动作；「并注册」那半句**做不了**，见下 | **部分完成** |
+| 新增一种会话类型只需实现基类契约并注册，不需要改动已有会话代码 | 「实现基类契约」那半句：`Tests/Session` 里的 `MinimalSession` 只写了 `createView()` 一个实现点，就走通了「打开 → 拿视图 → 标脏 → 保存 → 重载 → 关闭」全部动作。「并注册」那半句在 SESS-002 落地后补上了：G 组把一个只实现基类契约的类型的工厂登记进 `SessionTypeRegistry`，再从注册表把会话**造出来**并走完同一个生命周期——全程没有改动 `CompareSession` | **已落** |
 | 基类提供状态栏文本、错误上报、进度上报三个公共出口 | `setStatusText()` / `reportError()` / `reportProgress()` 三个 public 出口，配 `statusTextChanged` / `errorReported` / `progressChanged` 三个信号；载体是 `SessionError`（message + detail）与 `SessionProgress`（current + total + what + `percent()`） | **已落** |
 | 基类不依赖任何具体视图头文件（编译期校验） | 编译期那一半：`SessionTests.pro` 的 INCLUDEPATH 里只有 `Views/Session` 与 `Services/Session`，基类一旦 include 具体视图头文件，**该测试工程直接构建失败**。源码级那一半：`Tests/Session` 的 F 组用例把两个源文件的 `#include "…"` 与白名单比对，并另有一条用例对**故意写坏的源码**做反向验证 | **已落** |
 
-**为什么第 2 条只能算部分完成**：「新增一种会话类型」在这个仓库里是两步——
+**第 2 条为什么分了两轮才算完成**：「新增一种会话类型」在这个仓库里是两步——
 实现基类契约，然后在**类型注册表**里登记（类型 ID、显示名、图标、默认掩码、
-创建工厂）。注册表是 SESS-002。它还不存在时没有第二个地方可以登记，而临时造一个
-「只登记类型 ID 的小表」等于把 SESS-002 的契约提前定死一份，两份类型表必然分歧。
-因此本轮只做「实现基类契约」那半句，并把依赖关系写在 issue #36 上。
+创建工厂）。SESS-001 那一轮只有第一步可做：注册表是 SESS-002，还不存在时没有
+第二个地方可以登记，而临时造一个「只登记类型 ID 的小表」等于把 SESS-002 的契约
+提前定死一份，两份类型表必然分歧。SESS-002 落地后，G 组把第二步补上，
+**因此这一条现在可以勾了**。
+
+**诚实地说清这条的证据边界**：目前「已有会话代码」只有基类本身与两个测试替身，
+因此这条标准证明的是「新增类型不需要改动基类与既有类型的代码」。
+真正的第二种会话类型要等 `TEXT-*` / `FOLD-*` 落地，届时它只是「再加一个类型」——
+如果那时发现还要改基类，说明这一条的结论当时下早了。SESS-002 本身是一次
+正向数据点：它是新模块 + 新测试，**没有改动 `comparesession.h` 一行**。
 
 **还没有做的**：
 
-1. **界面还没取用**。`CompareSession` 目前只有测试在用，`SessionArea::addSession()`
-   仍然创建占位页。接上它要等类型注册表（SESS-002）——容器需要一个「按类型 ID
-   造会话」的工厂，而那正是注册表的条目之一。
+1. **界面还没取用**。`CompareSession` 与 `SessionTypeRegistry` 目前只有启动自检
+   与测试在用，`SessionArea::addSession()` 仍然创建占位页。接上要等 SESS-003
+   （Home 视图）——Home 页要按注册表的分组枚举生成入口，容器要按类型 ID 造会话。
 2. **设置的落盘与作用域链还没有**。`MemorySessionSettings` 只保证「本次运行期间
    读得到、写得进」，重启即丢。它**不谎称已落盘**：既然是内存实现，就没有
    「保存失败」这种状态需要上报。作用域三层（视图 > 会话 > 类型）是 SESS-007。
@@ -237,27 +254,79 @@ FILT-002（正则与超时保护）、FILT-003（属性过滤）、FILT-005（�
 - `open()` 幂等且**第二次不调 `doOpen()`**。界面在恢复标签时会重复调用它，
   重跑一遍会把滚动位置与编辑状态全部重置。
 
+### 1.9 SESS-002 落地到了什么程度
+
+规格的四条完成标准对应到代码：
+
+| 完成标准 | 落在哪里 | 状态 |
+| --- | --- | --- |
+| 注册表条目包含：类型 ID、显示名、图标、默认文件掩码、创建工厂、是否 Pro 特性、是否平台限定 | `SessionType`（七个字段齐备）+ `SessionTypeEntry`（描述子 + 工厂）。`add()` 逐条校验：ID 格式、ID 重复、显示名非空、每条掩码能编译，**任一条不过就整条拒绝** | **已落** |
+| 类型 ID 有稳定性测试：已发布 ID 的字符串值被快照断言锁定 | `Tests/SessionType` 的 B 组：14 个 ID 的精确值**与顺序**被逐字比对；6 个非法 ID 形态被拒；`idsAreStableAcrossRebuilds` 盯住「表是每次重建的」这件事 | **已落** |
+| 按掩码查询匹配类型时按注册顺序（优先级）返回首个命中 | `findByFileMask()` 顺序扫描、首个命中即返回；`findByMaskFollowsRegistrationOrderNotTableOrder` 用**反序登记**证明它按注册顺序而不是插入位置；内置表里 `*.html` 那处重叠是真实数据上的用例 | **已落** |
+| 注册表可枚举，供 Home 页与新建向导直接生成入口 | `entries()` / `byGroup()` / `groups()`（`onlyAvailable` 可关，供界面置灰展示）+ `findByName()`。枚举顺序与注册顺序一致，因此「分组枚举的并集」可以整表比对 | **已落** |
+
+**还没有做的**：
+
+1. **界面还没取用**。`SessionArea::addSession()` 仍然创建占位页；Home 页仍在用
+   自己那份硬编码的类型表。让 HomePage 改成读注册表是 SESS-003 的范围——
+   本轮改了会与它撞车，因此先用一条**源码级用例**把两边钉在一起（见下）。
+2. **创建工厂还没有真正的实现方**。内置 14 种类型的 `factory` 全为空——
+   各会话类型（`TEXT-*` / `FOLD-*` / `HEX-*` …）还没实现，没有东西可注册进工厂。
+   「类型已登记」与「这一版还没有这个视图」由 `hasFactory()` 分开，
+   G 组用测试替身证明这条路是通的。
+3. **默认文件掩码只是一组种子**，不是 Beyond Compare 那张完整的文件格式关联表。
+   真正的权威在 `FORMAT-*`（文件格式定义）。现在如实只放无歧义的种子
+   （`.csv` 给表格、`.png` 给图片、`.diff` 给补丁视图），好过抄一份假装完整的表。
+
+**四条刻意的取舍**（改之前先读，否则很容易把它们「修」回去）：
+
+- **`add()` 整条拒绝，不做部分接受**。一个「ID 进去了但掩码全丢了」的条目会让
+  按掩码的自动选择**静默失效**——「掩码写错了」能在启动时发现，「某些文件双击
+  没反应」不能。
+- **内置表里 `*.html` 被文本比对与表格比对同时声明，这是有意留的**。合成的小表
+  只能证明实现自洽，证明不了这张表落在什么结论上；留着它，`onlyHtmlOverlaps`
+  与 `allByMaskKeepsTheOnlyRealOverlap` 就把「文本胜出」这个当前结论钉死了。
+  要让表格胜出是一次产品决定，改的时候这两条会红，从而强制做那次决定。
+- **`describe()` 与 `validate()` 是两件事**。前者给人看（`main.cpp` 与诊断输出用），
+  后者是自检。`validate()` **只查登记时没有把住的**几件事（英文原名缺失、图标键
+  写法、掩码写成大写）——把 `add()` 已经拦下的再查一遍，那些分支永远走不到，
+  而一条永远不会红的护栏比没有护栏更糟。
+- **注册表不做成单例**（与 `CommandRegistry::instance()` 不同）。表要被反复构造：
+  合成的小表验证优先级、内置的大表验证快照。单例会让「这一次测试往表里加了什么」
+  泄漏到下一处。
+
+**过渡期的源码级护栏**：`homePageHardcodedIdsMatchTheRegistry` 会去读
+`Views/Shell/homepage.cpp`，从 `sections()` 的函数体里抠出全部
+`QStringLiteral("…")` 与注册表**逐个比对（含顺序）**。注册表落地前那张硬编码的表
+是事实上的第一批「已发布 ID」，两边不一致会让 Home 页点出来的入口指向不存在的类型
+（现象是「点卡片没反应」）。另有一条 `homePageIdCheckCanFailOnBrokenSource`
+对一段**故意写错**的源码跑同一个判定流程，证明这条护栏不是恒真的。
+
 ## 2. 已验证的事实（不用再花时间确认）
 
 | 项目 | 结论 | 验证方式 |
 | --- | --- | --- |
 | 构建 | Qt 5.15.2 clang_64 上 qmake + make 通过，产出 `dist/macos/LqCompare.app` | `qmake && make -j8` |
 | 运行 | 主程序离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
-| 测试（全量） | **491 passed / 0 failed / 1 skipped**（Batch 36 + CommandRegistry 14 + FileSystem 50 + **Filter 89** + Logging 34 + PathName 40 + PlatformIcon 48 + **Session 44** + ShellIntegration 101 + Trash 35） | `Code/Tests/run-tests.sh` |
+| 测试（全量） | **554 passed / 0 failed / 1 skipped**（Batch 36 + CommandRegistry 14 + FileSystem 50 + **Filter 89** + Logging 34 + PathName 40 + PlatformIcon 48 + **Session 48** + **SessionType 59** + ShellIntegration 101 + Trash 35） | `Code/Tests/run-tests.sh` |
 | 文件系统抽象层 | 47 个纯逻辑用例 + 3 个真实文件系统用例全通过；其中 20 个覆盖 **Windows** 路径规则（盘符 / UNC / 长路径前缀 / 大小写），在 macOS 上真实执行 | `Code/Tests/run-tests.sh FileSystem` |
 | 回收站 | 35 个用例全通过。其中 9 个验证 XDG（Linux）的路径与 `.trashinfo` 规则、2 个是**真实**的废纸篓往返与冲突拒绝、多个断言「不可用时搬移函数一次都没被调用」 | `Code/Tests/run-tests.sh Trash` |
 | 名称与 Unicode | 40 个用例通过 + 1 个跳过（无效 UTF-8 名字的用例只在 Linux 上执行，CI 会跑）。覆盖字节保真往返、UTF-8 边界与过长编码、Unicode 组合形式、六类文件名问题的原因与位置 | `Code/Tests/run-tests.sh PathName` |
 | 错误携带与批量处置 | 36 个用例全通过。其中 9 个验证错误码在三种域下的携带与显示（含「未识别的码只给数字」）、11 个验证失败清单分组、12 个验证执行流程（含「重试只跑失败项」与「停止不移除已完成进度」）、4 个走真实文件系统做一次「设为只读 → 解除只读」往返 | `Code/Tests/run-tests.sh Batch` |
 | 系统图标 | 46 个用例函数（QTest 合计 48，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分四组：17 个验证缓存键与尺寸规则（扩展名折叠 7 + 键的合成与解析 5 + DPI 缩放 4 + Windows 档位收拢 1）、9 个验证有界 LRU 的淘汰与命中统计、6 个验证请求去重队列、11 个验证服务层（同步/异步/去重/回退/换比例清缓存）；另有 **3 个走真实系统图标源**（macOS 上真实执行：断言拿到非空像素、断言文字文件与文件夹的图确实不同） | `Code/Tests/run-tests.sh PlatformIcon` |
-| 主程序构建 | 通过，`iconservice_mac.mm` 与 `mask.cpp` / `maskfilter.cpp`，以及本轮的 `comparesession.cpp` / `session.cpp` 都编进主程序，**本仓库自己的代码 0 warning**（原先 7 条 `-Wunguarded-availability-new` 已用 `API_AVAILABLE` 消掉，不是压掉）。注意 `make clean` 之后重编第三方 LqRibbon 会多出 1 条 `LqRibbon.cpp: unused function 'nativeWindowScaleFactor'`——它属于 MyClass 那个仓库，不在本仓改动范围内 | `cd _build-lqcompare && ~/Qt/5.15.2/clang_64/bin/qmake ../Code/LqCompare.pro && make -j8`（增量构建看到的是 0 条） |
-| 主程序运行 | 离屏启动正常，日志 `Ribbon 构建完成：10 页 / 45 组 / 169 个按钮`，注册表自检 0 问题 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
+| 主程序构建 | 通过，`iconservice_mac.mm`、`mask.cpp` / `maskfilter.cpp`、`comparesession.cpp` / `session.cpp` 与本轮的 `sessiontype.cpp` 都编进主程序，**本仓库自己的代码 0 warning**。完整 `make clean` 之后重编，全部告警只有 1 条 `LqRibbon.cpp:569: unused function 'nativeWindowScaleFactor' [-Wunused-function]`——它属于 MyClass 那个仓库，不在本仓改动范围内 | `cd _build-lqcompare && ~/Qt/5.15.2/clang_64/bin/qmake ../Code/LqCompare.pro && make -j8` |
+| 主程序运行 | 离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」「会话类型注册表：14 个类型，0 项问题」，注册表自检 0 问题 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
 | Shell 集成 | 99 个用例函数（QTest 合计 101，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分十一组：A 动作与目标 14、B 选项 8、C 命令行引号 8、D 计划 13、E 安装 10、F 卸载与还原 9、G 校验 5、H 残留 6、I 能力 4、J 预演 3、K 命令行解析 9。**全部跑在功能完整的内存注册表上**，因此安装回滚与卸载还原是在本机真实执行的流程，不是桩 | `Code/Tests/run-tests.sh ShellIntegration` |
 | Shell 集成的命令行引号 | 用测试内置的 `CommandLineToArgvW` 参考实现做往返：`"C:\Program Files\…\LqCompare.exe" --shell-action=compare "%1"` 切回来必须还是两个原值，含「结尾反斜杠要翻倍」这条最容易写错的规则 | `Code/Tests/run-tests.sh ShellIntegration` |
 | 分级日志 | 32 个用例函数（QTest 合计 34，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分五组：A 级别与过滤 6、B 格式 4、C 输出目标 11、D 耗时辅助 6、E 级别名解析 4、以及 `initTestCase`/`cleanupTestCase`。这套件**刻意不链接 QtGui**：哪天有人往 `logging.cpp` 里加图形依赖，本工程会立刻构建失败 | `Code/Tests/run-tests.sh Logging` |
 | 掩码语法与过滤声明 | 87 个用例函数（QTest 合计 89，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分九组：A 掩码基本语义 13、B 字符集 12、C 跨目录 8、D 大小写策略 9、E 声明解析 17、F 叠加 9、G 预览 6、H 语法速查 7、I 恶意与畸形输入 6。这套件同样**刻意不链接 QtGui**（掩码只处理字符串） | `Code/Tests/run-tests.sh Filter` |
 | 掩码语法速查与实现同源 | 21 条速查条目、53 条样本被逐条**真的跑一遍**（掩码类走 `Mask::compile` + `matches`，声明类走 `MaskFilter::parse` + `accepts`），因此「帮助里写的行为」与「程序的行为」不可能分家。另有断言：纯文本速查表里含每一个掩码与样本（它确实是生成物）、条目无重复、全表同时出现「匹配」与「不匹配」两种样本 | `Code/Tests/run-tests.sh Filter` |
 | 掩码的恶意输入有界 | `**/**/…`（24 个）对上 40 段路径、`*a*a*…`（12 个）对上 200 个 `a`、400 段路径、5000 字符掩码、500 成员字符集——全部在毫秒内出结果。这几条盯的是**指数级退化**（朴素递归分别是 2^40 与 2^200 量级），不是性能基线 | `Code/Tests/run-tests.sh Filter` |
-| 会话抽象基类 | 42 个用例函数（QTest 合计 44，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分六组：A 生命周期与状态迁移 19、B 视图契约 5、C 三个公共出口 7、D 设置接口 7、E 可扩展性 2、F 源码级护栏 2。**这是本仓库第一个链接 QtWidgets 的测试套件**（基类的 `createWidget()` 返回 `QWidget*`），跑在 offscreen 平台上 | `Code/Tests/run-tests.sh Session` |
+| 会话抽象基类 | 46 个用例函数（QTest 合计 48，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分七组：A 生命周期与状态迁移 19、B 视图契约 5、C 三个公共出口 7、D 设置接口 7、E 可扩展性 2、F 源码级护栏 2、G 与类型注册表的衔接 4。**这是本仓库第一个链接 QtWidgets 的测试套件**（基类的 `createWidget()` 返回 `QWidget*`），跑在 offscreen 平台上 | `Code/Tests/run-tests.sh Session` |
+| 会话类型注册表 | 57 个用例函数（QTest 合计 59，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分六组：A 条目字段齐备 13、B ID 稳定性与登记校验 11、C 按掩码查询与注册顺序 14、D 可枚举 7、E 按名字查 5、F 自检与两道源码级护栏 7。这套件**刻意不链接 QtGui**（注册表是纯逻辑）——它是本仓库第一次有「服务层的会话框架测试」 | `Code/Tests/run-tests.sh SessionType` |
+| 会话类型注册表能反向验证 | 六处变异逐一被拦下：对调 `text` 与 `table` 的登记顺序 → 快照、重叠结论与 Home 页一致性三条红；改掉 `homepage.cpp` 里一个类型 ID → Home 页一致性红；给表格类型多加一条与文本重叠的掩码 → `onlyHtmlOverlaps` 红；把一条内置掩码写成大写 → `validate` 两条红；让 `findByFileMask` 不跳过当前平台不可用的类型 → 该条红；`add()` 不再校验 ID 格式 / 不再拒绝重复 ID / 不保存传入的工厂 / `byGroup` 不按可用性过滤 → 各自对应的用例红。全部检出 | 变异测试（结论写在 issue #37 的落地说明里） |
+| 会话类型 ID 与 Home 页硬编码的 ID 一致 | 源码级比对：`Tests/SessionType` 读 `Views/Shell/homepage.cpp`，从 `sections()` 里抠出 14 个 `QStringLiteral("…")`，与 `builtInSessionTypeIds()` **逐个比对（含顺序）**；另有一条用例对一段故意写错 ID 的源码跑同一流程，证明判定不是恒真 | `Code/Tests/run-tests.sh SessionType` |
+| 掩码语言只有一份实现 | `SessionTypeRegistry` 的默认文件掩码直接 `#include "mask.h"` 编译与匹配，因此 `**`、字符集、转义这些语义**免费成立**。有一条用例注册自定义的 `src/*.txt` 掩码并断言 `src/a.txt` 命中、`other/a.txt` 与根下的 `a.txt` 不命中——这条在自制「看扩展名」的实现下必然失败 | `Code/Tests/run-tests.sh SessionType` |
 | 会话基类的用例能反向验证 | 五处变异逐一被拦下：`createWidget()` 每次重建 → `createWidgetBuildsTheViewOnlyOnce` 与 `createWidgetPassesTheParentThrough` 红；`save()` 去掉 `canSave()` 守卫 → 4 条红；`reload()` 去掉脏守卫 → `reloadRefusesWhenSessionIsDirty` 红；`save()` 成功后不清脏 → 2 条红；给基类加一行 `#include "homepage.h"` → **测试工程构建失败**（编译期护栏生效）。五处全部检出 | 变异测试（结论写在 issue #36 的落地说明里） |
 | 会话基类不依赖具体视图 | 编译期：`SessionTests.pro` 的 INCLUDEPATH 里只有 `Views/Session` 与 `Services/Session`，构造出的是**失败**而不是「用 include 白名单扫一遍心理上放心」。源码级：F 组两条用例，其中一条对故意写坏的源码做反向验证 | `Code/Tests/run-tests.sh Session` |
 | 会话设置接口 | 接口与内存实现都在 `Services/Session/session.{h,cpp}`，只依赖 QtCore。用例覆盖「键不存在返回调用方给的回退值」「空键整条拒掉」「写入同一个值不算改动」「`clear()` 用空键承载全变」四条约定 | `Code/Tests/run-tests.sh Session` |
@@ -266,8 +335,8 @@ FILT-002（正则与超时保护）、FILT-003（属性过滤）、FILT-005（�
 | 图标检查 | 通过（27 个图标，声明/引用/文件三者一致） | `python3 tools/check_icons.py` |
 | 规格自检 | 通过（369 条，P0 59 条，PRD 与数据同步） | `python3 tools/check_spec.py` |
 | Shell 可移植性 | 通过（1 个脚本，无 bash 4 内建与 GNU 工具扩展） | `python3 tools/check_shell.py` |
-| Windows 宽字符 API | 通过（79 个源文件、清单内 43 个 API；自测 17 个样本） | `python3 tools/check_winapi.py [--self-test]` |
-| 测试套件 | `491 passed / 0 failed`，且「无套件匹配」被视为失败（exit 2） | `Code/Tests/run-tests.sh` |
+| Windows 宽字符 API | 通过（83 个源文件、清单内 43 个 API；自测 17 个样本） | `python3 tools/check_winapi.py [--self-test]` |
+| 测试套件 | `554 passed / 0 failed`，且「无套件匹配」被视为失败（exit 2） | `Code/Tests/run-tests.sh` |
 | 命令注册表自检 | 启动时 0 问题（说明不缺图标、不缺说明、无快捷键冲突） | 启动日志 |
 
 **已知未验证**：Windows MinGW 32 位构建未在本机验证（无该环境）；
@@ -291,7 +360,9 @@ Code/
 ├── Services/
 │   ├── Command/                  commandregistry（命令注册中心）
 │   ├── Log/                      logging（分级日志 / 级别过滤 / 三目标 / 耗时辅助）
-│   ├── Session/                  session（会话设置接口 + 内存实现）
+│   ├── Session/                  session（会话设置接口 + 内存实现）、
+│   │                             sessiontype（会话类型描述子与注册表：14 种内置
+│   │                             类型的字段 / ID 快照 / 按掩码的注册顺序优先）
 │   ├── Filter/                   mask（掩码语法 / 匹配 / 语法速查表）、
 │   │                             maskfilter（包含排除叠加 / 大小写策略 / 预览计数）
 │   ├── Files/                    filesystem（抽象层 + 错误携带）、pathutils（路径与名称规则）、
@@ -318,9 +389,12 @@ Code/
 │   ├── Batch/                    tst_batch + .pro（36 用例）
 │   ├── PlatformIcon/             tst_platformicon + .pro（48 用例）
 │   ├── ShellIntegration/         tst_shellintegration + .pro（99 用例函数）
-│   ├── Session/                  tst_session + probesession + .pro（42 用例函数，
+│   ├── Session/                  tst_session + probesession + .pro（46 用例函数，
 │   │                             唯一链接 QtWidgets 的套件；INCLUDEPATH 只有
 │   │                             Views/Session 与 Services/Session，兼作编译期护栏）
+│   ├── SessionType/              tst_sessiontype + .pro（57 用例函数，**纯 QtCore**，
+│   │                             刻意不链接 QtGui）；兼作两道源码级护栏：类型 ID
+│   │                             与 Home 页硬编码的一致性、图标键必须在 qrc 里
 │   └── run-tests.sh              统一测试运行器
 └── ThirdParty/                   myclasspath.pri（定位 LqRibbon）、lqribbon.pri
 
@@ -421,24 +495,25 @@ git push --force-with-lease=main:<远端当前提交> \
 
 | 对话 | 工作流 | 从哪条 issue 开始 | 交付什么 |
 | --- | --- | --- | --- |
-| **B 会话框架** | 继续（**优先——`SESS-001` 已落地，接力棒在 `SESS-002`**） | `SESS-002`（会话类型注册表）→ 之后才轮到 `SESS-006`（设置框架）与界面接入 | 仍在 `Services/Session/` 内（类型注册表、掩码索引、创建工厂），含测试 |
+| **B 会话框架** | 继续（**优先——`SESS-001` 与 `SESS-002` 都已落地，接力棒在 `SESS-006`**） | `SESS-006`（会话设置对话框框架）→ 之后是 `SESS-007`（作用域语义）与界面接入 | 声明式的设置分组模型与脏状态判定仍在 `Services/Session/` 内，可无界面测试；对话框外壳属界面批次 |
 | **H 过滤与格式** | 继续（同模块的自然延续） | `FILT-005`（过滤器的层级与作用域）——`FILT-001` 已落地，它直接复用 | 仍在 `Services/Filter/` 内，纯逻辑 |
 | **A 平台底座** | 继续 | `PLAT-006`（单实例与进程间通信）——但只能做第 1、2、4 条，见 §4.1 | 仍在 `Services/Platform/` 内；`platform.pri` 已接好 QtGui 与注册表相关的 `LIBS` |
 
-**为什么下一步是 `SESS-002` 而不是界面**：`SESS-001` 已经把「会话」这个概念定下来
-（契约、状态机、三个出口、设置接口），但**会话类型还没有地方登记**。三件事都在等
-同一个缺失的工厂——界面接入（把 `SessionArea::addSession()` 的占位页换成真正的会话）、
-`PLAT-006` 第 3 条（收到参数后创建会话）、`CLI-001` 的执行部分，都要「按类型 ID 造一个会话」。
-而注册表本身是纯数据（类型 ID、显示名、图标、默认文件掩码、创建工厂、是否 Pro 特性、
-是否平台限定），不需要界面也不需要平台能力，本机就能做完整闭环——比先动界面划算得多。
+**为什么下一步是 `SESS-006` 而不是界面**：`SESS-001` 定下了「会话」这个概念
+（契约、状态机、三个出口、设置接口），`SESS-002` 定下了「会话类型」的登记方式
+（内置类型的字段、ID 稳定性、按掩码的注册顺序优先查询、创建工厂）。
+**唯一还没有定义的是「一个会话类型有哪些设置项」**——具体会话类型（`TEXT-*` / `FOLD-*`）
+要写设置项、`SESS-007` 的作用域下拉要落在对话框底部、界面上接 Rules 按钮要有东西可开，
+都要先有这套声明。而声明本身是纯数据（标题、说明、控件类型、默认值、校验规则），
+`SESS-006` 第 4 条还明确要求「任一会话设置 Tab 均可在**无界面**测试中被单独构造与读写」
+——本机就能做完整闭环，与先动界面相比划算得多。
 
-**`SESS-001` 留给下一轮的接口**：`CompareSession` 已经可以被子类实现并直接使用
-（`Tests/Session` 里的 `ProbeSession` 与 `MinimalSession` 就是两个例子），
-因此 `SESS-002` 只需要补上「类型 ID → 创建工厂」这一层，不必回头改基类。
-唯一要留意的是类型 ID 的稳定性：`SESS-002` 第 2 条要求已发布 ID 的字符串值被快照锁定，
-而 `HomePage::sections()` 里已经硬编码了一批 ID（`text` / `folder` / `hex` …）——
-那些就是事实上的第一批「已发布 ID」，注册表必须与它们一致，否则 Home 页点出来的
-入口会指向不存在的类型。
+**`SESS-002` 留给下一轮的接口**：`SessionTypeRegistry::find(id)` 拿到条目之后再取
+`factory`，就是「按类型 ID 造会话」的那一步（`Tests/Session` 的 G 组从注册表把会话
+造出来并走完了整个生命周期，用的是合成类型）。要留意的是**内置的 14 种类型目前一个
+工厂都没有**——`HomePage::sections()` 里那批硬编码 ID 现在与注册表逐字一致（有源码级
+护栏钉住，见 §2），但点到它们还造不出会话。等第一个真正的会话类型落地时，那一行
+`factory` 才有人填；在那之前「双击 Home 页卡片打开会话」在真实数据上仍走不通。
 
 三个工作流的目录互不重叠，`services.pri` 的 include 已一次加齐（`exists()` 保护），
 因此三方都不需要改共享文件。详见 [parallel-workstreams.md](parallel-workstreams.md) §1。
@@ -452,19 +527,23 @@ git push --force-with-lease=main:<远端当前提交> \
 
 | 条目 | 被谁阻塞 | 现在能做多少 |
 | --- | --- | --- |
-| ~~`SESS-001` 会话抽象基类~~ | **已落地**（提交见 §3.1，issue #36） | 四条完成标准里三条已勾；第 2 条的「并注册」依赖 `SESS-002`，理由见 §1.8。它现在**不再阻塞任何人** |
-| `SESS-002` 会话类型注册表 | **无**（它是下一把钥匙） | **可完整落地**。纯数据 + 工厂，不需要界面也不需要平台能力。唯一要留意的是类型 ID 一经发布不可改名，而 `HomePage::sections()` 里那批 ID 已经算「已发布」 |
-| `PLAT-006` 第 3 条（收到参数后首个实例**创建会话**并把窗口置前） | `SESS-002`（类型注册表）未落地——`SESS-001` 的基类已经就位，缺的是「按类型 ID 造会话」那一步 | 「把已有窗口激活到前台」可做；「创建会话」做不了 |
+| ~~`SESS-001` 会话抽象基类~~ | **已落地**（提交见 §3.1，issue #36） | 四条完成标准**全部已勾**：第 2 条的「并注册」那一半在下一轮由 `Tests/Session` 的 G 组补上，理由见 §1.8。它现在**不再阻塞任何人** |
+| ~~`SESS-002` 会话类型注册表~~ | **已落地**（提交见 §3.1，issue #37） | 四条完成标准全部已勾，见 §1.9。**它解除了三处的阻塞**：`SESS-003` 第 1 条、`SESS-005` 第 1 条，以及「在 `Views/` 里新增会话入口的条目」。但它**没有**解除 `PLAT-006` 第 3 条与 `CLI-001` 的执行部分——原因见下面那两行 |
+| `SESS-006` 会话设置对话框框架 | **无**（它是下一把钥匙） | **可完整落地**。声明式的设置分组模型（标题、说明、控件类型、默认值、校验规则）、脏状态判定、无界面构造都是纯逻辑；对话框外壳在模型就绪后是薄薄一层。第 4 条要求「任一会话设置 Tab 均可在无界面测试中被单独构造与读写」——这一条只能靠服务层先做出来 |
+| `PLAT-006` 第 3 条（收到参数后首个实例**创建会话**并把窗口置前） | 从「`SESS-002` 未落地」**降级为「缺第一个真正的会话类型」** | 机制已经就位（`SessionTypeRegistry::find(id)` 拿到条目后取 `factory`），但**内置的类型一个工厂都没有**，因此「按类型 ID 造会话」在真实数据上仍然造不出东西。可做的是「把已有窗口激活到前台」 |
+| `SESS-003` Home 视图 | 部分解除：第 1 条不再被阻塞 | 第 1 条（按会话类型分组的「新建会话」入口卡片）现在**可做**——注册表能按分组枚举，且每条带显示名、英文名与一句话说明。第 2、3 条（最近会话 / 最近比较）等 `SESS-009`，第 4 条（会话树）等 `SESS-004` 与 `SESS-008`，第 5 条（关完会话回 Home）只依赖 `SessionArea` |
+| `SESS-005` 新建会话向导 | 部分解除：第 1 条不再被阻塞 | 第 1 条（按「文本类 / 文件夹类 / 数据类 / 高级」分组列出全部可用类型）现在**可做**：四个分组枚举与「按分组枚举可用类型」正是为此准备的。第 2 条要等各类型的路径模型，第 3 条（剪贴板作数据源）要等 `SESS-012` |
+| `SESS-007` 设置作用域语义 | 第 2、3 条涉及设置对话框底部的下拉，而那个下拉住在 `SESS-006` 的框架里 | 第 1、4 条可做：三层优先级（视图 > 会话 > 类型）与「视图 → 会话 → 类型 → 出厂默认」的覆盖链是纯逻辑，可无界面测试；第 2 条里的「本次修改将保存到 X」也可以是可测的**文本**，只有把它画进下拉要等界面 |
 | `PLAT-006` 第 5 条（单实例行为可由选项关闭） | `OPT-002`（设置框架）未落地 | 可以做成显式接口 + 命令行开关；「选项界面里能关」做不了 |
 | `PLAT-006` 第 1、2、4 条 | 无 | **可完整落地并测试**（跨平台单实例、参数转发与退出码、超时降级），因此这一条值得开，只勾这三条 |
 | `PLAT-004` 第 1 条、`PLAT-005` 第 1 条 | 需要在真的 Windows 上编译 + 在资源管理器里看 | 只能等有 Windows 机器 |
 | `PLAT-004` / `PLAT-005` / `ENG-006` / `FILT-001` 的界面接入 | `OPT-001` / `OPT-002`（设置页）未落地 | 服务层已就绪，界面接口留好即可（`ENG-006` 的接收者机制、`FILT-001` 的 `maskSyntaxReferenceText()` 与 `preview()` 都已备好） |
-| 任何在 `Views/` 里新增真正会话界面的条目 | `SESS-001`（会话基类） | 只能先做服务层 |
+| 任何在 `Views/` 里新增真正会话界面的条目 | ~~`SESS-001`（会话基类）~~ **已解除** | 基类与类型注册表都已落地，会话界面现在可以真正开工；缺的只是各自具体的会话类型实现 |
 | ~~`FILT-001` 掩码解析器~~ | **已落地**（提交见 §3.1，issue #228） | 已完成，其余 FILT 条目都复用它 |
 | `FILT-005` 过滤器的层级与作用域 | 第 4 条（「视图临时过滤不写入会话」）要等 `SESS-001`；第 3 条里的**面板**要等设置页 | 前两条与第 5 条可做：三层叠加、每层可开关、合并后的表达式与匹配计数（做成数据 + 文本，面板留给界面批次） |
 | `FILT-002` 名称过滤器（正则与超时保护） | **不是被别的模块阻塞，而是被 Qt 版本卡住**——见下面的专门说明 | 第 1、3、4 条可做（三种模式、组合语义、实时校验）；**第 2 条（200ms 超时）在 Qt 5.15 上需要绕道** |
 | `FILT-003` 属性过滤 | 第 5 条（「扫描阶段早期生效」的性能断言）要等 `Folder/` 的扫描器 | 第 1~4 条可做：大小/时间/属性位的纯判定 |
-| `CLI-001` 起的命令行条目 | `SESS-001`（解析出来的东西要能变成会话） | 解析部分可做（`ShellIntegration::parseShellInvocation()` 已是例子），执行部分做不了 |
+| `CLI-001` 起的命令行条目 | `SESS-002` 已落地，但**内置类型都没有工厂** | 解析部分可做（`ShellIntegration::parseShellInvocation()` 已是例子）；`--list-session-types` 这类**列出**类型的子命令现在也可做（注册表可枚举）。「执行」（真造出会话）仍要等第一个真正的会话类型 |
 
 **`FILT-002` 第 2 条的专门说明（省得下一轮白做半截）**：那条要求
 「正则匹配有超时保护（默认 200ms/条），超时记录为错误条目并继续」。但
@@ -678,3 +757,11 @@ git push --force-with-lease=main:<远端当前提交> \
 | 用脚本做变异测试时，复原源文件后 `make` 未必重建 | 观察到「复原之后那些变异用例仍然红」，看起来像代码没改回来；其实只是构建产物没更新（时间戳判定），于是很容易得出「用例不能反向验证」的错误结论 | 复原之后显式 `touch` 一次被测文件（或删掉对应 `.o`）再 `make`，并在宣布「全绿」之前确认那次构建**真的编译了**。变异测试的结论只在「每一轮都确认过构建确实发生」时才可信 |
 | 交接文档里「扫描 N 个源文件」这类数字会随新增模块过期 | `check_winapi.py` 数的是 `Code/` 下全部源文件（含 `Tests/`），新加一个套件这个数字就变一次。本轮它从 71 变成了 79，而文档里还写着 63——没有任何机制会主动发现 | 每次跑护栏时把输出里的数字与 §2 的表格核对一遍；`check_spec.py` 的文档计数护栏只管规格条目数，管不到这些 |
 | `setDirty(false)` / `setStatusText()` 这类「设成某个值」的入口不去重 | 界面常见的写法是「按当前状态重写一遍」，每次都发信号会让状态栏在批量过程中反复重排、标签上的「*」反复重绘，看起来在抖。而这类抖动很难归因到某一次赋值 | 「值没变就不发信号」写在这几个入口里（与 `MemorySessionSettings` 的后三个入口同一条纪律）；错误是例外——它是**事件**而不是状态，同一个原因连报两次要收到两条 |
+| `check_icons.py` 的引用正则**会扫注释** | 我在注释里写下一个完整的资源路径字面量（`":/Pictures/xxx.svg"` 的形状），护栏立刻报「代码引用了它，但 `Pictures.qrc` 未声明」。它认的是**形状**，不区分这行是代码还是注释 | 注释里要举例就写成 `:Pictures/<名字>.svg`（尖括号占位，不构成一个真实引用）。同理，测试里要**故意造一个不存在的图标键**时，必须把它拆成三段拼接——否则那个「假」键会被护栏当成真的 |
+| 测试头文件只 `#include <QObject>` | 首次构建一次性报出三个 `no function template matches function template specialization 'toString'` 加几十行 `use of undeclared identifier 'QVERIFY2'/'QCOMPARE'/'QFAIL'`，看起来像是整个 QtTest 没接上 | 测试头文件里写 `#include <QtTest>`（既有套件都是这么写的，照抄即可）。**报错条数与真实原因严重不成比例**，见到这种规模的「未声明」先怀疑头文件而不是语法 |
+| 用脚本做变异测试时只构建/运行了**一个**套件 | 变异明明生效、目标用例也确实会红，脚本却报「没检出」——因为那条用例住在**另一个**套件里。第一版就因此把三处变异误判成「用例不能反向验证」 | 变异测试脚本必须显式列出**所有**可能覆盖该变异的套件并逐个跑。另外单独复验一次那一条变异（打印「变异生效：True 出现次数：1」并肉眼确认 FAIL），别让脚本的结论单独决定「用例没写到位」 |
+| 把源文件改回原样后紧接着写下一轮变异 | 与上面那条**构建时序**坑叠加：`finally` 里刚 `copy` 回来，下一轮立刻写入并 `make`，时间戳粒度不够时 `make` 判定「没有变化」→ 这条变异其实没被编译进去 → 报「没检出」 | 每轮之间强制重建（`make clean`，或至少 `os.utime` 一下被测文件 + 确认那次构建**真的编译了**）。这两条一起看：**变异测试的结论只在「每一轮都确认过构建确实发生」时才可信** |
+| 变异测试脚本累积删除文件触发沙箱护栏 | 脚本跑到一半被 `[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED]` 打断（本轮累计 97 次、阈值 50），看起来像脚本写崩了 | 这不是脚本的问题，是每次 `os.remove(...bak)` 都在计数。**要确认的是「源文件是否已复原」**：把复原放在 `finally` 里**先 copy 再 remove**，这样中途被打断也是干净的；打断后手工核一遍 `find Code -name "*.bak"`、`git status` 与关键内容计数 |
+| `session.pri` 里嵌套 `include(../Filter/filter.pri)` | `services.pri` 已经把 Session 与 Filter 两个 `.pri` 各 include 一遍（各自在 `exists()` 保护下），再嵌套一次会让 `mask.cpp` 以**两份 SOURCES** 进同一个 Makefile。qmake 不去重——现象是重复符号或同一份代码编两次 | 子模块的 `.pri` 只加**搜索路径**（`exists($$PWD/../Filter/mask.h): INCLUDEPATH += $$PWD/../Filter`），不嵌套 include 兄弟模块的 `.pri`。代价是单独构建该模块的工程要自己再 include 一次，把它写在 `.pri` 的注释里 |
+| 服务层需要「创建界面层对象」的工厂 | 注册表在 `Services/Session/`，而工厂返回的 `CompareSession` 定义在 `Views/Session/`。直接 `#include` 界面头会撞上 `check_layering.py`；退一步写成 `QObject *` 又丢掉了类型安全，且让「制造一个会话」这件事在类型上无从检查 | **只前向声明** `class CompareSession;` + `std::function<CompareSession *(QObject *)>`。前向声明不会被分层检查的 include 正则匹配，于是既守住分层又保住类型安全。顺带的收益很大：`Tests/SessionType` 因此是**纯 QtCore** 的套件（`QT -= gui`），本仓库第一次有「服务层的会话框架测试」 |
+| `validate()` 里重查 `add()` 已经把住的规则 | ID 格式、ID 重复、显示名为空、掩码编译失败都是 `add()` 就会拒绝的，于是 `validate()` 里那几条判断**永远走不到**。而「一条永远不会红的护栏比没有护栏更糟」——它会让人以为这块已经被守住了 | `validate()` 只查**登记时没把住**的几项（英文原名缺失、图标键不以 `.svg` 结尾、掩码含大写、已编译掩码数与声明数不一致）。测试相应改成「内置表 `validate()` 为空」+「用合成表逐条验证它**能**报出来」，而不是断言一个不可达的分支 |
