@@ -201,6 +201,23 @@ update workflow ... without workflow scope`）。走 SSH 不受这个限制：
 git push git@github.com:LorenHan/LqCompare.git main
 ```
 
+**配套的坑**：`origin` 配的是 **https** URL（见 `git remote -v`），而推送走的是
+**SSH** URL，两者在 git 眼里是两个不同的远端。于是 `git push --force-with-lease`
+会**永远**报 `stale info` 而被拒——它拿不到与推送目标 URL 对应的 remote-tracking
+引用，无法核对租约，于是保守地拒绝。这不是「有人改过远端」，但报错信息看不出
+这个区别，很容易被误读成「远端被别人推过」从而不敢继续。
+
+需要强推（例如 amend 后要覆盖刚推上去的那个提交）时，把期望值显式写出来：
+
+```bash
+git fetch origin                                     # 先让本地知道远端在哪
+git push --force-with-lease=main:<远端当前提交> \
+    git@github.com:LorenHan/LqCompare.git main
+```
+
+**能不强推就不强推。** 本项目的做法是：amend 之后先把提交号回填进文档，
+再一次性推——避免把「文档里写的提交号」和「真实提交号」拆成两个提交。
+
 ## 4. 下一步该做什么
 
 | 对话 | 工作流 | 从哪条 issue 开始 | 交付什么 |
@@ -346,4 +363,5 @@ git push git@github.com:LorenHan/LqCompare.git main
 | 让缓存层直接吃 `QIcon` | 缓存淘汰顺序、去重、命中统计是最容易写错的部分，而一旦它们依赖 `QIcon`，测试就得有一个能跑图形栈的环境 | `IconEntry::payload` 用不透明的 `QVariant`：生产放 `QIcon`，测试放 `QString`。于是这批逻辑能在只链接 QtCore 的套件里完整覆盖。代价是 `usable()` 只回答「有没有」，所以真实图标源另有三条走真机的用例 |
 | 图标解析与其他后台工作共用线程池 | 一个耗时任务（枚举大目录、读压缩包）会把所有图标请求排到它后面，界面上表现为「整个列表都不出图标」——用户会以为是图标功能坏了，而不是「有个任务在跑」 | `IconService` 用**专属**的单线程 `QThreadPool`；池容量设 1 也顺便免除「提供者实现各自考虑并发」的负担 |
 | 对真实系统图标源做「一定不是回退图标」的断言 | macOS 对未知扩展名（`.zzzznope`）会给**通用文档图标**，来源是 `System` 而不是 `Builtin`——与 Finder 的行为一致，这是正确行为。断言 `hasFallback() == true` 会失败，而看起来像代码有 bug | 按来源分支断言：`System` 时断言 `usable()` 且 `actualPixelSize > 0`；`Builtin` 时才断言 `hasFallback()`。**教训**：对「外部系统会怎么回答」的断言，先确认外部系统的真实行为，不要按自己的直觉写期望值 |
-| `check_spec.py` 的文档计数护栏会误报「N 个条目」这种口语 | 我在架构文档里写「一个 5000 个文件的目录会有 5000 个条目」当例子，护栏的 `(\d+)\s*个条目` 把它当成规格条目数，直接报错 | 该护栏的模式是刻意宽进严出的（宁可误报也不漏报过期数字）。**写文档时别用「N 个条目」表达非规格含义**，换成「N 格」「N 项」；反过来也不要把这个模式改窄——它正是靠宽匹配才抓到了 5 处过期数字 |
+| `check_spec.py` 的文档计数护栏会误报「N 个条目」这种口语 | 我在架构文档里用「几千文件的目录会占几千格」举例时，最初写成了「N 个条目」的形状（数字紧跟「个条目」），护栏的 `(\d+)\s*个条目` 把它当成规格条目数，直接报错；改完这行**引用它的坑表本身**又踩了第二次 | 该护栏的模式是刻意宽进严出的（宁可误报也不漏报过期数字）。**写文档时避免让数字紧贴「个条目」「条规格」这类词**，表达缓存/列表数量时换成「格」「项」。反过来也不要把这个模式改窄——它正是靠宽匹配才抓到了 5 处过期数字 |
+| `git push --force-with-lease` 在本仓永远报 `stale info` | `origin` 是 https URL，推送走的是 SSH URL，两者是不同远端；git 找不到对应的 remote-tracking 引用，无法核对租约，于是保守拒绝。**报错信息读起来像「远端被别人推过」**，会被误判成协作冲突而不敢继续 | 显式写期望值：`git push --force-with-lease=main:<远端当前提交> git@github.com:LorenHan/LqCompare.git main`，前置一次 `git fetch origin`。更根本的做法是能不强推就不强推——先回填提交号再推 |
