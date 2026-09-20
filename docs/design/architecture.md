@@ -77,7 +77,7 @@ LqCompare 是 Qt 5.15.2 / C++17、qmake 构建的文件与文件夹比对工具�
 | --- | --- | --- | --- |
 | `Command/` | `commandregistry.{h,cpp}` | 全量命令的注册、查询、执行与自检（UI-023 ~ UI-025） | `command.pri` |
 | `Log/` | `logging.{h,cpp}` | 分级日志：级别过滤（宏与直接调用同一套判断）、带线程 id 的定宽文本格式、三个输出目标（控制台 / 文件 / 任意接收者如界面输出面板）、记录经过的结构化载体 `Record`、RAII 的耗时辅助 `Stopwatch`（ENG-006） | `log.pri` |
-| `Session/` | `session.{h,cpp}`、`sessiontype.{h,cpp}`、`settingschema.{h,cpp}` | 会话设置的抽象接口 `SessionSettings` 与一个内存实现 `MemorySessionSettings`（SESS-001 契约里的 `sessionSettings`）；会话类型描述子 `SessionType` 与注册表 `SessionTypeRegistry`——内置 14 种类型的 ID、显示名、英文原名、图标键、默认文件掩码、分组、版本归属（Pro / Standard）、平台限定，以及按掩码的注册顺序优先查询（SESS-002）；**设置项的声明模型**（`SettingItem` / `SettingGroup` / `SettingsTab` / `SettingsSchema`，含标题、说明、控件类型、默认值、校验规则）、**设置草稿**（`SettingsDraft`：读写、脏判定、全有或全无的应用、恢复默认）、**未保存改动的询问策略**（`inquiryForUnsavedChanges`）与**声明目录**（`SessionSettingsCatalog`）（SESS-006）。三层作用域的覆盖链与落盘留给 SESS-007 / SESS-008 | `session.pri` |
+| `Session/` | `session.{h,cpp}`、`sessiontype.{h,cpp}`、`settingschema.{h,cpp}`、`settingscope.{h,cpp}` | 会话设置的抽象接口 `SessionSettings` 与一个内存实现 `MemorySessionSettings`（SESS-001 契约里的 `sessionSettings`）；会话类型描述子 `SessionType` 与注册表 `SessionTypeRegistry`——内置 14 种类型的 ID、显示名、英文原名、图标键、默认文件掩码、分组、版本归属（Pro / Standard）、平台限定，以及按掩码的注册顺序优先查询（SESS-002）；**设置项的声明模型**（`SettingItem` / `SettingGroup` / `SettingsTab` / `SettingsSchema`，含标题、说明、控件类型、默认值、校验规则）、**设置草稿**（`SettingsDraft`：读写、脏判定、全有或全无的应用、恢复默认）、**未保存改动的询问策略**（`inquiryForUnsavedChanges`）与**声明目录**（`SessionSettingsCatalog`）（SESS-006）；**三层作用域的覆盖链与写入路由**（`ScopedSessionSettings`：视图 → 会话 → 类型 → 出厂默认的解析、只落目标层的写入、切换作用域与关闭标签的提示文案）（SESS-007）。设置落盘留给 SESS-008 | `session.pri` |
 | `Filter/` | `mask.{h,cpp}`、`maskfilter.{h,cpp}` | 掩码语言（`*` / `?` / `[...]` / `**` 的解析与匹配、转义、语法速查）与过滤声明（包含/排除的叠加、排除优先、大小写策略、预览计数）（FILT-001） | `filter.pri` |
 | `Files/` | `filesystem.{h,cpp}`、`pathutils.{h,cpp}`、`pathname.{h,cpp}`、`trash.{h,cpp}`、`batch.{h,cpp}`、`filesystem_<平台>.cpp`、`trash_<平台>.<ext>` | 文件系统服务抽象层（路径、名称、元数据、枚举、时间戳、属性）、错误携带（分类 + 原始系统码）、回收站服务（可逆删除、撤销）、批量操作的失败清单与重试（PLAT-002 ~ PLAT-003、PLAT-007 ~ PLAT-008） | `files.pri` |
 | `Platform/` | `iconkey.{h,cpp}`、`iconcache.{h,cpp}`、`iconservice.{h,cpp}`、`registrystore.{h,cpp}`、`registrystore_<平台>.<ext>`、`shellintegration.{h,cpp}`、`iconservice_<平台>.<ext>` | 平台集成：缓存键与尺寸规则、按类型的图标缓存与请求去重、系统图标解析与回退（PLAT-004）；注册表存储抽象与 Shell 集成（右键菜单、文件关联、安装/卸载/校验/残留检查）（PLAT-005） | `platform.pri` |
@@ -203,6 +203,7 @@ QtCore，`platform.pri` 里那句 `QT += gui` 是唯一的例外，理由写在�
 | `Services/Session/session.{h,cpp}` | 会话设置的抽象接口 `SessionSettings`、一个内存实现 `MemorySessionSettings`，以及「值没变就不算改动」这三条入口约定 | **任意平台**（纯逻辑，只依赖 QtCore） |
 | `Services/Session/sessiontype.{h,cpp}` | 会话类型描述子 `SessionType` 与注册表 `SessionTypeRegistry`：14 种内置类型的字段、ID 稳定性校验、按掩码的注册顺序优先查询、按分组的枚举 | **任意平台**（纯逻辑，只依赖 QtCore） |
 | `Services/Session/settingschema.{h,cpp}` | 设置项的声明（`SettingItem` 的标题 / 说明 / 控件类型 / 默认值 / 校验规则）、草稿（`SettingsDraft`：读写、脏判定、校验、全有或全无的应用、恢复默认）、未保存改动的询问策略（`inquiryForUnsavedChanges`）、声明目录（`SessionSettingsCatalog`） | **任意平台**（纯逻辑，只依赖 QtCore 与 `Services/Filter` 的掩码解析器；`Tests/Settings` 因此可以 `QT -= gui`） |
+| `Services/Session/settingscope.{h,cpp}` | 三层作用域的覆盖链与写入路由（`ScopedSessionSettings`）：按 视图 → 会话 → 类型 → 出厂默认 解析；写入只落 `writeScope()` 指定的那一层；`writeDestinationText()` / `scopeSwitchNotice()` / `planViewScopeClose()` 三条可测文案 | **任意平台**（纯逻辑，只依赖 QtCore；`Tests/SettingsScope` 同样 `QT -= gui`） |
 | `Views/Session/comparesession.{h,cpp}` | 会话抽象基类：`createWidget()` 的模板方法、`open/reload/save/close` 的状态机、三个公共出口、`SessionError` / `SessionProgress` 两个结构化载体 | **任意平台**（跑在 QtWidgets + offscreen 上，本机与 CI 都真实执行） |
 | `Views/Session/settingsdialog.{h,cpp}` | 会话设置对话框的外壳：把声明画成控件、把用户的操作翻译成对草稿的读写、把草稿的结论翻译成按钮的可用状态与错误行 | **任意平台**（`Tests/SettingsDialog`，offscreen 平台） |
 
@@ -223,6 +224,22 @@ QtCore，`platform.pri` 里那句 `QT += gui` 是唯一的例外，理由写在�
 **会话基类必须有测试能真的跑起来**。它是本仓库第一个链接 QtWidgets 的模块，
 `Tests/Session` 也因此是第一个链接 QtWidgets 的测试套件——运行器本来就统一
 导出 `QT_QPA_PLATFORM=offscreen`，所以这一点没有额外的机制，只是第一次用上。
+
+**SESS-007 之后，`Services/Session/` 里多了一层「合成」的角色**：
+`ScopedSessionSettings` 不自己存值，它把三层存储（视图 / 会话 / 类型）串成一条链，
+再拿声明里的 `SettingItem::defaultValue` 当链尾。这条链的**读写方向是刻意不对称的**：
+
+| 方向 | 行为 | 为什么 |
+| --- | --- | --- |
+| 读 | 视图 → 会话 → 类型 → 出厂默认，逐层问「这一层有没有显式设过」，首个命中即返回 | 第 4 条点名的覆盖链；用 `contains()` 而不是「值是不是空的」判断命中，否则用户清空一项之后会被下面那层的值悄悄顶回来 |
+| 写 | 只落到 `writeScope()` 指定的那一层，**绝不碰**另外两层 | 边界条款「视图级改动不得污染会话默认值」。写入目标那一层缺失时返回 false，不退而写入别的层——那会让一次「保存成新会话默认值」活不过关标签 |
+
+于是「写入成功」与「用户看得见变化」成了两件事：往会话层写、而视图层已经有一条时，
+值确实存进了会话层（用户要的就是这个），但有效值仍是视图层那个。
+`resolvedFromLayer()` / `describeResolution()` 就是为这一情形准备的——
+第 2 条的「必须能一眼看出当前改动的去向」在代码上的落点就是它们。
+代价是本类**不转发**三层的 `changed` 信号，自己按「**有效值**有没有变」发，
+理由写在 `settingscope.h` 的类注释里。
 
 **「基类不依赖具体视图」有编译期与源码级两层校验，SESS-006 之后两层的分工变了**：
 `SessionTests.pro` 的 INCLUDEPATH 里只有 `Views/Session` 与 `Services/Session` 两个目录，
@@ -271,7 +288,7 @@ SESS-003 的范围，本轮改了会与它撞车。另有一条用例对一段**
 | 目录 | 内容 |
 | --- | --- |
 | `Pictures/` | 图标资源（SVG）与 `Pictures.qrc`。图标由 `tools/generate_icons.py` 生成 |
-| `Tests/` | 每个测试套件一个子目录 + 一个 `.pro`；`run-tests.sh` 是统一运行器。`Support/` 放多个套件共用的测试替身（如内存文件系统）。**刻意不链接 QtGui 的套件**（`Tests/Filter`、`Tests/Logging`、`Tests/SessionType`、`Tests/Settings`）兼作「服务层不依赖界面」的编译期护栏；**链接 QtWidgets 的套件**（`Tests/Session`、`Tests/SettingsDialog`）跑在 offscreen 平台上 |
+| `Tests/` | 每个测试套件一个子目录 + 一个 `.pro`；`run-tests.sh` 是统一运行器。`Support/` 放多个套件共用的测试替身（如内存文件系统）。**刻意不链接 QtGui 的套件**（`Tests/Filter`、`Tests/Logging`、`Tests/SessionType`、`Tests/Settings`、`Tests/SettingsScope`）兼作「服务层不依赖界面」的编译期护栏；**链接 QtWidgets 的套件**（`Tests/Session`、`Tests/SettingsDialog`）跑在 offscreen 平台上 |
 | `ThirdParty/` | `myclasspath.pri`（定位 LqRibbon）与 `lqribbon.pri`（引入） |
 
 ## 4. 关键设计决策
@@ -383,6 +400,15 @@ SESS-003 的范围，本轮改了会与它撞车。另有一条用例对一段**
 | **`QSpinBox` 的取值区间必须显式设置** | 它的默认范围是 0..99，用户想填 200 会被静静夹到 99——「看起来能用、实际改了用户的输入」是最难发现的一类缺陷。声明了上下界就用它（校验规则顺手变成界面约束），没声明就用整型全域 | SESS-006 |
 | **框架里不含任何具体设置项** | 「文本比对该有哪些设置」是 TEXT-* / FOLD-* 的产品决定，不是框架的一部分。先编一份看起来完整的设置表，等各类型落地时会被逐条质疑；留白不妨碍任何人——登记一份声明，对话框立刻就有内容。`Tests/Settings` 里有一条用例把「目录当前为空」这个状态钉住，让下一个人看到它时必须做一次决定 | SESS-006 |
 | **对话框先读会话现值、再建界面** | 反过来的话各项控件会先按出厂默认值建好，而那时的 `loadFrom()` 还没有人接信号——界面上显示的全是默认值，用户会以为自己的设置丢了，然后点「确定」把默认值真的写回去 | SESS-006 |
+| **三层作用域的**读**走覆盖链，**写**只落目标层** | 读写方向刻意不对称。读按 视图 → 会话 → 类型 → 出厂默认 逐层问「这一层有没有显式设过」；写只落 `writeScope()` 那一层。若写入时「顺手把下面几层也写一遍」，用户一次临时调整（视图级）就会变成这个会话甚至这个类型的默认值——而他从没同意过。反过来若写入时「顺手把上面几层清掉让改动生效」，被清掉的那一层是另一个视图或另一个会话的东西 | SESS-007 |
+| **判断「这一层有没有这一项」用 `contains()`，不看值是否为空** | 用户把一项清空（编码留空、掩码清空）是一次**真实的**设置。按「值是不是空的」判断命中会越过这一层去取下面那层的值，于是用户发现自己清不掉这一项——重开又回来了，且没有任何提示 | SESS-007 |
+| **写入目标层缺失时返回失败，不退而写入别的层** | 用户的动作是「保存到当前会话默认值」。悄悄写到视图层会让他关标签后以为设置丢了、而它当时确实生效过——比直接报「这一层暂时不可用」糟得多。这类「看起来成功了」的降级正是最难查的一类 | SESS-007 |
+| **`changed` 按**有效值**是否变化发，不按「有没有写这一层」发** | 往会话层写、而视图层已有同一条时，值确实存进去了（用户要的就是这个），但用户看到的值没变。这时发 `changed` 会让状态栏与标签上的脏标记白抖一次，而抖动的来源极难归因到某一次赋值。本类因此**不转发**三层的 `changed`，自己算有效值 | SESS-007 |
+| **出厂默认来自声明（`SettingItem::defaultValue`），且排在调用方的 `fallback` 之前** | 三层记的都是「用户设过的值」，链的最后一环只能来自声明。把 `fallback` 排在声明之前，一个已声明默认值的设置项会因为某个调用点传了个临时值而读到它，且从结果上看不出异常。另外出厂默认必须**按 `normalized()` 归一后**再交出去：直接返回声明里那一份，会让「带一个末尾空行的掩码清单」变成 2 条，而界面显示 1 条 | SESS-007 |
+| **`clear()` / `remove()` 只作用于写入目标层** | 类型层是所有新会话共用的默认值，被一个会话的「清空」带走等于一次跨会话、不可逆的破坏性操作。把范围写在函数名上（另有 `clearLayer(scope)`）比在文档里解释可靠 | SESS-007 |
+| **「本次修改将保存到 X」与「切换作用域」的文案是服务层的可测数据，不写进对话框** | 第 2 条的要求是「一眼看出改动的去向」，而这句话会出现在下拉项 tooltip、状态提示两处。写在对话框里必然演化出两种说法。做成 `writeDestinationText()` / `scopeSwitchNotice()` 之后，三种作用域各有一句话被逐条断言，而且可以断言「切换作用域**不会**把已应用的改动搬走」——一个把它写成迁移命令的文案会让用户切换完去检查原来那一层，发现值还在，进而认为切换坏了 | SESS-007 |
+| **「关闭标签会丢弃视图级设置」也做成纯函数（`planViewScopeClose`）** | 第 3 条里可无界面验证的那一半。视图层一条都没有时**一个字都不问**——视图级设置用得多的地方（每次打开都调一下再看）如果关标签时也弹一次，用户会学会闭着眼睛点「确定」，于是真正的提示也一起失效。这条「没有就不问」正是这条例最容易写过头的部分，所以它必须能被单独断言 | SESS-007 |
+| **丢弃视图层时只对有效值真变了的键发 `changed`** | 视图层的值与会话层相同时，丢掉它用户看不出任何变化。为它发信号会让状态栏与脏标记白抖一次，理由与 `setDirty(false)` 去重那条同源 | SESS-007 |
 
 ## 5. 装配流程
 

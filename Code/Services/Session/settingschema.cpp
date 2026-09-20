@@ -73,7 +73,11 @@ QString settingScopeLabel(SettingScope scope)
     case SettingScope::Session:
         return QStringLiteral("当前会话默认值");
     case SettingScope::Type:
-        return QStringLiteral("该类型全部新会话");
+        // 与 SESS-007 第 1 条里那三种作用域的写法**逐字一致**（「该类型全部新会话
+        // 默认值」）。SESS-006 当初先落的是「该类型全部新会话」，本轮对齐成规格
+        // 的原文：界面上少一个字都可能让用户把它读成「只影响新建的会话、
+        // 不影响默认值」，而它恰恰就是默认值。
+        return QStringLiteral("该类型全部新会话默认值");
     }
     return QStringLiteral("未知范围");
 }

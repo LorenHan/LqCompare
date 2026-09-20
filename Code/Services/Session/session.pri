@@ -3,9 +3,9 @@
 #   session.{h,cpp}        —— 会话设置的抽象接口 + 内存实现（SESS-001 契约条目）
 #   sessiontype.{h,cpp}    —— 会话类型描述子与注册表（SESS-002）
 #   settingschema.{h,cpp}  —— 设置项的声明、草稿与声明目录（SESS-006）
+#   settingscope.{h,cpp}   —— 三层作用域的覆盖链与写入路由（SESS-007）
 #
-# 后续会往这里补：三层作用域的覆盖链（SESS-007）、设置落盘（SESS-008）、
-# 最近会话列表（SESS-009 的数据部分）。接口不变。
+# 后续会往这里补：设置落盘（SESS-008）、最近会话列表（SESS-009 的数据部分）。接口不变。
 #
 # 本模块只依赖 QtCore 与 Services/Filter 的掩码语言，因此能被只链接 QtCore 的
 # 测试套件（Tests/SessionType、Tests/Settings）直接覆盖——这是 SESS-002 第 1 条的
@@ -28,9 +28,11 @@ exists($$PWD/../Filter/mask.h): INCLUDEPATH += $$PWD/../Filter
 HEADERS += \
     $$PWD/session.h \
     $$PWD/sessiontype.h \
-    $$PWD/settingschema.h
+    $$PWD/settingschema.h \
+    $$PWD/settingscope.h
 
 SOURCES += \
     $$PWD/session.cpp \
     $$PWD/sessiontype.cpp \
-    $$PWD/settingschema.cpp
+    $$PWD/settingschema.cpp \
+    $$PWD/settingscope.cpp

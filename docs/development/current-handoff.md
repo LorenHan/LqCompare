@@ -44,6 +44,13 @@ Shell 集成的注册表计划、安装回滚、卸载还原与残留检查全�
 钉住，让下一个人看到它时必须做那次决定。
 界面上仍是 169 个按钮里 31 条带处理器，其余点击后提示对应 ACTION-ID；
 会话基类、类型注册表与设置对话框都还没有被容器拿去接起来（Rules 按钮尚未开这个对话框）。
+**「一次改动生效到哪一层」也定下来了（SESS-007）**：三层作用域（视图 / 会话 / 类型）
+由 `ScopedSessionSettings` 串成一条链，**读**按 视图 → 会话 → 类型 → 出厂默认 逐层解析，
+**写**只落到下拉指定的那一层、绝不碰另外两层；「本次修改将保存到 X」、切换作用域的提示、
+以及「关闭标签会丢弃哪些视图级设置」三处文案都是服务层的**可测数据**而不是对话框里的字符串。
+它仍然是纯 QtCore 的（`Tests/SettingsScope` 同样刻意 `QT -= gui`），因此
+「视图级改动不得污染会话默认值」这条边界是在**没有界面**的情况下被断言住的。
+界面还没接：下拉目前只是「能选」，对话框也还没有作用域链的实例可用。
 
 ## 1.1 已落地的服务层模块
 
@@ -63,6 +70,7 @@ Shell 集成的注册表计划、安装回滚、卸载还原与残留检查全�
 | `Services/Session/`（类型注册表） | SESS-002 | **部分完成**（第 2 条里「并注册」的前半句——按类型 ID 造会话——要等各会话类型实现出来；界面尚未取用） | `Tests/SessionType`（57 个用例函数，**纯 QtCore**） |
 | `Services/Session/`（设置声明与草稿） | SESS-006 | **已完成**（第 2、3、4 条的主体；第 1 条是界面，第 3 条在界面上真正被调用另由 `Tests/SettingsDialog` 证明。框架刻意不含具体设置项） | `Tests/Settings`（65 个用例函数，**纯 QtCore**） |
 | `Views/Session/`（会话设置对话框） | SESS-006 | **已完成**（第 1 条的对话框外壳；界面尚未接入 Rules 按钮） | `Tests/SettingsDialog`（44 个用例函数，链接 QtWidgets） |
+| `Services/Session/`（作用域链与写入路由） | SESS-007 | **部分完成**（第 1、4 条已勾；第 2、3 条的服务层逻辑与文案已落地并被测试，缺的是界面接通：下拉还没显示去向、切换还没问一句、关标签路径还没有持有设置的会话） | `Tests/SettingsScope`（40 个用例函数，**纯 QtCore**） |
 
 PLAT-002 的详细说明与其「第 2 条完成标准为何不勾选」见
 [issue #325](https://github.com/LorenHan/LqCompare/issues/325)；
@@ -74,7 +82,8 @@ PLAT-005 见 [issue #326](https://github.com/LorenHan/LqCompare/issues/326)；
 ENG-006 见 [issue #338](https://github.com/LorenHan/LqCompare/issues/338)；
 FILT-001 见 [issue #228](https://github.com/LorenHan/LqCompare/issues/228)；
 SESS-001 见 [issue #36](https://github.com/LorenHan/LqCompare/issues/36)；
-SESS-002 见 [issue #37](https://github.com/LorenHan/LqCompare/issues/37)。
+SESS-002 见 [issue #37](https://github.com/LorenHan/LqCompare/issues/37)；
+SESS-007 见 [issue #42](https://github.com/LorenHan/LqCompare/issues/42)。
 
 ### 1.2 回收站（PLAT-003）落地到了什么程度
 
@@ -362,21 +371,63 @@ FILT-002（正则与超时保护）、FILT-003（属性过滤）、FILT-005（�
   切 Tab 时草稿原样带到下一张 Tab，没有任何东西会丢，给一个用不上的破坏性按钮等于
   凭空造出一条丢工作的路径。默认项恒为「取消」（手快的回车不应丢掉刚敲进去的东西）。
 
-## 2. 已验证的事实（不用再花时间确认）
+### 1.11 SESS-007 落地到了什么程度
 
+规格的四条完成标准对应到代码：
+
+| 完成标准 | 落在哪里 | 状态 |
+| --- | --- | --- |
+| 三种作用域：仅当前视图、当前会话默认值、该类型全部新会话默认值（三层优先级 视图 > 会话 > 类型） | `settingScopePriorityOrder()`（**解析顺序**，与 `allSettingScopes()` 的**展示顺序**是两个函数）、`settingScopeRank()`；`Type` 的显示文案本轮对齐成规格原文「该类型全部新会话默认值」。A 组 5 条用例把顺序钉死（反转发现在 7 条红） | **已落**（逻辑层。下拉能选、选择真的决定写入位置；对话框尚未接通作用域链） |
+| 下拉中明确显示「本次修改将保存到 X」，并在切换作用域时提示已有改动将改写到何处 | `writeDestinationText(scope)` 与 `ScopedSessionSettings::writeDestinationText()`；`scopeSwitchNotice(from, to, pendingKeys)` 给出 `ask / title / text`。三条文案的**字面值**被逐字断言；另有两条用例钉住「没有待定改动就不问」「不改作用域就不问」，以及「文案不得声称会把**已应用**的改动搬走」 | **逻辑已落，界面未接**：对话框底部还没有显示这句话的控件，切换下拉也没有去问 `scopeSwitchNotice()`。见下 |
+| 作用域为「仅当前视图」时关闭标签即丢弃，且关闭前有提示 | `viewScopeKeys()`（只报视图层，不会把另外两层算进来）、`discardViewScope()`（返回真被丢弃的条数）、`planViewScopeClose()`（没有视图级设置时一个字都不问） | **逻辑已落，关闭路径未接**：`SessionArea` 目前只有占位页、没有真正的会话，因此没有「关闭一个持有设置的标签」这件事可接。见下 |
+| 读取设置时按 视图 → 会话 → 类型 → 出厂默认 的覆盖链解析，且该链有单元测试 | `ScopedSessionSettings::value()` / `resolvedValue()` / `factoryDefault()`；B 组 6 条用例逐环验证，含「出厂默认排在调用方的 `fallback` 之前」「出厂默认按 `normalized()` 归一后交出」「显式设成空值不算没设置」 | **已落** |
+
+**还没做的**（三条都只是「界面尚未接通」，不是逻辑缺失）：
+
+1. **对话框底部没有显示「本次修改将保存到 X」**。`settingsdialog.cpp` 的下拉目前
+   只有三个作用域各自的文案与说明（SESS-006 落的），没有这一行去向提示。
+   接它需要对话框持有一个 `ScopedSessionSettings`，而那是「各会话类型交出设置目标」
+   之后的事——与 SESS-006 第 1 条「界面未接 Rules 按钮」是同一个前置。
+2. **切换下拉的提示没有接**。`scopeSwitchNotice()` 已经被测好了，但对话框的
+   `settingsScopeCombo` 还没有在 `currentIndexChanged` 里问它一句。
+3. **关标签的提示没有接**。`SessionArea::closeCurrentSession()` 关的是占位页，
+   没有任何东西持有视图层设置。等第一个真正的会话类型落地、并且会话的
+   `sessionSettings()` 换成 `ScopedSessionSettings` 之后，这一处才有人可接。
+   规格第 3 条「关闭前有提示」的**判定与文案**已经在 `planViewScopeClose()` 里，
+   届时只是把它的 `ask / text` 交给 `SessionClosing` 那条路径。
+
+**五条刻意的取舍**（改之前先读，否则很容易把它们「修」回去）：
+
+- **读按覆盖链、写只落一层**。读写方向不对称是有意的：写的时候「顺手把下面几层也写一遍」，
+  会让用户一次临时调整（视图级）变成这个会话甚至这个类型的默认值，而他从没同意过。
+- **判断「这一层有没有」用 `contains()`，不看值是否为空**。用户把编码清空是一次**真实的**
+  设置；按值判断会越过这一层取到下面那层，于是用户发现自己清不掉这一项。
+- **写入目标层缺失时返回 false，不退而写入别的层**。悄悄写到视图层会让一次
+  「保存成新会话默认值」活不过关标签，而用户以为存下来了。
+- **`changed` 按有效值是否变化发，不按「有没有写这一层」发**。所以本类**不转发**
+  三层的 `changed`——转发会让一次写入发出两条，且层的 `clear()` 用空键表示「全变了」，
+  直接转发会把「某一层清空了」说成「所有设置都变了」。代价是：**外部绕过本类
+  直接改某一层时，本类不会察觉**。因此约定三层存储只经本类读写。
+- **`clear()` / `remove()` 只作用于写入目标层**。类型层是所有新会话共用的默认值，
+  被一个会话的「清空」带走等于一次跨会话、不可逆的破坏性操作；
+  另有 `clearLayer(scope)` 把范围写在函数名上。
+
+## 2. 已验证的事实（不用再花时间确认）
 | 项目 | 结论 | 验证方式 |
 | --- | --- | --- |
 | 构建 | Qt 5.15.2 clang_64 上 qmake + make 通过，产出 `dist/macos/LqCompare.app` | `qmake && make -j8` |
 | 运行 | 主程序离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
-| 测试（全量） | **670 passed / 0 failed / 1 skipped**（Batch 36 + CommandRegistry 14 + FileSystem 50 + **Filter 89** + Logging 34 + PathName 40 + PlatformIcon 48 + **Session 48** + **SessionType 59** + **Settings 71** + **SettingsDialog 45** + ShellIntegration 101 + Trash 35）。这一次实测发生在对话套件加固**之前**，见本节末尾的说明 | `Code/Tests/run-tests.sh` |
+| 测试（全量） | **711 passed / 0 failed / 1 skipped**（Batch 36 + CommandRegistry 14 + FileSystem 50 + **Filter 89** + Logging 34 + PathName 40 + PlatformIcon 48 + **Session 48** + **SessionType 59** + **Settings 71** + **SettingsDialog 45** + **SettingsScope 41** + ShellIntegration 101 + Trash 35）。本轮这 711 是**实测**，14 个套件逐个跑完 | `Code/Tests/run-tests.sh` |
 | 会话设置声明与草稿 | 65 个用例函数（QTest 合计 71，含 `initTestCase` 与六种控件的 6 行数据）。分六组：A 声明与六种控件 17、B 自检 11、C 草稿读写与脏判定 13、D 应用与恢复默认 10、E 询问策略 6、F 声明目录与反向验证 8。这套件**刻意不链接 QtGui**（声明与草稿都是纯数据），因此「任一会话设置 Tab 均可无界面构造与读写」这条标准是靠构建配置 + 用例两边一起钉住的 | `Code/Tests/run-tests.sh Settings` |
-| 会话设置对话框 | 43 个用例函数（QTest 合计 44，含 `initTestCase`）。分五组：A 结构（左侧 Tab 列表 / 右侧内容 / 底部作用域下拉 + 四按钮的几何与取值）14、B 切 Tab 与关闭的确认 11、C 四个按钮的行为 10、D 校验反馈与脏标记 5、E 反向验证 3 | `Code/Tests/run-tests.sh SettingsDialog` |
+| 会话设置对话框 | 44 个用例函数（QTest 合计 45，含 `initTestCase` 与 QTest 隐含的 `cleanupTestCase`）。分五组：A 结构（左侧 Tab 列表 / 右侧内容 / 底部作用域下拉 + 四按钮的几何与取值）14、B 切 Tab 与关闭的确认 11、C 四个按钮的行为 10、D 校验反馈与脏标记 5、E 反向验证 3。**本轮 45 是重跑实测值**：上一轮留下的「43 个用例函数 / 44 条」是限制出现之后按源码静态数的，数漏了两个；加固没有合并掉任何用例 | `Code/Tests/run-tests.sh SettingsDialog` |
+| 会话作用域链与写入路由 | 40 个用例函数（QTest 合计 41，含 `initTestCase`）。分六组：A 优先级顺序 5、B 覆盖链与出厂默认 6、C 写入路由与「三层互不覆盖」11、D 去向文案与切换提示 7、E 关闭标签丢弃视图级设置 7、F 解析诊断与反向验证 3。这套件**刻意不链接 QtGui**（覆盖链是纯数据合成），因此「视图级改动不得污染会话默认值」这条边界是在**没有界面**的情况下被断言住的 —— 与 SESS-006 第 4 条同一手法 | `Code/Tests/run-tests.sh SettingsScope` |
+| 会话作用域链能反向验证 | 十二处变异逐一被拦下：反转三层优先级 → 7 条红；覆盖链丢掉「出厂默认」这一环 → 5 条红；出厂默认不归一就交出去 → 1 条红；`contains()` 把出厂默认也算成「已设置」→ 2 条红；`clear()` 清空三层 → 1 条红；丢弃视图级设置时连会话层一起清 → 4 条红；`sameValue` 恒为假（`changed` 不再按有效值判断）→ 3 条红；写入目标层缺失时退而写入视图层 → 1 条红；显式设成空值的项被当成「没设置」→ 1 条红；没有视图级设置也要问一句 → 1 条红；没有待定改动也弹切换提示 → 1 条红；去向文案改用机器标识 → 1 条红。**12 处全部检出，0 处漏检** | 变异测试（结论写在 issue #42 的落地说明里） |
 | 文件系统抽象层 | 47 个纯逻辑用例 + 3 个真实文件系统用例全通过；其中 20 个覆盖 **Windows** 路径规则（盘符 / UNC / 长路径前缀 / 大小写），在 macOS 上真实执行 | `Code/Tests/run-tests.sh FileSystem` |
 | 回收站 | 35 个用例全通过。其中 9 个验证 XDG（Linux）的路径与 `.trashinfo` 规则、2 个是**真实**的废纸篓往返与冲突拒绝、多个断言「不可用时搬移函数一次都没被调用」 | `Code/Tests/run-tests.sh Trash` |
 | 名称与 Unicode | 40 个用例通过 + 1 个跳过（无效 UTF-8 名字的用例只在 Linux 上执行，CI 会跑）。覆盖字节保真往返、UTF-8 边界与过长编码、Unicode 组合形式、六类文件名问题的原因与位置 | `Code/Tests/run-tests.sh PathName` |
 | 错误携带与批量处置 | 36 个用例全通过。其中 9 个验证错误码在三种域下的携带与显示（含「未识别的码只给数字」）、11 个验证失败清单分组、12 个验证执行流程（含「重试只跑失败项」与「停止不移除已完成进度」）、4 个走真实文件系统做一次「设为只读 → 解除只读」往返 | `Code/Tests/run-tests.sh Batch` |
 | 系统图标 | 46 个用例函数（QTest 合计 48，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分四组：17 个验证缓存键与尺寸规则（扩展名折叠 7 + 键的合成与解析 5 + DPI 缩放 4 + Windows 档位收拢 1）、9 个验证有界 LRU 的淘汰与命中统计、6 个验证请求去重队列、11 个验证服务层（同步/异步/去重/回退/换比例清缓存）；另有 **3 个走真实系统图标源**（macOS 上真实执行：断言拿到非空像素、断言文字文件与文件夹的图确实不同） | `Code/Tests/run-tests.sh PlatformIcon` |
-| 主程序构建 | 通过，`iconservice_mac.mm`、`mask.cpp` / `maskfilter.cpp`、`comparesession.cpp` / `session.cpp` 与本轮的 `sessiontype.cpp` 都编进主程序，**本仓库自己的代码 0 warning**。完整 `make clean` 之后重编，全部告警只有 1 条 `LqRibbon.cpp:569: unused function 'nativeWindowScaleFactor' [-Wunused-function]`——它属于 MyClass 那个仓库，不在本仓改动范围内 | `cd _build-lqcompare && ~/Qt/5.15.2/clang_64/bin/qmake ../Code/LqCompare.pro && make -j8` |
+| 主程序构建 | 通过，`iconservice_mac.mm`、`mask.cpp` / `maskfilter.cpp`、`comparesession.cpp` / `session.cpp` / `sessiontype.cpp` / `settingschema.cpp` 与本轮的 `settingscope.cpp` 都编进主程序（`grep settingscope` 命中 4 次，确认进了编译与链接），**本仓库自己的代码 0 warning**。全部告警只有 1 条 `LqRibbon.cpp:569: unused function 'nativeWindowScaleFactor' [-Wunused-function]`——它属于 MyClass 那个仓库，不在本仓改动范围内 | `cd _build-lqcompare && ~/Qt/5.15.2/clang_64/bin/qmake ../Code/LqCompare.pro && make -j8` |
 | 主程序运行 | 离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」「会话类型注册表：14 个类型，0 项问题」「会话设置目录：0 个类型（含 无通用声明），0 项问题」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
 | Shell 集成 | 99 个用例函数（QTest 合计 101，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分十一组：A 动作与目标 14、B 选项 8、C 命令行引号 8、D 计划 13、E 安装 10、F 卸载与还原 9、G 校验 5、H 残留 6、I 能力 4、J 预演 3、K 命令行解析 9。**全部跑在功能完整的内存注册表上**，因此安装回滚与卸载还原是在本机真实执行的流程，不是桩 | `Code/Tests/run-tests.sh ShellIntegration` |
 | Shell 集成的命令行引号 | 用测试内置的 `CommandLineToArgvW` 参考实现做往返：`"C:\Program Files\…\LqCompare.exe" --shell-action=compare "%1"` 切回来必须还是两个原值，含「结尾反斜杠要翻倍」这条最容易写错的规则 | `Code/Tests/run-tests.sh ShellIntegration` |
@@ -397,7 +448,7 @@ FILT-002（正则与超时保护）、FILT-003（属性过滤）、FILT-005（�
 | 图标检查 | 通过（27 个图标，声明/引用/文件三者一致） | `python3 tools/check_icons.py` |
 | 规格自检 | 通过（369 条，P0 59 条，PRD 与数据同步） | `python3 tools/check_spec.py` |
 | Shell 可移植性 | 通过（1 个脚本，无 bash 4 内建与 GNU 工具扩展） | `python3 tools/check_shell.py` |
-| Windows 宽字符 API | 通过（91 个源文件、清单内 43 个 API；自测 17 个样本） | `python3 tools/check_winapi.py [--self-test]` |
+| Windows 宽字符 API | 通过（95 个源文件、清单内 43 个 API；自测 17 个样本） | `python3 tools/check_winapi.py [--self-test]` |
 | 测试套件 | `670 passed / 0 failed`，且「无套件匹配」被视为失败（exit 2） | `Code/Tests/run-tests.sh` |
 | 命令注册表自检 | 启动时 0 问题（说明不缺图标、不缺说明、无快捷键冲突） | 启动日志 |
 | 会话设置目录自检 | 启动时 0 问题。目录当前是**空的**（框架刻意不含具体设置项），因此这一行眼下只会打印「0 个类型」；它的意义是把唯一的那个生产调用点摆好，各会话类型登记声明时立刻开始替它们把关 | 启动日志 |
@@ -405,18 +456,18 @@ FILT-002（正则与超时保护）、FILT-003（属性过滤）、FILT-005（�
 **已知未验证**：Windows MinGW 32 位构建未在本机验证（无该环境）；
 macOS 上只有 Qt 5.15.2 一套（用户机器上 6.11.0 已卸载）。
 
-**本轮新出现的一条环境限制（下一轮开工前先确认它是否还在）**：2026-09-20 下午起，
-本机**任何不在 dyld 共享缓存里的 x86_64 可执行文件都无法启动**——进程进入 `U`
-（不可中断等待）状态、CPU 时间恒为 0、`SIGKILL` 与 `SIGALRM` 都进不去，因此既跑不完
-也超时不了。已用最小实验定位到与代码无关：`cp /bin/echo /tmp/echo_cp` 之后
-`arch -x86_64 /tmp/echo_cp hi` 同样卡住，而架构为 arm64 的最小 C 程序与
-`/bin/cat` / `/bin/grep` 一切正常；`qmake`、各 `tst_*` 与主程序（均为 Qt 5.15.2
-clang_64 编出的 x86_64）因此全部无法启动。`make` / `clang++` 不受影响（arm64）。
-后果：本轮 SESS-006 的**生产代码与文档**在限制出现之前已完整验证（670 全绿、五道护栏、
-主程序 0 warning 且离屏启动正常），之后只对 `Tests/SettingsDialog` 做了一处
-**测试基建**加固（把「意外弹出的真实模态框」从「挂住」变成「断言失败」），
-该套件已编译通过但**未能重跑**；按当前源码静态计数它是 43 个用例函数（44 条 QTest），
-而上面记的实测值是 45——重跑时若为 44，说明加固时合并掉了一条重复用例，顺手改掉那一行即可。
+**本轮新出现、并在本轮内解决的一条环境限制（下一轮不必再排查，坑表里有完整成因）**：
+2026-09-20 下午起，本机**任何不在 dyld 共享缓存里的 x86_64 可执行文件都无法启动**
+——进程进入 `U`（不可中断等待）状态、CPU 时间恒为 0、`SIGKILL` 与 `SIGALRM` 都进不去，
+因此既跑不完也超时不了；`qmake`、各 `tst_*` 与主程序（均为 Qt 5.15.2 clang_64 编出的
+x86_64）因此全部无法启动。**根因是「未做 ad-hoc 签名」，不是 Rosetta 坏了、也不是代码问题**：
+`codesign -f -s - <二进制>` 之后立刻能跑（最小实验：`clang -arch x86_64` 编出的
+`int main(){return 42;}` 未签名时卡住、签名后正常退出并返回 42；`arch -x86_64 /bin/echo`
+一直正常，因为它在共享缓存里且由 Apple 签名；arm64 程序全程正常）。
+处理：给 `~/Qt/5.15.2/clang_64` 下的 232 个 Mach-O（dylib / framework 二进制 / 可执行文件）
+各补一次 ad-hoc 签名，并在 `Code/Tests/run-tests.sh` 构建成功之后加一行签名——
+这样后续每一轮都不必手工处理。**这是宿主环境的一次性修复，不影响仓库的跨平台性**
+（`uname -s` 判断成 Darwin 才做，且失败不阻断）。
 
 ## 3. 当前代码结构（哪些文件已经存在）
 
@@ -442,7 +493,9 @@ Code/
 │   │                             sessiontype（会话类型描述子与注册表：14 种内置
 │   │                             类型的字段 / ID 快照 / 按掩码的注册顺序优先）、
 │   │                             settingschema（设置项的声明 / 草稿 / 询问策略 /
-│   │                             声明目录；复用 Filter 的掩码解析器，**纯 QtCore**）
+│   │                             声明目录；复用 Filter 的掩码解析器，**纯 QtCore**）、
+│   │                             settingscope（三层作用域的覆盖链 / 只落目标层的
+│   │                             写入路由 / 去向与丢弃提示三条文案，**纯 QtCore**）
 │   ├── Filter/                   mask（掩码语法 / 匹配 / 语法速查表）、
 │   │                             maskfilter（包含排除叠加 / 大小写策略 / 预览计数）
 │   ├── Files/                    filesystem（抽象层 + 错误携带）、pathutils（路径与名称规则）、
@@ -478,9 +531,12 @@ Code/
 │   ├── Settings/                 tst_settings + .pro（65 用例函数，**纯 QtCore**，
 │   │                             刻意不链接 QtGui——「任一会话设置 Tab 均可无界面
 │   │                             构造与读写」因此是构建配置钉住的结论）
-│   ├── SettingsDialog/           tst_settingsdialog + .pro（43 用例函数，链接
+│   ├── SettingsDialog/           tst_settingsdialog + .pro（44 用例函数，链接
 │   │                             QtWidgets）；含一个默认答案恒为「返回」的对话框
 │   │                             子类，让「意外被问到」表现为断言失败而不是挂住
+│   ├── SettingsScope/            tst_settingsscope + .pro（40 用例函数，**纯 QtCore**，
+│   │                             刻意不链接 QtGui——「视图级改动不得污染会话默认值」
+│   │                             因此在没有界面的情况下被断言住）
 │   └── run-tests.sh              统一测试运行器
 └── ThirdParty/                   myclasspath.pri（定位 LqRibbon）、lqribbon.pri
 
@@ -529,6 +585,7 @@ docs/
 | `bab3f5b` | 会话抽象基类与统一的会话设置接口 | SESS-001 |
 | `4d78efa` | 会话类型描述子与注册表（内置类型的字段、ID 快照、按掩码的注册顺序优先、创建工厂） | SESS-002 |
 | `9ecd269` | 会话设置对话框框架与会话设置的声明模型（声明 / 草稿 / 询问策略 / 声明目录，以及按声明生成的对话框） | SESS-006 |
+| `f71a0e1` | 测试运行器为 macOS 上的 x86_64 套件补 ad-hoc 签名（未签名的 x86_64 二进制在 Apple Silicon 上会卡在 `U` 状态，既跑不完也超时不了） | ENG-003 |
 
 > 上面这张表里，PLAT-005、FILT-001、SESS-001、SESS-002 与 SESS-006 那五行由**单独的纯文档提交**
 > 补写提交号，原因见下一段——把一个提交的提交号写进它自己，会因为 `--amend` 每次都改变
@@ -583,8 +640,8 @@ git push --force-with-lease=main:<远端当前提交> \
 
 | 对话 | 工作流 | 从哪条 issue 开始 | 交付什么 |
 | --- | --- | --- | --- |
-| **B 会话框架** | 继续（**优先——`SESS-001`、`SESS-002` 与 `SESS-006` 都已落地，接力棒在 `SESS-007`**） | `SESS-007`（设置作用域语义）→ 之后是各具体会话类型与界面接入 | 三层作用域的覆盖链（视图 > 会话 > 类型 > 出厂默认）与「本次修改将保存到 X」的文本仍在 `Services/Session/` 内，可无界面测试；`SettingScope` 的三个取值与说明已由 SESS-006 定好，直接复用 |
-| **H 过滤与格式** | 继续（同模块的自然延续） | `FILT-005`（过滤器的层级与作用域）——`FILT-001` 已落地，它直接复用 | 仍在 `Services/Filter/` 内，纯逻辑 |
+| **B 会话框架** | 继续（**`SESS-001`、`SESS-002`、`SESS-006`、`SESS-007` 都已落地；SESS-007 剩下的全是「界面接通」，而界面要等第一个真正的会话类型**） | 先落一个具体会话类型（`TEXT-*` 或 `FOLD-*`），或改做 `SESS-008`（会话文件保存与加载） | 这里有一个**新产生的依赖链**：SESS-007 第 2、3 条被「第一个真正的会话类型」卡住（对话框要有设置目标才谈得上去向提示，标签要有持有设置的会话才谈得上关标签丢弃）。因此不要再往「框架」方向加条目 |
+| **H 过滤与格式** | 继续（同模块的自然延续） | `FILT-005`（过滤器的层级与作用域）——`FILT-001` 已落地，它直接复用；**第 4 条随 SESS-007 解除阻塞** | 仍在 `Services/Filter/` 内，纯逻辑。第 4 条「视图临时过滤不写入会话」现在有 `SettingScope::View` 可用了 |
 | **A 平台底座** | 继续 | `PLAT-006`（单实例与进程间通信）——但只能做第 1、2、4 条，见 §4.1 | 仍在 `Services/Platform/` 内；`platform.pri` 已接好 QtGui 与注册表相关的 `LIBS` |
 
 **为什么下一步是 `SESS-007` 而不是各会话类型**：`SESS-001` 定下了「会话」这个概念
@@ -597,9 +654,20 @@ git push --force-with-lease=main:<远端当前提交> \
 完成标准里有三条（优先级、覆盖链、提示文本）都是纯逻辑，本机就能做完整闭环。
 
 **为什么 SESS-007 之后仍不是「先接界面」**：`SESS-006` 的对话框已经能按声明生成界面，
-但**没有任何一份声明可登记**——「文本比对该有哪些设置」是 TEXT-* / FOLD-* 的产品决定，
-而那批条目本身还没实现。现在接通 Rules 按钮，打开的会是一个空的设置对话框。
-先落一个具体会话类型（`TEXT-*` 或 `FOLD-*`），对话框与注册表的工厂才同时有东西可用。
+`SESS-007` 的作用域链也已经在服务层跑通并测好了，但**没有任何一份声明可登记**——
+「文本比对该有哪些设置」是 TEXT-* / FOLD-* 的产品决定，而那批条目本身还没实现。
+现在接通 Rules 按钮，打开的会是一个空的设置对话框；SESS-007 第 2 条那个「本次修改
+将保存到 X」的去向提示也一样——它要有一个「当前会话的设置目标」才谈得上显示。
+先落一个具体会话类型（`TEXT-*` 或 `FOLD-*`），对话框、注册表的工厂、作用域链
+与设置声明才**同时**有东西可用。
+
+**SESS-007 留下的确切接口**：`ScopedSessionSettings::setLayer(scope, store)` 收三份
+借用的 `SessionSettings*`，`setSchema(const SettingsSchema*)` 收一份声明（出厂默认的来源），
+`setWriteScope()` / `writeDestinationText()` 对应对话框底部那个下拉，
+`viewScopeKeys()` / `discardViewScope()` / `planViewScopeClose()` 对应关标签这一条路径。
+接的时候注意两条：三层存储只能经本类读写（本类不转发三层的 `changed`，
+外部直接改某一层它不会察觉），以及写入目标层缺失时 `setValue()` 返回 false ——
+不要为了「让它能存」而在调用点换成别的层。
 
 **`SESS-002` 留给下一轮的接口**：`SessionTypeRegistry::find(id)` 拿到条目之后再取
 `factory`，就是「按类型 ID 造会话」的那一步（`Tests/Session` 的 G 组从注册表把会话
@@ -623,7 +691,7 @@ git push --force-with-lease=main:<远端当前提交> \
 | ~~`SESS-001` 会话抽象基类~~ | **已落地**（提交见 §3.1，issue #36） | 四条完成标准**全部已勾**：第 2 条的「并注册」那一半在下一轮由 `Tests/Session` 的 G 组补上，理由见 §1.8。它现在**不再阻塞任何人** |
 | ~~`SESS-002` 会话类型注册表~~ | **已落地**（提交见 §3.1，issue #37） | 四条完成标准全部已勾，见 §1.9。**它解除了三处的阻塞**：`SESS-003` 第 1 条、`SESS-005` 第 1 条，以及「在 `Views/` 里新增会话入口的条目」。但它**没有**解除 `PLAT-006` 第 3 条与 `CLI-001` 的执行部分——原因见下面那两行 |
 | ~~`SESS-006` 会话设置对话框框架~~ | **已落地**（提交见 §3.1，issue #39） | 四条完成标准全部已勾，见 §1.10。它**解除了 `SESS-007` 的阻塞**（作用域下拉就住在它的对话框底部，`SettingScope` 的三个取值与说明也已定好）。它**没有**解除「界面接入」那一类——框架里一项具体设置都没有，现在接通 Rules 按钮打开的是空对话框；要等第一个真正的会话类型登记声明 |
-| `SESS-007` 设置作用域语义 | **无**（它是下一把钥匙） | **可做 3 条、第 4 条一起做**：三层优先级（视图 > 会话 > 类型）与「视图 → 会话 → 类型 → 出厂默认」的覆盖链是纯逻辑，可无界面测试；「本次修改将保存到 X」也可以先是可测的**文本**。第 3 条「作用域为仅当前视图时关闭标签即丢弃」需要标签关闭路径，`SessionArea` 已有 |
+| `SESS-007` 设置作用域语义 | **已落地**（提交见 §3.1，issue #42） | 第 1、4 条已勾；第 2、3 条的服务层逻辑（去向文案、切换提示、丢弃计划）已落地并被 12 处变异逐一验证，**剩下的是界面接通**。它**解除了一处阻塞**：`FILT-005` 第 4 条（「视图临时过滤不写入会话」）现在有 `SettingScope::View` 可用了。它**没有**解除自己那两条——它们要等第一个真正的会话类型 |
 | `PLAT-006` 第 3 条（收到参数后首个实例**创建会话**并把窗口置前） | 从「`SESS-002` 未落地」**降级为「缺第一个真正的会话类型」** | 机制已经就位（`SessionTypeRegistry::find(id)` 拿到条目后取 `factory`），但**内置的类型一个工厂都没有**，因此「按类型 ID 造会话」在真实数据上仍然造不出东西。可做的是「把已有窗口激活到前台」 |
 | `SESS-003` Home 视图 | 部分解除：第 1 条不再被阻塞 | 第 1 条（按会话类型分组的「新建会话」入口卡片）现在**可做**——注册表能按分组枚举，且每条带显示名、英文名与一句话说明。第 2、3 条（最近会话 / 最近比较）等 `SESS-009`，第 4 条（会话树）等 `SESS-004` 与 `SESS-008`，第 5 条（关完会话回 Home）只依赖 `SessionArea` |
 | `SESS-005` 新建会话向导 | 部分解除：第 1 条不再被阻塞 | 第 1 条（按「文本类 / 文件夹类 / 数据类 / 高级」分组列出全部可用类型）现在**可做**：四个分组枚举与「按分组枚举可用类型」正是为此准备的。第 2 条要等各类型的路径模型，第 3 条（剪贴板作数据源）要等 `SESS-012` |
@@ -633,7 +701,7 @@ git push --force-with-lease=main:<远端当前提交> \
 | `PLAT-004` / `PLAT-005` / `ENG-006` / `FILT-001` 的界面接入 | `OPT-001` / `OPT-002`（设置页）未落地 | 服务层已就绪，界面接口留好即可（`ENG-006` 的接收者机制、`FILT-001` 的 `maskSyntaxReferenceText()` 与 `preview()` 都已备好） |
 | 任何在 `Views/` 里新增真正会话界面的条目 | ~~`SESS-001`（会话基类）~~ **已解除** | 基类与类型注册表都已落地，会话界面现在可以真正开工；缺的只是各自具体的会话类型实现。**一个反例值得记住**：`SESS-006` 的设置对话框外壳已经在 `Views/Session/` 里落地并跑通了 44 条用例，但它**没有**被容器接起来——框架层可以先于具体视图落地，只要它的输入（声明）是纯数据 |
 | ~~`FILT-001` 掩码解析器~~ | **已落地**（提交见 §3.1，issue #228） | 已完成，其余 FILT 条目都复用它 |
-| `FILT-005` 过滤器的层级与作用域 | 第 4 条（「视图临时过滤不写入会话」）要等 `SESS-007` 的「仅当前视图」作用域；第 3 条里的**面板**要等设置页 | 前两条与第 5 条可做：三层叠加、每层可开关、合并后的表达式与匹配计数（做成数据 + 文本，面板留给界面批次） |
+| `FILT-005` 过滤器的层级与作用域 | 第 4 条**已随 `SESS-007` 解除阻塞**（`SettingScope::View` 已可用）；第 3 条里的**面板**仍要等设置页（OPT） | 现在四条都能做：三层叠加、每层可开关、合并后的表达式与匹配计数（做成数据 + 文本，面板留给界面批次），以及第 4 条「视图临时过滤不写入会话」——它可以直接断言「写进视图层的键没有出现在会话层的 `keys()` 里」。**本条目现在是 H 工作流性价比最高的一条** |
 | `FILT-002` 名称过滤器（正则与超时保护） | **不是被别的模块阻塞，而是被 Qt 版本卡住**——见下面的专门说明 | 第 1、3、4 条可做（三种模式、组合语义、实时校验）；**第 2 条（200ms 超时）在 Qt 5.15 上需要绕道** |
 | `FILT-003` 属性过滤 | 第 5 条（「扫描阶段早期生效」的性能断言）要等 `Folder/` 的扫描器 | 第 1~4 条可做：大小/时间/属性位的纯判定 |
 | `CLI-001` 起的命令行条目 | `SESS-002` 已落地，但**内置类型都没有工厂** | 解析部分可做（`ShellIntegration::parseShellInvocation()` 已是例子）；`--list-session-types` 这类**列出**类型的子命令现在也可做（注册表可枚举）。「执行」（真造出会话）仍要等第一个真正的会话类型 |
@@ -862,4 +930,10 @@ git push --force-with-lease=main:<远端当前提交> \
 | `QDialog` 没 `show()` 就断言 `isVisible()` | 从未显示过的对话框本来就 `isVisible() == false`，于是「问题标签显示了没有」「对话框还在不在」这类断言**怎么改实现都成立**（测试里改错了方向也不会红） | 凡是断言可见性/关闭状态的用例先 `show()` 一次（配一个 `showDialog()` 辅助函数并 `processEvents()`）；这类「恒真断言」比没有断言更危险，因为它看上去有覆盖 |
 | 用 `QSignalBlocker` 挡住控件信号来「回滚选中项」时，只处理了一半的入口 | Tab 列表的 `currentRowChanged` 直连切换逻辑，而公开的 `goToTab()` 自己也会问一次——两条路径行为不一致：点列表**不问**，调函数**问**。现象是「点 Tab 直接就过去了，未保存的东西跟着走到了下一页」 | 让列表的信号也走 `goToTab()`，被拒绝时用 `QSignalBlocker` 把选中项回滚到旧行。**一个用户动作只应有一条实现路径**；两条路径就一定会出现「点得动、调不动」这种只在其中一个入口复现的缺陷 |
 | `SettingValidation::describe()` 用一个单位描述所有控件类型 | 掩码清单的上下界数的是「条数」，写成「最多 5 个字符」会让用户以为在限制单条掩码的长度 | 单位随控件类型走：文本类「个字符」、掩码清单「条」。这类「文案与数据对不上」的错误不会让任何断言失败，只有人看得出来——所以它值得一条用例盯住（`maskListLengthRulesCountEntriesNotCharacters`） |
-| 宿主环境：不在 dyld 共享缓存里的 x86_64 可执行文件无法启动 | 2026-09-20 下午起，`qmake`（Qt 5.15.2 clang_64）、全部 `tst_*` 与主程序都启动不了：进程进入 `U`（不可中断等待）状态、CPU 时间恒为 0、`SIGKILL` 与 `SIGALRM` 都进不去，**既跑不完也超时不了**。看起来像「测试挂住了」或「qmake 坏了」，很容易误判成代码问题 | 用最小实验把「与代码无关」钉死：`cp /bin/echo /tmp/echo_cp` 后 `arch -x86_64 /tmp/echo_cp hi` 同样卡住，而 arm64 的最小 C 程序、`/bin/cat`、`/bin/grep` 一切正常；`make` / `clang++`（arm64）不受影响。**结论**：这不是本仓库的问题，是宿主/沙箱的 x86_64 执行路径断了。遇到「`U` 状态 + CPU 时间 0」先往这一层想，不要在测试与代码里找原因；能跑测试的轮次要把结论**写进** §2，因为下一轮可能又跑不了 |
+| 宿主环境：**未做 ad-hoc 签名**的 x86_64 可执行文件无法启动 | 2026-09-20 下午起，`qmake`（Qt 5.15.2 clang_64）、全部 `tst_*` 与主程序都启动不了：进程进入 `U`（不可中断等待）状态、CPU 时间恒为 0、`SIGKILL` 与 `SIGALRM` 都进不去，**既跑不完也超时不了**。看起来像「测试挂住了」或「qmake 坏了」，上一轮因此把它误判成「宿主/沙箱的 x86_64 执行路径断了」并只做了记录 | **真正的成因是签名，不是 Rosetta 坏了**：`clang -arch x86_64` 编出的最小程序（`int main(){return 42;}`）未签名时卡住、执行 `codesign -f -s -` 之后立刻正常返回 42；`arch -x86_64 /bin/echo` 一直正常，因为它在 dyld 共享缓存里且由 Apple 签名；arm64 程序全程正常。**判据**：`codesign -dv <二进制>` 报 `code object is not signed at all` 就是它。**处理**：给 `~/Qt/5.15.2/clang_64` 下 232 个 Mach-O 各补一次签名，并在 `Code/Tests/run-tests.sh` 构建成功之后加一行 `codesign -f -s -`（`uname -s` 为 Darwin 才做、失败不阻断）。遇到「`U` 状态 + CPU 时间 0」先跑一次 `codesign -dv` 与被签名前后的最小实验，不要在测试与代码里找原因 |
+| 只按 mtime 判断「要不要重编」在变异测试里会漏编 | 用 `os.utime()` + `sleep` 躲时间戳粒度仍然不可靠：复原动作用的是 `shutil.copy2`，它会**把备份的旧 mtime 一起还原**，于是「这条变异其实没被编译进去」，脚本却报「用例没检出」——结论正好反过来 | 变异脚本改成**先删掉被测文件的 `.o` 再 `make`**（`os.remove(obj)`），重编与否就没有歧义；再断言 `make` 日志里出现了被测文件名。本轮第一版脚本就因此在 12 处变异里漏报了 1 处（M11），改成删 `.o` 后 12 处全部检出 |
+| 变异脚本传 `-o -` 与单独的 `txt` 两个参数 | QTest 的写法是 `-o -,txt`（一个参数），拆成两个会被当成未知参数，二进制直接以非 0 退出。而脚本把「非 0 退出」理解成「用例失败」，于是基线就被判定成「不是全绿」而中止 | `-o -,txt` 必须是一个参数。另外「非 0 退出」与「有用例失败」是两件事，脚本要分开判（构建失败、参数错误、用例失败） |
+| 交接文档里的 qmake 命令路径写错过 | 交给无人值守任务的那份说明里写的是 `qmake ../LqCompare.pro`，而 `LqCompare.pro` 在 `Code/` 下，直接跑报 `Cannot find file: ../LqCompare.pro.`（qmake 以 exit 2 结束，`make` 因此根本没跑） | 正确命令是 `cd _build-lqcompare && qmake ../Code/LqCompare.pro`（§2 的表格里一直是对的）。qmake 失败时**它不会生成 Makefile**，所以紧随其后的 `make` 会报找不到文件——看到「make 立刻失败且没有任何编译输出」先看 qmake 的 stdout |
+| 组合式设置存储直接转发各层的 `changed` 信号 | 一次写入会先由被写的那一层发出、再由组合层发出，上层收到**两条**；而层的 `clear()` 用**空键**表示「全变了」，直接转发会把「某一层清空了」说成「所有设置都变了」——状态栏与标签上的脏标记会白抖一次 | 组合层（`ScopedSessionSettings`）**不连接**三层的 `changed`，自己按「**有效值**有没有变」发一次。代价是外部绕过组合层直接改某一层时它不会察觉——因此约定三层存储只经组合层读写，并把这条写进类注释 |
+| 把「写入成功」当成「用户看得见变化」 | 往会话层写、而视图层已经有同一条时，值确实存进了会话层（用户点的就是「保存到当前会话默认值」），但有效值仍是视图层那个。此时发 `changed` 或改写视图层都是错的：前者让脏标记白抖，后者让这次改动活不过关标签而用户以为存下来了 | 两者分开：值存进目标层、`changed` 按有效值发，并另给 `resolvedFromLayer()` / `describeResolution()` 让界面显示「当前生效值来自「仅当前视图」」。**凡是「按作用域分层存储」的系统都会有这个错位**，要在接口上留出表达它的地方 |
+| 用 `QCOMPARE` 直接比 `enum class` | `QTEST_MAIN` 的 `QCOMPARE` 需要 `toString<T>`，对 `enum class` 没有现成特化；补一个特化当然可以，但那会让断言依赖枚举**序号**——在枚举中间插一个值，快照与断言的含义就整体错位 | 比较机器标识字符串（`QString::fromLatin1(settingScopeIdentifier(scope))`）。本仓既有套件都是这么写的，且字符串是稳定的对外事实（它会进会话文件与命令行）。本轮 `Tests/SettingsScope` 全篇按这条办 |
