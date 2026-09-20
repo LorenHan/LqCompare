@@ -28,6 +28,17 @@ private slots:
     void validateReportsShortcutConflict();
     void validateAcceptsWellFormedCommand();
     void unknownCommandDoesNotThrow();
+    void oldAggregateInitializerKeepsDefaults();
+    void disabledCommandCannotExecute();
+    void hiddenCommandCanExecute();
+    void unimplementedCommandCannotBeEnabled();
+    void runtimeStateSignalsOnlyOnChanges();
+    void triggerRefreshesConditionsBeforeAndAfter();
+    void sessionTypeLimitsEnabledState();
+    void checkedStateRemainsBusinessOwned();
+    void observersSeeConsistentState();
+    void handlerMayClearRegistry();
+    void clearResetsAllRuntimeState();
 };
 
 #endif // LQCOMPARE_TST_COMMANDREGISTRY_H

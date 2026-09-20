@@ -705,15 +705,28 @@ QString FilterStack::combinedExpression() const
     //
     // 至于「白名单为空的层」：它的 INC_i 恒为真，于是对交集没有贡献——
     // 这正是「只填了排除框是正常用法」在分层场景下的表现。
-    QStringList includes;
+    QStringList layerIncludes;
     QStringList excludes;
     for (FilterLayer layer : allFilterLayers()) {
         const FilterLayerState &state = m_layers[filterLayerIndex(layer)];
         if (!state.active())
             continue;
+        QStringList includes;
         collectRuleTexts(state.filter, &includes, &excludes);
+        // Keep each layer's OR group intact before joining layers with AND.
+        // Flattening includes here incorrectly describes an intersection as a
+        // union, although decide() continues to filter by intersection.
+        const QString included = joinAtoms(includes, QStringLiteral(" || "));
+        if (!included.isEmpty() && !layerIncludes.contains(included))
+            layerIncludes.append(included);
     }
-    return composeExpression(includes, excludes);
+    const QString included = layerIncludes.join(QStringLiteral(" && "));
+    const QString excluded = joinAtoms(excludes, QStringLiteral(" || "));
+    if (excluded.isEmpty())
+        return included;
+    if (included.isEmpty())
+        return negateExpression(excluded);
+    return included + QStringLiteral(" && ") + negateExpression(excluded);
 }
 
 FilterStackPreview FilterStack::preview(const QVector<MaskSubject> &subjects) const

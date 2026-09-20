@@ -1,0 +1,5 @@
+REGEDIT4
+
+; deterministic Windows-1252 input
+[HKEY_CURRENT_USER\Software\Café]
+"Currency"="€ £ café"

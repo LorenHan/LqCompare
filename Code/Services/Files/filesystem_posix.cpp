@@ -245,6 +245,7 @@ public:
     QVector<FileInfo> enumerateDirectory(const QString &path, ErrorCode *error) const override
     {
         QVector<FileInfo> entries;
+        if (error) *error = FileSystemError::None;
 
         const QByteArray native = toNative(path);
         DIR *directory = ::opendir(native.constData());
@@ -280,9 +281,10 @@ public:
                 pathEndsWithSeparator ? path + name : path + separator + name;
 
             struct stat status;
-            if (!lstatPath(childPath, &status, nullptr)) {
-                // 单个条目取元数据失败（竞态删除、权限不足、链接损坏）时跳过它，
-                // 但**不中断整个枚举**：一个坏条目不应该让整个目录看起来是空的。
+            ErrorCode childError;
+            if (!lstatPath(childPath, &status, &childError)) {
+                // Preserve an incomplete enumeration as an error, never as an empty tree.
+                if (error && *error == FileSystemError::None) *error = childError;
                 continue;
             }
 
@@ -290,9 +292,6 @@ public:
         }
 
         ::closedir(directory);
-
-        if (error && *error != FileSystemError::PermissionDenied)
-            *error = FileSystemError::None;
 
         // 刻意不排序：见头文件说明。上层要稳定顺序就自己排，
         // 这样这里可以用系统最快的方式枚举，不必为了「看起来有序」多排一遍。

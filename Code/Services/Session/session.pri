@@ -36,3 +36,6 @@ SOURCES += \
     $$PWD/sessiontype.cpp \
     $$PWD/settingschema.cpp \
     $$PWD/settingscope.cpp
+
+HEADERS += $$PWD/sessiondocument.h
+SOURCES += $$PWD/sessiondocument.cpp

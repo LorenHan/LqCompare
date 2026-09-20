@@ -1,6 +1,7 @@
 #include "commandregistry.h"
 
 #include <QRegularExpression>
+#include <QScopedValueRollback>
 
 namespace LqCompare {
 
@@ -32,6 +33,10 @@ bool CommandRegistry::add(const Command &command)
     }
     m_commands.insert(command.id, command);
     m_order.append(command.id);
+    m_baseStates.insert(command.id, {command.enabled, command.visible, command.checked,
+                                     command.disabledReason});
+    updateEnabled();
+    emit commandAdded(command.id);
     return true;
 }
 
@@ -58,18 +63,124 @@ QVector<Command> CommandRegistry::all() const
 
 bool CommandRegistry::trigger(const QString &id) const
 {
+    // Preserve the existing const API while refreshing the shared runtime state.
+    auto *registry = const_cast<CommandRegistry *>(this);
+    registry->updateEnabled();
     const Command *command = find(id);
-    if (!command || !command->handler) {
+    if (!command || !command->handler || !command->enabled) {
         return false;
     }
-    command->handler();
+    // A handler can add/clear commands; copying avoids calling a destroyed function.
+    const auto handler = command->handler;
+    handler();
+    registry->updateEnabled();
     return true;
+}
+
+bool CommandRegistry::setEnabled(const QString &id, bool enabled, const QString &reason)
+{
+    auto it = m_baseStates.find(id);
+    if (it == m_baseStates.end()) {
+        return false;
+    }
+    it->enabled = enabled;
+    it->disabledReason = reason;
+    updateEnabled();
+    return true;
+}
+
+bool CommandRegistry::setVisible(const QString &id, bool visible)
+{
+    auto it = m_baseStates.find(id);
+    if (it == m_baseStates.end()) {
+        return false;
+    }
+    it->visible = visible;
+    updateEnabled();
+    return true;
+}
+
+bool CommandRegistry::setChecked(const QString &id, bool checked)
+{
+    auto it = m_baseStates.find(id);
+    const Command *command = find(id);
+    if (it == m_baseStates.end() || !command || !command->checkable) {
+        return false;
+    }
+    it->checked = checked;
+    updateEnabled();
+    return true;
+}
+
+QString CommandRegistry::currentSessionType() const
+{
+    return m_currentSessionType;
+}
+
+void CommandRegistry::setCurrentSessionType(const QString &type)
+{
+    m_currentSessionType = type;
+    updateEnabled();
+}
+
+void CommandRegistry::updateEnabled()
+{
+    if (m_updating) {
+        return;
+    }
+    QScopedValueRollback<bool> updating(m_updating, true);
+    QStringList changed;
+    const QStringList ids = m_order;
+    for (const QString &id : ids) {
+        // Evaluate a copy: the normal contract is a read-only predicate, but a
+        // nested event or signal must not leave dangling references into the map.
+        const Command command = m_commands.value(id);
+        const BaseState base = m_baseStates.value(id);
+        const bool sessionAllowed = command.sessionTypes.isEmpty()
+            || command.sessionTypes.contains(m_currentSessionType);
+        const bool conditionAllowed = !command.enabledWhen || command.enabledWhen();
+        const bool enabled = command.isImplemented() && base.enabled
+            && sessionAllowed && conditionAllowed;
+        const bool visible = base.visible && (!command.visibleWhen || command.visibleWhen());
+        const bool checked = command.checkable
+            && (command.checkedWhen ? command.checkedWhen() : base.checked);
+        QString reason;
+        if (!enabled) {
+            if (!command.isImplemented()) {
+                reason = tr("尚未实现");
+            } else if (!sessionAllowed) {
+                reason = tr("当前会话不支持此命令");
+            } else if (!base.disabledReason.isEmpty()) {
+                reason = base.disabledReason;
+            } else {
+                reason = tr("当前状态下不可用");
+            }
+        }
+        auto it = m_commands.find(id);
+        if (it == m_commands.end()) {
+            continue;
+        }
+        if (it->enabled != enabled || it->visible != visible
+            || it->checked != checked || it->disabledReason != reason) {
+            it->enabled = enabled;
+            it->visible = visible;
+            it->checked = checked;
+            it->disabledReason = reason;
+            changed.append(id);
+        }
+    }
+    // Publish only after every command has its new state, so multi-entry UI
+    // consumers never observe a mixture of old and new session capabilities.
+    m_updating = false;
+    updating.commit();
+    for (const QString &id : changed) {
+        emit commandChanged(id);
+    }
 }
 
 QStringList CommandRegistry::validate() const
 {
     QStringList problems;
-    QMap<QString, QString> shortcutOwner;
 
     for (const QString &id : m_order) {
         const Command &command = m_commands.value(id);
@@ -94,16 +205,8 @@ QStringList CommandRegistry::validate() const
         if (command.icon.isEmpty()) {
             problems.append(QStringLiteral("%1：缺少图标").arg(id));
         }
-        if (!command.shortcut.isEmpty()) {
-            const QString sequence = command.shortcut.toString(QKeySequence::PortableText);
-            if (shortcutOwner.contains(sequence)) {
-                problems.append(QStringLiteral("%1：快捷键 %2 与 %3 冲突")
-                                    .arg(id, sequence, shortcutOwner.value(sequence)));
-            } else {
-                shortcutOwner.insert(sequence, id);
-            }
-        }
     }
+    problems.append(validateShortcuts(m_shortcutOverrides));
     return problems;
 }
 
@@ -111,6 +214,10 @@ void CommandRegistry::clear()
 {
     m_commands.clear();
     m_order.clear();
+    m_baseStates.clear();
+    m_shortcutOverrides.clear();
+    m_currentSessionType.clear();
+    emit registryReset();
 }
 
 } // namespace LqCompare

@@ -70,6 +70,8 @@ LqCompare 是 Qt 5.15.2 / C++17、qmake 构建的文件与文件夹比对工具�
 | `Session/` | `settingsdialog.{h,cpp}` | 会话设置对话框：左侧 Tab 列表（按会话类型变化）、右侧由声明逐项生成的表单、底部作用域下拉与「恢复默认 / 应用 / 确定 / 取消」，以及未保存改动时的确认（SESS-006）。**框架本身不含任何具体设置项** | `sessionview.pri` |
 | `Shell/` | `homepage.{h,cpp}`、`sessionarea.{h,cpp}` | Home 入口页（SESS-003）、会话标签容器（SESS-010） | `shell.pri` |
 | `Page/` | `ribbonlayout.{h,cpp}` | 声明表驱动的 Ribbon 页面/分组/按钮构建（UI-007 ~ UI-024） | `page.pri` |
+| `Vcs/` | `vcsview.{h,cpp}`、`blameview.{h,cpp}` | 只读的版本控制视图：HEAD / 索引 / 修订 / 提交日志四种模式（VCS-002 ~ VCS-010）；逐行追溯 `BlameView`——按作者 / 按日期龄 / 按提交块三种着色、同提交的连续行合并为块、只看某作者、悬停显示提交信息（VCS-012 / VCS-013） | `vcsview.pri` |
+| （夜间新增的其余比较视图） | `Text/`、`Folder/`、`Merge/`、`Special/`、`Table/`、`Sync/`、`Filter/`、`Version/`、`Media/`、`Registry/`、`FolderMerge/`、`Archive/`、`Options/` | 各比较类型的会话与视图：文本、文件夹、三方合并、十六进制与图片、表格、目录同步、过滤、版本与 PE、媒体标签、注册表、三方文件夹合并、压缩包、选项页。**逐条的公开接口、已验证范围与「尚未覆盖的规格」见各自的 `docs/development/team-*.md`** | 各目录下的 `*view.pri` |
 
 ### 3.3 Services/（服务层）
 
@@ -81,6 +83,10 @@ LqCompare 是 Qt 5.15.2 / C++17、qmake 构建的文件与文件夹比对工具�
 | `Filter/` | `mask.{h,cpp}`、`maskfilter.{h,cpp}`、`attributefilter.{h,cpp}`、`filterstack.{h,cpp}`、`namefilter.{h,cpp}` | 掩码语言（`*` / `?` / `[...]` / `**` 的解析与匹配、转义、语法速查）与过滤声明（包含/排除的叠加、排除优先、大小写策略、预览计数）（FILT-001）；**属性条件**（大小范围 / 修改时间范围 / 属性位 / 所有者与组、条目元数据快照 `EntryMetadata`、条件表自检、`decideEntry()` 把名称侧与属性侧合成**与**）（FILT-003）；**名称过滤**（精确名 / 通配符 / 正则三种模式、包含任一 / 不包含任何 / 全部满足三种组合语义、实时校验、正则的静态回溯预检 + 超时保护 + 断路器、具名预设的可移植文本往返）（FILT-002） | `filter.pri` |
 | `Files/` | `filesystem.{h,cpp}`、`pathutils.{h,cpp}`、`pathname.{h,cpp}`、`trash.{h,cpp}`、`batch.{h,cpp}`、`filesystem_<平台>.cpp`、`trash_<平台>.<ext>` | 文件系统服务抽象层（路径、名称、元数据、枚举、时间戳、属性）、错误携带（分类 + 原始系统码）、回收站服务（可逆删除、撤销）、批量操作的失败清单与重试（PLAT-002 ~ PLAT-003、PLAT-007 ~ PLAT-008） | `files.pri` |
 | `Platform/` | `iconkey.{h,cpp}`、`iconcache.{h,cpp}`、`iconservice.{h,cpp}`、`registrystore.{h,cpp}`、`registrystore_<平台>.<ext>`、`shellintegration.{h,cpp}`、`iconservice_<平台>.<ext>` | 平台集成：缓存键与尺寸规则、按类型的图标缓存与请求去重、系统图标解析与回退（PLAT-004）；注册表存储抽象与 Shell 集成（右键菜单、文件关联、安装/卸载/校验/残留检查）（PLAT-005） | `platform.pri` |
+| `Report/` | `report.{h,cpp}` | 比较结果出报表：HTML（离线单文件、全部非信任字段 HTML 转义、内嵌 CSP、分组与折叠、固定脚本只用于搜索/状态过滤/分组）与纯文本两种格式，并排 / 交错 / 摘要 / 统计四种布局；`writeFile` 走 `QSaveFile` 原子保存、默认拒绝覆盖并额外拒绝覆盖比较源；`write(QIODevice*)` 分块渲染（单次设备写入 ≤ 64 KiB，支持短写重试） | `report.pri` |
+| `Patch/` | `patch.{h,cpp}`、`patchapply.{h,cpp}` | unified 补丁的生成（多文件对、可选上下文、路径前缀、无末尾换行标记）、解析（Git/SVN/Hg 前导元数据、引号与八进制路径、CRLF、一基错误行号）与**只读预演**（反向、逐 hunk、唯一偏移匹配、路径安全校验）；以及**补丁应用**——预演→备份→暂存→提交→校验的事务，失败自动回滚、`RecoveryRequired` 如实上报、`ApplicationFailureInjector` 做测试缝。**边界是一个已存在普通文件的替换**：创建 / 删除 / 多目标在写盘前拒绝 | `patch.pri` |
+| `Vcs/` | `vcsbackend.{h,cpp}` | 只读版本控制后端：从文件或目录向上识别所属仓库（含嵌套仓库、worktree 的独立 git dir 与 shared common dir）、工作副本 / HEAD / 任意修订 / 索引 stage 0 / 冲突三阶段（base / ours / theirs）读取、变更列表（含重命名与未跟踪）、日志分页与过滤、引用、blame、修订图数据。`GitBackend` 通过用户安装的 Git 执行，安全独立参数 + `GIT_*` 环境清洗 + 超时与输出上限，比较两侧落在 `QTemporaryDir` 的只读快照里 | `vcs.pri` |
+| （夜间新增的其余服务模块） | `Text/`、`Folder/`、`Merge/`、`Special/`、`Table/`、`Sync/`、`Snapshot/`、`Format/`、`Version/`、`Media/`、`Registry/`、`FolderMerge/`、`Archive/`、`Cli/`、`Script/`、`Settings/` | 比对引擎与各专用类型后端、目录同步与快照、命令行与脚本、设置存储等。**逐条的公开接口与未覆盖范围见各自的 `docs/development/team-*.md`** | 各目录下的 `.pri` |
 
 ### 3.4 Files/ 的五段式结构
 
@@ -370,7 +376,7 @@ SESS-003 的范围，本轮改了会与它撞车。另有一条用例对一段**
 | 目录 | 内容 |
 | --- | --- |
 | `Pictures/` | 图标资源（SVG）与 `Pictures.qrc`。图标由 `tools/generate_icons.py` 生成 |
-| `Tests/` | 每个测试套件一个子目录 + 一个 `.pro`；`run-tests.sh` 是统一运行器。`Support/` 放多个套件共用的测试替身（如内存文件系统）。**刻意不链接 QtGui 的套件**（`Tests/Filter`、`Tests/AttributeFilter`、`Tests/FilterStack`、`Tests/Logging`、`Tests/SessionType`、`Tests/Settings`、`Tests/SettingsScope`）兼作「服务层不依赖界面」的编译期护栏；**链接 QtWidgets 的套件**（`Tests/Session`、`Tests/SettingsDialog`）跑在 offscreen 平台上 |
+| `Tests/` | 每个测试套件一个子目录 + 一个 `.pro`；`run-tests.sh` 是统一运行器（**63 个套件 / 3308 条**，2026-09-21）。`Support/` 放多个套件共用的测试替身（如内存文件系统）。**刻意不链接 QtGui 的套件**（`Tests/Filter`、`Tests/AttributeFilter`、`Tests/FilterStack`、`Tests/NameFilter`、`Tests/Logging`、`Tests/SessionType`、`Tests/Settings`、`Tests/SettingsScope`、`Tests/PatchApply`）兼作「服务层不依赖界面」的编译期护栏；**链接 QtWidgets 的套件**（`Tests/Session`、`Tests/SettingsDialog`、`Tests/VcsView`、`Tests/VcsBlameView` 等）跑在 offscreen 平台上。新套件必须自己 `QTEST_MAIN`，否则链接报 `_main` 未定义 |
 | `ThirdParty/` | `myclasspath.pri`（定位 LqRibbon）与 `lqribbon.pri`（引入） |
 
 ## 4. 关键设计决策
@@ -526,6 +532,12 @@ SESS-003 的范围，本轮改了会与它撞车。另有一条用例对一段**
 | **「本次修改将保存到 X」与「切换作用域」的文案是服务层的可测数据，不写进对话框** | 第 2 条的要求是「一眼看出改动的去向」，而这句话会出现在下拉项 tooltip、状态提示两处。写在对话框里必然演化出两种说法。做成 `writeDestinationText()` / `scopeSwitchNotice()` 之后，三种作用域各有一句话被逐条断言，而且可以断言「切换作用域**不会**把已应用的改动搬走」——一个把它写成迁移命令的文案会让用户切换完去检查原来那一层，发现值还在，进而认为切换坏了 | SESS-007 |
 | **「关闭标签会丢弃视图级设置」也做成纯函数（`planViewScopeClose`）** | 第 3 条里可无界面验证的那一半。视图层一条都没有时**一个字都不问**——视图级设置用得多的地方（每次打开都调一下再看）如果关标签时也弹一次，用户会学会闭着眼睛点「确定」，于是真正的提示也一起失效。这条「没有就不问」正是这条例最容易写过头的部分，所以它必须能被单独断言 | SESS-007 |
 | **丢弃视图层时只对有效值真变了的键发 `changed`** | 视图层的值与会话层相同时，丢掉它用户看不出任何变化。为它发信号会让状态栏与脏标记白抖一次，理由与 `setDirty(false)` 去重那条同源 | SESS-007 |
+| **补丁应用的事务边界是「一个已存在普通文件的替换」** | 创建、删除、多于一个改动目标在**写盘前**就拒绝。把「多文件事务」一起做进来的诱惑很大，但本模块唯一的原子原语是 `QSaveFile`（单文件字节替换）；用它去实现多文件事务，能得到的只有「前 3 个成功、第 4 个失败」——正是 PAT-002 明文禁止的中间状态 | PAT-002 |
+| **回滚失败必须报 `RecoveryRequired`，绝不能报成回滚成功** | 备份文件是留给用户恢复的。把它说成「已回滚」会让用户以为目标文件已经回到原状、于是不再去检查，而现场其实处在「一半新一半旧」的状态。宁可多一个刺眼的错误，也不要一个看起来成功的假结论 | PAT-002 / PAT-005 |
+| **应用计划的不可变性由 `shared_ptr<const Data>` + friend 保证** | 审查过的计划若能在用户确认之后被换掉 `resultBytes` / 路径 / hunk 选择 / 源快照，「用户确认的内容」与「实际写入的内容」就有了第二个事实来源，而分歧是静默的。做成不可变之后，确认与执行之间**不可能**出现内容漂移 | PAT-002 |
+| **VCS 两侧一律是只读快照，快照寿命绑在接收会话上** | 直接拿工作副本当比较源，会被用户在比较过程中改掉，「看到的结果」于是不可复现。快照放进 `QTemporaryDir` 并把所有权延长到会话关闭，一次比较才有确定的输入。**物理只读权限不能替代接收视图的只读编辑约束**——用户仍然需要能选中、复制、滚动 | VCS-002 ~ VCS-010 |
+| **Git 一律走安全独立参数，并清洗继承的 `GIT_*` 环境** | 用 shell 拼命令会让「文件名带空格 / 换行 / 前导破折号 / 冒号」直接变成命令注入；而继承来的 `GIT_DIR` / `GIT_INDEX_FILE` 会让查询读到**另一个仓库**，症状是「结果莫名其妙」，与原因完全看不出关系。因此 `--literal-pathspecs`、`--end-of-options` 与环境清洗是必需项，不是优化 | VCS-001 |
+| **Blame 只读、后台算、关闭即取消；局部能力缺失要如实置灰** | 追溯一个几万行的文件必须离开 UI 线程，且关闭视图不能等后台任务（否则关标签卡住），所以回调进视图前要判代次与取消位。另外「忽略空白改动」「跨重命名追溯」在当前后端里**没有承载参数**——这种情况的正确做法是界面置灰并写明原因，而不是在视图层假装实现（那会让用户以为追溯结果包含了重命名历史） | VCS-012 |
 
 ## 5. 装配流程
 

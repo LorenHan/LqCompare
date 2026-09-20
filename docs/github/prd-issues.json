@@ -1,6 +1,6 @@
 {
   "repository": "LorenHan/LqCompare",
-  "generated_at": "2026-09-19 17:25 UTC",
+  "generated_at": "2026-09-20 15:25 UTC",
   "total": 369,
   "published": 369,
   "issues": {
@@ -1043,7 +1043,7 @@
     "DIR-036": {
       "number": 145,
       "url": "https://github.com/LorenHan/LqCompare/issues/145",
-      "title": "WebDAV / 网络位置与长路径支持",
+      "title": "UNC、系统挂载网络位置与长路径支持",
       "module": "文件夹比对",
       "priority": "P1"
     },
@@ -2079,7 +2079,7 @@
     "VCS-014": {
       "number": 285,
       "url": "https://github.com/LorenHan/LqCompare/issues/285",
-      "title": "提交对话框的文件列表与差异预览",
+      "title": "提交前变更审阅与外部提交工具入口",
       "module": "版本控制",
       "priority": "P1"
     },

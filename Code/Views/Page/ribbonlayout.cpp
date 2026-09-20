@@ -1,6 +1,6 @@
 #include "ribbonlayout.h"
 
-#include "commandregistry.h"
+#include "commandactionbinder.h"
 #include "logging.h"
 
 #include "LqRibbon.h"
@@ -8,8 +8,6 @@
 #include <QAction>
 #include <QCoreApplication>
 #include <QHash>
-#include <QIcon>
-#include <QMessageBox>
 #include <QVector>
 
 namespace LqCompare {
@@ -432,10 +430,9 @@ int RibbonLayout::build(LqRibbon::RibbonBar *bar)
         return 0;
     }
 
-    const CommandRegistry &registry = CommandRegistry::instance();
+    auto *binder = CommandActionBinder::forWindow(bar);
 
-    // 一条命令对应唯一 QAction：这样同一命令出现在 Ribbon、快速访问栏、
-    // 菜单与快捷键上时，启用状态与文本严格一致（UI-024）。
+    // 页内重复项复用 QAction；其它入口通过同一窗口的 binder 保持状态一致。
     QHash<QString, QAction *> actions;
     int created = 0;
 
@@ -449,41 +446,7 @@ int RibbonLayout::build(LqRibbon::RibbonBar *bar)
         const QString text = QCoreApplication::translate("RibbonLayout", spec.text);
         const QString actionId = QString::fromLatin1(spec.actionId);
 
-        auto *action = new QAction(bar);
-        action->setObjectName(QStringLiteral("cmd_") + id);
-        action->setText(text);
-        action->setData(actionId);
-
-        const Command *command = registry.find(id);
-        if (command) {
-            // 已登记：图标、快捷键、两段式 tooltip 都来自注册表（单一出口）。
-            action->setIcon(QIcon(command->icon));
-            action->setShortcut(command->shortcut);
-            action->setToolTip(QStringLiteral("%1\n%2\n[%3]").arg(command->text,
-                                                                command->description, actionId));
-            action->setStatusTip(command->description);
-            if (command->isImplemented()) {
-                QObject::connect(action, &QAction::triggered, bar,
-                                 [id]() { CommandRegistry::instance().trigger(id); });
-            }
-        }
-
-        if (!command || !command->isImplemented()) {
-            // 尚未实现的命令：保留按钮形状，点击后说明它对应哪条规格条目。
-            // 这不是最终形态，而是让界面骨架先跑起来、行为按 issue 逐个补齐。
-            action->setToolTip(QStringLiteral("%1\n尚未实现\n规格条目：%2").arg(text, actionId));
-            action->setStatusTip(QStringLiteral("尚未实现，见规格条目 %1").arg(actionId));
-            QObject::connect(action, &QAction::triggered, bar, [text, actionId, id]() {
-                QMessageBox::information(
-                    nullptr, QCoreApplication::translate("RibbonLayout", "Not Implemented Yet"),
-                    QCoreApplication::translate(
-                        "RibbonLayout",
-                        "Command: %1\nCommand ID: %2\nSpec entry: %3\n\n"
-                        "This command is not implemented yet. "
-                        "See the matching GitHub issue for its progress.")
-                        .arg(text, id, actionId));
-            });
-        }
+        auto *action = binder->createAction(id, bar, text, actionId);
 
         actions.insert(id, action);
         ++created;

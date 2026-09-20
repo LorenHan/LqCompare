@@ -172,6 +172,242 @@ void TstCommandRegistry::unknownCommandDoesNotThrow()
     QVERIFY(!registry.contains(QStringLiteral("test.missing")));
     QCOMPARE(registry.find(QStringLiteral("test.missing")), nullptr);
     QVERIFY(!registry.trigger(QStringLiteral("test.missing")));
+    QVERIFY(!registry.setEnabled(QStringLiteral("test.missing"), true));
+    QVERIFY(!registry.setVisible(QStringLiteral("test.missing"), true));
+    QVERIFY(!registry.setChecked(QStringLiteral("test.missing"), true));
+}
+
+void TstCommandRegistry::oldAggregateInitializerKeepsDefaults()
+{
+    auto &registry = CommandRegistry::instance();
+    registry.clear();
+    int calls = 0;
+    Command command{"test.legacy", "UI-024", "界面", "Legacy", "Legacy aggregate", "icon",
+                    QKeySequence(Qt::Key_F6), [&calls]() { ++calls; }};
+    QVERIFY(registry.add(command));
+    QVERIFY(registry.find(command.id)->enabled);
+    QVERIFY(registry.find(command.id)->visible);
+    QVERIFY(!registry.find(command.id)->checkable);
+    QVERIFY(!registry.find(command.id)->checked);
+    QVERIFY(registry.trigger(command.id));
+    QCOMPARE(calls, 1);
+}
+
+void TstCommandRegistry::disabledCommandCannotExecute()
+{
+    auto &registry = CommandRegistry::instance();
+    registry.clear();
+    int calls = 0;
+    auto command = makeCommand(QStringLiteral("file.save"));
+    command.handler = [&calls]() { ++calls; };
+    QVERIFY(registry.add(command));
+    QVERIFY(registry.setEnabled(command.id, false, QStringLiteral("No writable session")));
+    QVERIFY(!registry.find(command.id)->enabled);
+    QCOMPARE(registry.find(command.id)->disabledReason, QStringLiteral("No writable session"));
+    QVERIFY(!registry.trigger(command.id));
+    QCOMPARE(calls, 0);
+    QVERIFY(registry.setEnabled(command.id, true));
+    QVERIFY(registry.find(command.id)->disabledReason.isEmpty());
+    QVERIFY(registry.trigger(command.id));
+    QCOMPARE(calls, 1);
+}
+
+void TstCommandRegistry::hiddenCommandCanExecute()
+{
+    auto &registry = CommandRegistry::instance();
+    registry.clear();
+    int calls = 0;
+    auto command = makeCommand(QStringLiteral("test.hidden"));
+    command.handler = [&calls]() { ++calls; };
+    command.visible = false;
+    QVERIFY(registry.add(command));
+    QVERIFY(!registry.find(command.id)->visible);
+    QVERIFY(registry.trigger(command.id));
+    QCOMPARE(calls, 1);
+    QVERIFY(registry.setEnabled(command.id, false));
+    QVERIFY(!registry.trigger(command.id));
+    QCOMPARE(calls, 1);
+}
+
+void TstCommandRegistry::unimplementedCommandCannotBeEnabled()
+{
+    auto &registry = CommandRegistry::instance();
+    registry.clear();
+    const auto command = makeCommand(QStringLiteral("test.placeholder"));
+    QVERIFY(registry.add(command));
+    QVERIFY(!registry.find(command.id)->enabled);
+    QVERIFY(!registry.find(command.id)->disabledReason.isEmpty());
+    QVERIFY(registry.setEnabled(command.id, true));
+    QVERIFY(!registry.find(command.id)->enabled);
+    QVERIFY(!registry.trigger(command.id));
+}
+
+void TstCommandRegistry::runtimeStateSignalsOnlyOnChanges()
+{
+    auto &registry = CommandRegistry::instance();
+    registry.clear();
+    QSignalSpy added(&registry, &CommandRegistry::commandAdded);
+    auto command = makeCommand(QStringLiteral("test.state"));
+    command.handler = []() {};
+    command.checkable = true;
+    QVERIFY(registry.add(command));
+    QCOMPARE(added.count(), 1);
+    QCOMPARE(added.first().first().toString(), command.id);
+    QSignalSpy changed(&registry, &CommandRegistry::commandChanged);
+    registry.updateEnabled();
+    registry.setEnabled(command.id, true);
+    registry.setVisible(command.id, true);
+    registry.setChecked(command.id, false);
+    QCOMPARE(changed.count(), 0);
+    registry.setEnabled(command.id, false, QStringLiteral("Busy"));
+    QCOMPARE(changed.count(), 1);
+    registry.setEnabled(command.id, false, QStringLiteral("Busy"));
+    QCOMPARE(changed.count(), 1);
+    registry.setEnabled(command.id, false, QStringLiteral("Read only"));
+    QCOMPARE(changed.count(), 2);
+    registry.setVisible(command.id, false);
+    registry.setChecked(command.id, true);
+    QCOMPARE(changed.count(), 4);
+    for (const auto &arguments : changed) {
+        QCOMPARE(arguments.first().toString(), command.id);
+    }
+}
+
+void TstCommandRegistry::triggerRefreshesConditionsBeforeAndAfter()
+{
+    auto &registry = CommandRegistry::instance();
+    registry.clear();
+    bool ready = false;
+    bool shown = true;
+    bool selected = false;
+    int calls = 0;
+    auto command = makeCommand(QStringLiteral("test.dynamic"));
+    command.checkable = true;
+    command.enabledWhen = [&ready]() { return ready; };
+    command.visibleWhen = [&shown]() { return shown; };
+    command.checkedWhen = [&selected]() { return selected; };
+    command.handler = [&]() { ++calls; ready = false; shown = false; selected = true; };
+    QVERIFY(registry.add(command));
+    QVERIFY(!registry.trigger(command.id));
+    ready = true; // Intentionally no explicit refresh: trigger must check fresh state.
+    QVERIFY(registry.trigger(command.id));
+    QCOMPARE(calls, 1);
+    const auto *current = registry.find(command.id);
+    QVERIFY(!current->enabled);
+    QVERIFY(!current->visible);
+    QVERIFY(current->checked);
+    QVERIFY(!registry.trigger(command.id));
+    ready = true;
+    registry.updateEnabled();
+    QVERIFY(registry.find(command.id)->enabled); // Predicate state must not latch false.
+    registry.setEnabled(command.id, false);
+    QVERIFY(!registry.trigger(command.id)); // Explicit gating remains authoritative.
+    registry.clear(); // Do not leave callbacks referencing locals in the singleton.
+}
+
+void TstCommandRegistry::sessionTypeLimitsEnabledState()
+{
+    auto &registry = CommandRegistry::instance();
+    registry.clear();
+    auto command = makeCommand(QStringLiteral("merge.resolve"));
+    command.sessionTypes = QStringList{QStringLiteral("merge"), QStringLiteral("text")};
+    command.handler = []() {};
+    QVERIFY(registry.add(command));
+    QVERIFY(!registry.trigger(command.id));
+    registry.setCurrentSessionType(QStringLiteral("merge"));
+    QVERIFY(registry.trigger(command.id));
+    registry.setCurrentSessionType(QStringLiteral("folder"));
+    QVERIFY(!registry.trigger(command.id));
+    QVERIFY(!registry.find(command.id)->disabledReason.isEmpty());
+    registry.setCurrentSessionType(QStringLiteral("text"));
+    QVERIFY(registry.trigger(command.id));
+    registry.setCurrentSessionType(QString());
+    QVERIFY(!registry.trigger(command.id));
+}
+
+void TstCommandRegistry::checkedStateRemainsBusinessOwned()
+{
+    auto &registry = CommandRegistry::instance();
+    registry.clear();
+    auto command = makeCommand(QStringLiteral("view.output"));
+    command.checkable = true;
+    command.handler = []() {};
+    QVERIFY(registry.add(command));
+    QVERIFY(registry.trigger(command.id));
+    QVERIFY(!registry.find(command.id)->checked); // A cancelled operation must not fake a toggle.
+    QVERIFY(registry.setChecked(command.id, true));
+    QVERIFY(registry.find(command.id)->checked);
+    QVERIFY(registry.trigger(command.id));
+    QVERIFY(registry.find(command.id)->checked);
+    auto nonToggle = makeCommand(QStringLiteral("test.action"));
+    nonToggle.checked = true;
+    nonToggle.handler = []() {};
+    QVERIFY(registry.add(nonToggle));
+    QVERIFY(!registry.find(nonToggle.id)->checked);
+    QVERIFY(!registry.setChecked(nonToggle.id, true));
+}
+
+void TstCommandRegistry::observersSeeConsistentState()
+{
+    auto &registry = CommandRegistry::instance();
+    registry.clear();
+    bool enabled = true;
+    auto first = makeCommand(QStringLiteral("test.first"));
+    first.handler = []() {};
+    first.enabledWhen = [&enabled]() { return enabled; };
+    auto second = first;
+    second.id = QStringLiteral("test.second");
+    QVERIFY(registry.add(first));
+    QVERIFY(registry.add(second));
+    int notificationCount = 0;
+    const auto connection = connect(&registry, &CommandRegistry::commandChanged, this,
+                                    [&](const QString &) {
+        ++notificationCount;
+        QVERIFY(!registry.find(first.id)->enabled);
+        QVERIFY(!registry.find(second.id)->enabled);
+        registry.updateEnabled(); // Unchanged nested refresh must terminate without extra signals.
+    });
+    enabled = false;
+    registry.updateEnabled();
+    QCOMPARE(notificationCount, 2);
+    disconnect(connection);
+    registry.clear();
+}
+
+void TstCommandRegistry::handlerMayClearRegistry()
+{
+    auto &registry = CommandRegistry::instance();
+    registry.clear();
+    bool called = false;
+    auto command = makeCommand(QStringLiteral("test.clear"));
+    command.handler = [&]() { registry.clear(); called = true; };
+    QVERIFY(registry.add(command));
+    QVERIFY(registry.trigger(command.id));
+    QVERIFY(called);
+    QVERIFY(registry.all().isEmpty());
+}
+
+void TstCommandRegistry::clearResetsAllRuntimeState()
+{
+    auto &registry = CommandRegistry::instance();
+    registry.clear();
+    auto command = makeCommand(QStringLiteral("test.reset"));
+    command.handler = []() {};
+    command.shortcut = QKeySequence(Qt::Key_F6);
+    QVERIFY(registry.add(command));
+    registry.setEnabled(command.id, false);
+    registry.setVisible(command.id, false);
+    registry.setCurrentSessionType(QStringLiteral("text"));
+    QVERIFY(registry.setShortcuts(command.id, QList<QKeySequence>()));
+    QSignalSpy reset(&registry, &CommandRegistry::registryReset);
+    registry.clear();
+    QCOMPARE(reset.count(), 1);
+    QVERIFY(registry.currentSessionType().isEmpty());
+    QVERIFY(registry.shortcutOverrides().isEmpty());
+    QVERIFY(registry.add(command));
+    QVERIFY(registry.find(command.id)->enabled);
+    QVERIFY(registry.find(command.id)->visible);
+    QCOMPARE(registry.effectiveShortcuts(command.id), QList<QKeySequence>{command.shortcut});
 }
 
 // Q_OBJECT 声明在头文件里，因此这里不需要 #include "xxx.moc"：

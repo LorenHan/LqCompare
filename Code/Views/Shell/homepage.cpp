@@ -1,4 +1,5 @@
 #include "homepage.h"
+#include "sessiontype.h"
 
 #include <QFrame>
 #include <QLabel>
@@ -7,33 +8,6 @@
 #include <QVBoxLayout>
 
 namespace LqCompare {
-
-namespace {
-
-QFrame *makeCard(const QString &title, const QString &detail, QWidget *parent)
-{
-    auto *card = new QFrame(parent);
-    card->setFrameShape(QFrame::StyledPanel);
-    auto *layout = new QVBoxLayout(card);
-    layout->setContentsMargins(12, 10, 12, 10);
-    layout->setSpacing(2);
-
-    auto *titleLabel = new QLabel(title, card);
-    QFont titleFont = titleLabel->font();
-    titleFont.setBold(true);
-    titleLabel->setFont(titleFont);
-    titleLabel->setWordWrap(true);
-
-    auto *detailLabel = new QLabel(detail, card);
-    detailLabel->setWordWrap(true);
-    detailLabel->setForegroundRole(QPalette::PlaceholderText);
-
-    layout->addWidget(titleLabel);
-    layout->addWidget(detailLabel);
-    return card;
-}
-
-} // namespace
 
 HomePage::HomePage(QWidget *parent) : QWidget(parent)
 {
@@ -105,7 +79,11 @@ void HomePage::buildSections()
         for (const auto &entry : section.entries) {
             const QString typeId = entry.first;
             auto *button = new QPushButton(entry.second, this);
-            button->setToolTip(tr("New session: %1 (type id: %2)").arg(entry.second, typeId));
+            button->setObjectName(QStringLiteral("newSession-") + typeId);
+            const bool available = typeId == QLatin1String("text") || typeId == QLatin1String("folder");
+            button->setEnabled(available);
+            button->setToolTip(available ? tr("New %1").arg(entry.second)
+                                        : tr("This comparison type is not yet available."));
             connect(button, &QPushButton::clicked, this,
                     [this, typeId]() { emit sessionTypeRequested(typeId); });
             row->addWidget(button);
@@ -117,40 +95,42 @@ void HomePage::buildSections()
 
 QList<HomePage::Section> HomePage::sections() const
 {
-    // 分组与 Beyond Compare 的 Home 视图一致：文本类 / 文件夹类 / 数据类 / 其它。
-    return {
-        {tr("Text"), tr("Line-oriented comparison with configurable ignore rules."),
-         {{QStringLiteral("text"), tr("Text Compare")},
-          {QStringLiteral("text-merge"), tr("Text Merge")},
-          {QStringLiteral("text-edit"), tr("Text Edit")},
-          {QStringLiteral("text-patch"), tr("Text Patch")}}},
-        {tr("Folders"), tr("Directory trees, synchronization and three-way merge."),
-         {{QStringLiteral("folder"), tr("Folder Compare")},
-          {QStringLiteral("folder-sync"), tr("Folder Sync")},
-          {QStringLiteral("folder-merge"), tr("Folder Merge")}}},
-        {tr("Data"), tr("Cell-oriented, byte-oriented and media comparison."),
-         {{QStringLiteral("table"), tr("Table Compare")},
-          {QStringLiteral("hex"), tr("Hex Compare")},
-          {QStringLiteral("picture"), tr("Picture Compare")},
-          {QStringLiteral("media"), tr("Media Compare")}}},
-        {tr("System"), tr("Platform-specific session types."),
-         {{QStringLiteral("registry"), tr("Registry Compare")},
-          {QStringLiteral("version"), tr("Version Compare")},
-          {QStringLiteral("archive"), tr("Archive Compare")}}},
-    };
+    QList<Section> result;
+    for (const auto group : {SessionGroup::Text, SessionGroup::Folders,
+                            SessionGroup::Data, SessionGroup::Advanced}) {
+        Section section;
+        section.title = sessionGroupLabel(group);
+        for (const auto &type : builtInSessionTypes()) {
+            if (type.group == group) section.entries.append({type.id, type.displayName});
+        }
+        result.append(section);
+    }
+    return result;
 }
 
-void HomePage::rememberSession(const QString &title, const QString &detail)
+void HomePage::setRecentSessions(const QList<QPair<QString, QString>> &entries)
 {
-    if (!m_recentLayout) {
-        return;
+    while (QLayoutItem *item = m_recentLayout->takeAt(0)) {
+        if (item->widget()) item->widget()->deleteLater();
+        delete item;
     }
-    if (m_recentCount == 0 && m_recentEmptyHint) {
-        m_recentEmptyHint->hide();
+    m_recentEmptyHint = nullptr;
+    for (int i = 0; i < entries.size(); ++i) {
+        auto *button = new QPushButton(entries[i].first + QStringLiteral("\n") + entries[i].second, this);
+        button->setObjectName(QStringLiteral("recentSession-%1").arg(i));
+        button->setToolTip(entries[i].second);
+        connect(button, &QPushButton::clicked, this, [this, i] { emit recentSessionRequested(i); });
+        m_recentLayout->addWidget(button);
     }
-    auto *row = makeCard(title, detail, this);
-    m_recentLayout->addWidget(row);
-    ++m_recentCount;
+    if (entries.isEmpty()) m_recentLayout->addWidget(new QLabel(tr("Nothing opened yet."), this));
+}
+
+void HomePage::setTypeAvailable(const QString &typeId, bool available, const QString &reason)
+{
+    if (auto *button = findChild<QPushButton *>(QStringLiteral("newSession-") + typeId)) {
+        button->setEnabled(available);
+        button->setToolTip(available ? tr("Start a new comparison") : reason);
+    }
 }
 
 } // namespace LqCompare

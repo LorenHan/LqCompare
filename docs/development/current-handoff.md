@@ -1,7 +1,12 @@
 # 当前进度与接手说明
 
-> 更新时间：2026-09-20。**新开一个对话接手本项目时，先读这一页。**
+> 更新时间：2026-09-21。**新开一个对话接手本项目时，先读这一页。**
 > 详细的并行划分见 [parallel-workstreams.md](parallel-workstreams.md)。
+>
+> **2026-09-20 夜间的并行开发（24 个工作流）已整体落地**，每个工作流各有一份
+> `docs/development/team-*.md` 交付记录，分工与验收原则见
+> [night-progress.md](night-progress.md)。其中「报表与补丁」「Git 差异集成」
+> 两条被额度中断，已由本文件更新当轮补完（见 §1 末尾与 §4）。
 
 ## 1. 一句话现状
 
@@ -95,6 +100,42 @@ Qt 6.0 才有 `setMatchTimeout()`，本仓钉在 5.15，因此超时是自己做
 有读源码的护栏钉住这条，防止将来有人为了「界面快一点」再写第二份解析。
 界面还没接：名称过滤框与错误就地标红要等设置页 `OPT-*`。
 
+### 1.0.1 夜间并行落地的模块（2026-09-20/21）
+
+一夜之间有 24 个工作流并行推进，各模块的**确切接口与边界**写在对应的
+`docs/development/team-*.md` 里（那里也逐条列了「尚未覆盖的规格」）。
+与本研究任务直接相关的两条是：
+
+- **报表与补丁（`Services/Report/`、`Services/Patch/`）**：`report.h` 出
+  HTML/TXT 两种格式 × 并排/交错/摘要/统计四种布局（离线单文件、全部非信任字段
+  做 HTML 转义、内嵌 CSP、分块写入 + `QSaveFile` 原子保存）；`patch.h` 出
+  unified 补丁的生成、解析与**只读预演**；`patchapply.h` 出**补丁应用**——
+  预演→备份→暂存→提交→校验的事务，失败自动回滚且 `RecoveryRequired` 如实上报，
+  注入器 `ApplicationFailureInjector` 是它的测试缝。边界是**一个已存在普通文件的替换**，
+  创建 / 删除 / 多目标在写盘前就拒绝。
+- **Git 差异集成（`Services/Vcs/`、`Views/Vcs/`）**：`vcsbackend.h` 是只读后端
+  （工作副本 / HEAD / 任意修订 / 索引 / 冲突三阶段 / 日志 / 引用 / blame），
+  `GitBackend` 通过用户安装的 Git 执行，安全独立参数 + 环境清洗 + 超时与输出上限；
+  `vcsview.h` 有 HEAD / 索引 / 修订 / 日志四种模式；`blameview.h` 是逐行追溯视图
+  （按作者 / 按日期龄 / 按提交块三种着色）。两侧都是 **`QTemporaryDir` 里的只读快照**，
+  接比较会话时必须保留 `Comparison` 的值或它的 `lifetime`。
+
+### 1.0.2 补完两条被中断的工作流（2026-09-21）
+
+额度中断时这两条各停在一个「接线已写好、实现/验证没做完」的点上：
+
+- **补丁应用**：`patch.pri` 已经声明了 `patchapply.cpp`，而该文件并不存在——
+  因为 `services.pri` 会 include `patch.pri`，**整个应用工程当时是编译不过的**。
+  本轮补出 `patchapply.cpp`（约 690 行）与 `Tests/PatchApply`（58 个用例函数 / QTest 合计 60），
+  应用工程恢复可构建。
+- **Blame 视图**：`blameview.cpp` 不只是没进构建，它本身是**编译不过的半成品**
+  （文件写到某个 `}` 就结束，连 `Private` 的收尾与构造函数都没有）；`vcsview.pri`
+  也没列它。本轮补齐尾部约 230 行并接进 `vcsview.pri`，`Tests/VcsBlameView`
+  （23 个用例）跑绿。
+
+两条的验证结论、变异命中情况与**未落地的规格条目**见
+`team-report-patch.md` 与 `team-vcs.md` 的「续做」小节。
+
 ## 1.1 已落地的服务层模块
 
 | 模块 | 条目 | 状态 | 测试 |
@@ -117,6 +158,12 @@ Qt 6.0 才有 `setMatchTimeout()`，本仓钉在 5.15，因此超时是自己做
 | `Services/Session/`（设置声明与草稿） | SESS-006 | **已完成**（第 2、3、4 条的主体；第 1 条是界面，第 3 条在界面上真正被调用另由 `Tests/SettingsDialog` 证明。框架刻意不含具体设置项） | `Tests/Settings`（65 个用例函数，**纯 QtCore**） |
 | `Views/Session/`（会话设置对话框） | SESS-006 | **已完成**（第 1 条的对话框外壳；界面尚未接入 Rules 按钮） | `Tests/SettingsDialog`（44 个用例函数，链接 QtWidgets） |
 | `Services/Session/`（作用域链与写入路由） | SESS-007 | **部分完成**（第 1、4 条已勾；第 2、3 条的服务层逻辑与文案已落地并被测试，缺的是界面接通：下拉还没显示去向、切换还没问一句、关标签路径还没有持有设置的会话） | `Tests/SettingsScope`（40 个用例函数，**纯 QtCore**） |
+| `Services/Report/` | RPT-* | **部分完成**（只交付 HTML/TXT；CSV/XML、模板、预设持久化、CLI 入口、打印机/PDF 与 UI 异步装配未做） | `Tests/Report`（36 个用例，含真实 Text 解码→报告映射与转义回归） |
+| `Services/Patch/`（生成 / 解析 / 只读预演） | PAT-001 / PAT-003 | **部分完成**（已通过真实 `git apply` 与系统 `patch` 逐字节验收；二进制补丁、传统 context diff、重命名、权限修改未做） | `Tests/PatchRegression`（75 个用例） |
+| `Services/Patch/`（应用与事务） | PAT-002 / PAT-005 | **部分完成**（**本轮补完**。五条完成标准里的预演、逐 hunk、回滚、反向均落地并有测试；「操作日志」由 `ApplicationResult::audit` 承担、「报表」由 `applicationAuditJson` 承担，全局 `Services/Log` 未接通——`patch.pri` 不可改，include `logging.h` 会形成声明不出来的隐式依赖。界面（确认对话框、受影响文件清单、hunk 勾选）未做） | `Tests/PatchApply`（58 个用例函数 / QTest 合计 60，**纯 QtCore**） |
+| `Services/Vcs/`（只读后端） | VCS-001 ~ VCS-019 的共同底座 | **部分完成**（HEAD / 索引 / 任意修订 / 冲突三阶段 / 日志 / 引用 / blame / 修订图数据均可用；无引用选择浏览器、merge-base、日志正则搜索、图形列） | `Tests/Vcs`（31 个用例，其中 23 个依赖真实 Git） |
+| `Views/Vcs/`（四种模式的比较视图） | VCS-002 ~ VCS-010 | **部分完成**（无变更增删行数、无变更列表批量导出、无图形列） | `Tests/VcsView`（16 个用例） |
+| `Views/Vcs/`（逐行追溯） | VCS-012 / VCS-013 | **部分完成**（**本轮补完**。三种着色、悬停四字段、同提交连续行合并为块、只看某作者、对比度校验已落地；**未实现**：「忽略空白改动」与「跨重命名追溯」两个选项（服务层 `Backend::blame()` 也没有承载它们的参数，要扩接口）、「只看某提交的区间」（只有单个提交）、进度是不定长的没有百分比） | `Tests/VcsBlameView`（23 个用例） |
 
 PLAT-002 的详细说明与其「第 2 条完成标准为何不勾选」见
 [issue #325](https://github.com/LorenHan/LqCompare/issues/325)；
@@ -596,7 +643,7 @@ FILT-005（三层叠加与作用域）与 FILT-003（属性过滤）已在后续
 | --- | --- | --- |
 | 构建 | Qt 5.15.2 clang_64 上 qmake + make 通过，产出 `dist/macos/LqCompare.app` | `qmake && make -j8` |
 | 运行 | 主程序离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
-| 测试（全量） | **978 passed / 0 failed / 1 skipped**（AttributeFilter 90 + Batch 36 + CommandRegistry 14 + FileSystem 50 + **Filter 89** + **FilterStack 84** + Logging 34 + **NameFilter 93** + PathName 40 + PlatformIcon 48 + Session 48 + SessionType 59 + Settings 71 + SettingsDialog 45 + SettingsScope 41 + ShellIntegration 101 + Trash 35）。本轮这 978 是**实测**，17 个套件逐个跑完 | `Code/Tests/run-tests.sh` |
+| 测试（全量） | **3308 passed / 0 failed / 2 skipped，63 个套件**（2026-09-21 实测，连跑两次结果一致）。此前一轮是 978 passed / 17 套件；夜间的并行开发把套件数推到 60+，随后本轮补完 `PatchApply`（60）并把 `SpecialHexSearch` 从「39 通过 / 1 失败」修成 40 全通过，另有 2 条的净增量来自此处。2 条跳过分别来自 `PathName` 与 `Registry`，都是按平台条件跳过的用例 | `Code/Tests/run-tests.sh` |
 | 三层过滤叠加与落点 | 84 个用例函数（QTest 合计 84），0 失败 0 跳过。分七组：A 层级与落点 8、B 三层叠加 20、C 启用与生效 14、D 表达式与面板 15、E 视图层不落盘 11、F 计数 6、G 层级表自检 8（含 6 条对**故意写坏**的表跑同一个判定，证明护栏不是恒真的）。这套件**刻意不链接 QtGui**，但**必须**链接 `Services/Session`——第 4 条要拿真正的 `SessionSettings` 存储来断言，测试替身会连「存到哪个存储」一起替掉 | `Code/Tests/run-tests.sh FilterStack` |
 | 三层过滤能反向验证 | 十六处变异逐一被拦下：视图层落点改成随会话保存 → 多条红；`active()` 只看启用标志 → 多条红；去掉层间的排除优先 → 多条红；排除集合用 AND 连接 → 表达式红；原子一律不加引号 → 引号用例红；表达式不去重 → 去重用例红；视图存储缺失时退而写入会话存储 → 「不许退而写入」红；会话层也从视图存储读 → 「按存储分别读」红；`loadInto` 整份替换状态（丢掉启用标志）→ 红；`setLayerState` 不按声明重新解析 → 红；大小写覆盖在重新解析后不再应用 → 红；不统计 `decided` → 面板与计数红；不计入逐层统计 → 红；自检去掉「视图层落点」这一条 → 红；自检不查顺序 → 红；汇总文案改成另一句 → 红。**16 处全部检出，0 处漏检** | 变异测试（结论写在 issue #233 的落地说明里） |
 | 会话设置声明与草稿 | 65 个用例函数（QTest 合计 71，含 `initTestCase` 与六种控件的 6 行数据）。分六组：A 声明与六种控件 17、B 自检 11、C 草稿读写与脏判定 13、D 应用与恢复默认 10、E 询问策略 6、F 声明目录与反向验证 8。这套件**刻意不链接 QtGui**（声明与草稿都是纯数据），因此「任一会话设置 Tab 均可无界面构造与读写」这条标准是靠构建配置 + 用例两边一起钉住的 | `Code/Tests/run-tests.sh Settings` |
@@ -608,8 +655,8 @@ FILT-005（三层叠加与作用域）与 FILT-003（属性过滤）已在后续
 | 名称与 Unicode | 40 个用例通过 + 1 个跳过（无效 UTF-8 名字的用例只在 Linux 上执行，CI 会跑）。覆盖字节保真往返、UTF-8 边界与过长编码、Unicode 组合形式、六类文件名问题的原因与位置 | `Code/Tests/run-tests.sh PathName` |
 | 错误携带与批量处置 | 36 个用例全通过。其中 9 个验证错误码在三种域下的携带与显示（含「未识别的码只给数字」）、11 个验证失败清单分组、12 个验证执行流程（含「重试只跑失败项」与「停止不移除已完成进度」）、4 个走真实文件系统做一次「设为只读 → 解除只读」往返 | `Code/Tests/run-tests.sh Batch` |
 | 系统图标 | 46 个用例函数（QTest 合计 48，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分四组：17 个验证缓存键与尺寸规则（扩展名折叠 7 + 键的合成与解析 5 + DPI 缩放 4 + Windows 档位收拢 1）、9 个验证有界 LRU 的淘汰与命中统计、6 个验证请求去重队列、11 个验证服务层（同步/异步/去重/回退/换比例清缓存）；另有 **3 个走真实系统图标源**（macOS 上真实执行：断言拿到非空像素、断言文字文件与文件夹的图确实不同） | `Code/Tests/run-tests.sh PlatformIcon` |
-| 主程序构建 | 通过，`iconservice_mac.mm`、`mask.cpp` / `maskfilter.cpp` / **`attributefilter.cpp`** / **`filterstack.cpp`** / **`namefilter.cpp`**、`comparesession.cpp` / `session.cpp` / `sessiontype.cpp` / `settingschema.cpp` / `settingscope.cpp` 都编进主程序（链接行里能看到 `namefilter.o`），**本仓库自己的代码 0 warning**。全部告警只有 1 条 `LqRibbon.cpp:569: unused function 'nativeWindowScaleFactor' [-Wunused-function]`——它属于 MyClass 那个仓库，不在本仓改动范围内 | `cd _build-lqcompare && ~/Qt/5.15.2/clang_64/bin/qmake ../Code/LqCompare.pro && make -j8` |
-| 主程序运行 | 离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」「会话类型注册表：14 个类型，0 项问题」「会话设置目录：0 个类型（含 无通用声明），0 项问题」「三层过滤：3 层，0 项问题；空栈保留条目=是」「属性过滤：4 类条件，0 项问题；空过滤器保留条目=是」「名称过滤：3 种模式，3 种组合语义，0 项问题；空过滤器保留条目=是；时间预算=200ms/条（断路器 2 次）」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
+| 主程序构建 | 通过，**本仓库自己的代码 0 warning**。链接行里能看到 `patchapply.o`（补丁应用）与 `blameview.o` / `moc_blameview.o`（逐行追溯），`nm -C` 在产出的可执行文件里数到 `LqCompare::Patch::prepareApplication` 19 个、`executeApplication` 27 个、`LqCompare::BlameView` 193 个符号——即新模块**确实进了产物**而不只是躺在磁盘上。全量重建（`make -B`）时唯一的告警是第 3 方 `MyClass/3rd-party/LqRibbon/…/LqRibbon.cpp:569: unused function 'nativeWindowScaleFactor' [-Wunused-function]`，不在本仓改动范围内 | `cd _build-lqcompare && ~/Qt/5.15.2/clang_64/bin/qmake ../Code/LqCompare.pro && make -j8`（**注意是 `Code/LqCompare.pro`**，仓库根没有 `LqCompare.pro`） |
+| 主程序运行 | 离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」「LqCompare 0.1.0 启动完成」，且**一次 `qt.svg: Cannot open file` 都没有**。**⚠️ 指令变更**：夜间对 `main.cpp` 的重写（233 删 / 91 增）**不再调用**之前几轮加的启动自检——`validateSessionTypeTable` / `validateFilterLayerTable` / `validateAttributeConditionTable` / `validateNameFilterTables` 现在**全仓没有任何调用方**，日志里也不会再出现「会话类型注册表：…」「三层过滤：…」「属性过滤：…」「名称过滤：…」那四行。保留下来的只有 `CommandRegistry::instance().validate()`（`main.cpp` 里那一处 `LQCOMPARE_ERROR("command", …)`）。这些表的校验**仍然被单元测试覆盖**（例如 `Tests/FilterStack` G 组有 6 条把**故意写坏**的表喂进同一个判定），因此丢的是「启动时的一声警报」，不是唯一的防线；**要不要把这四行自检加回 `main.cpp` 是一个待定的决定**，加回之前不要在文档里声称启动时会打印它们 | `QT_QPA_PLATFORM=offscreen ./dist/macos/LqCompare.app/Contents/MacOS/LqCompare --log-level info`（**别用 `\| head` 收尾**，管道关闭会把进程直接杀掉、看不到真实退出码） |
 | Shell 集成 | 99 个用例函数（QTest 合计 101，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分十一组：A 动作与目标 14、B 选项 8、C 命令行引号 8、D 计划 13、E 安装 10、F 卸载与还原 9、G 校验 5、H 残留 6、I 能力 4、J 预演 3、K 命令行解析 9。**全部跑在功能完整的内存注册表上**，因此安装回滚与卸载还原是在本机真实执行的流程，不是桩 | `Code/Tests/run-tests.sh ShellIntegration` |
 | Shell 集成的命令行引号 | 用测试内置的 `CommandLineToArgvW` 参考实现做往返：`"C:\Program Files\…\LqCompare.exe" --shell-action=compare "%1"` 切回来必须还是两个原值，含「结尾反斜杠要翻倍」这条最容易写错的规则 | `Code/Tests/run-tests.sh ShellIntegration` |
 | 分级日志 | 32 个用例函数（QTest 合计 34，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分五组：A 级别与过滤 6、B 格式 4、C 输出目标 11、D 耗时辅助 6、E 级别名解析 4、以及 `initTestCase`/`cleanupTestCase`。这套件**刻意不链接 QtGui**：哪天有人往 `logging.cpp` 里加图形依赖，本工程会立刻构建失败 | `Code/Tests/run-tests.sh Logging` |
@@ -858,6 +905,33 @@ git push --force-with-lease=main:<远端当前提交> \
 > 每轮完整闭环 1～2 条（含测试、护栏、提交、推送、issue 更新与本目录下的工作日志）。
 > 因此你会看到没有人在场的提交——它们不是手滑推上去的，判定标准与本文件写的完全一致。
 > 想让它停下来，把那个自动化暂停即可；已经推上去的提交都是各自独立的闭环，可以单独回退。
+
+### 4.0 2026-09-21 更新：夜间产出的收尾与下一步
+
+夜间那 24 个工作流已经把**服务层与视图层的主体骨架铺满了**（`SingleInstance` 104 条、
+`Snapshot` 114 条、`Media` 378 条、`Cli` 108 条、`Script` 112 条……），
+因此 §4 下面那张「从哪条 issue 开始」的表**有相当一部分已经过期**：它建议的
+`PLAT-006` 第 1、2、4 条、以及若干「下一个该做哪条」的判断，都落在夜间已经落地的
+范围里了。接手时**先按 `docs/development/team-*.md` 与各 issue 的「落地说明」评论
+核对实际进度**，不要按下面那几条直接开工。
+
+本轮之后，按性价比排序的下一步是：
+
+1. **把「界面接通」当一批来做**——这是目前最大的、也是唯一成片阻塞的缺口。它一口气
+   卡着五条：`SESS-007` 第 2、3 条（设置目标下拉的去向提示、关标签丢弃提示）、
+   `FILT-005` 第 2、3 条（每层启用开关、「查看最终生效过滤」面板）、
+   `FILT-003` 第 5 条与 `FILT-002` 第 3 条的界面部分、以及 `SESS-006` 的 Rules 按钮
+   接线。**它们的共同住所是设置页 `OPT-*`**，所以先落 `OPT-*` 的设置页与 Filters 页，
+   再回头把这些条目的界面部分一次性勾掉，比逐条零敲碎打划算得多。
+2. **决定那四条启动自检的去留**（见 §2「主程序运行」那条的 ⚠️）。要么加回 `main.cpp`，
+   要么把顺序与落点的校验职责正式移交给单元测试并在文档里删掉「启动时打印」的说法。
+   悬着不决定，下一个人会照着 §2 的旧描述去找那四行日志。
+3. **补 `VCS-012` 缺的两个选项**（「忽略空白改动」「跨重命名追溯」）需要先扩
+   `Vcs::Backend::blame()` 的签名——这是跨层改动，不要只改视图层假装做了。
+4. **收紧 `tools/check_icons.py` 的裸名引用盲区**（见 §6 新增的那条）。
+5. 平台的「写了但没在目标平台编译/运行过」清单仍是 Windows 与 Linux 的薄层
+   （`filesystem_win.cpp`、`trash_win.cpp`、`iconservice_win.cpp`、`registrystore_win.cpp`、
+   `shellintegration` 的 Win32 路径、`iconservice_linux.cpp`），**这些一条都不得勾选完成标准**。
 
 | 对话 | 工作流 | 从哪条 issue 开始 | 交付什么 |
 | --- | --- | --- | --- |
@@ -1237,3 +1311,8 @@ git push --force-with-lease=main:<远端当前提交> \
 | 解析结果里的对象在测试里被当成 `const` | `const NameFilterParseResult parsed` 上调 `parsed.filter.setCombineMode(...)` 报 `'this' argument to member function … has type 'const NameFilter'`。这不是库的问题，是测试自己写错了限定 | 去掉那个 `const`。**解析结果是可变的工作对象**，不要顺手加 `const`（本仓的 `ParseResult` 类都是这个语义） |
 | 预设往返多出末尾空行 | `serializeNamedNameFilters()` 吐 `"*.cpp\n*.h\n"`，往返后与期望 `"*.cpp\n*.h"` 不等——只差一个看不见的换行，两个字符串在终端里长得一模一样 | `flush()` 里丢掉 `body` 末尾的空行；并且**只有 `bodyStarted` 之后的空行才进正文**——记录标题之前的空行会让元信息块提前结束。**「逐字一致」的往返断言必须包含首尾空白**，否则查不出这类差异 |
 | 新套件忘了写 `QTEST_MAIN` | 链接报 `Undefined symbols: "_main"`。§6 早有一条同类记录（`Q_OBJECT` 那行），本轮又犯一次 | `.cpp` 末尾必须有 `QTEST_MAIN(Tst_Xxx)`。**新建套件的第一条构建失败，十有八九是它或 `.moc` include，先查这两个再查别的** |
+| `QCOMPARE(a, QStringList{"x","y"})` | 报 `too many arguments provided to function-like macro invocation`——宏参数里**只有圆括号能保护逗号，花括号不算**，预处理器把 `{"x"` 与 `"y"}` 当成两个实参了 | 外面再包一层：`QCOMPARE(a, asList(QStringList{"x","y"}))`（或先赋给一个局部变量）。表驱动的断言尤其容易踩 |
+| `.pri` 已经引用了还没写出来的 `.cpp` | 并行开发被中途打断（额度/崩溃）时，最常见的残留形态是**接线先写完、实现没落盘**。`services.pri` 会 include 各模块 `.pri`，于是**整个应用工程编译不过**，而报错指向的是一个「不存在的文件」，很容易被当成环境问题 | 接手一次被打断的并行开发时，先做一次**引用完整性扫描**：把 `Code/**/*.pri` 与 `*.pro` 里 `HEADERS/SOURCES/FORMS/RESOURCES` 的每一项（**解析掉 `$$PWD`**）逐个判存在，缺失的就是断点。2026-09-21 用这个办法在 60+ 个 `.pri` 里只捞出 1 处（`patchapply.cpp`），比逐个模块读代码快得多 |
+| `check_icons.py` 看不见「文件在磁盘、裸名被引用、但 qrc 里被摘掉」 | 裸名引用（`icon("ribbon_copy.svg")` 这种由 App 补前缀的写法）只在**名字已在 qrc 里**时才被计入「已使用」，因此把某个图标从 `Pictures.qrc` 里摘掉之后，静态护栏**仍然是绿的**（31 个图标，一致） | 目前靠 `Tests/AppIntegration` 的运行期断言兜住（它真的去 `QFile::exists` 每个命令的图标）。这是**护栏的已知缺口**，不是「已经安全」——收紧它要扫描裸名引用并反向校验「磁盘存在但未声明」，尚未做 |
+| 命令的图标路径指向不存在的资源 | 界面上一排 Ribbon 按钮是空图标，但**编译期与静态护栏都不报错**，只有两种途径能发现：离屏启动日志里刷 `qt.svg: Cannot open file ':/Pictures/xxx.svg'`，或 `Tests/AppIntegration` 的 `QFile::exists(command.icon)` 断言 | 新增带图标的命令时，要么真的按同一套视觉语言补一张 SVG 并登记进 `Pictures.qrc`，要么指向一张已有的、语义合适的图。`check_icons.py` 只校验「qrc 声明 ↔ 文件 ↔ 源码引用」三者一致，**不校验「命令引用的路径真的存在」**——这一条只有运行期能抓 |
+| 重写 `main.cpp` 会静默带走启动自检 | 夜间把 `main.cpp` 从 233 行删到 91 行增添之后，之前几轮加的四条 `validate*Tables()` 启动自检**没有任何调用方了**，但函数本体还在、文档也还写着「启动时会打印」，于是文档与行为悄悄分家 | 重构 `main.cpp` / 装配路径时，**顺手 grep 一下那些 `validate*()` 还有没有调用方**（`grep -rn 'validate.*Table' Code/`）。自检函数留在模块里不等于它会跑；这类「文档说会跑、实际不跑」的漂移没有任何机制会自动发现 |

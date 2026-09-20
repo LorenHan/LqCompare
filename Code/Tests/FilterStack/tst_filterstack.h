@@ -77,6 +77,7 @@ private slots:
 
     // ---------- D 表达式与面板（第 3 条） ----------
     void expressionCombinesWhitelistsWithAndBlacklistsWithOr();
+    void expressionPreservesLayerGroupsAndActualIntersection();
     void expressionIsEmptyWhenNothingIsActive();
     void expressionOmitsDisabledAndEmptyLayers();
     void expressionQuotesAtomsThatContainOperators();

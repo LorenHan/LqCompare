@@ -60,3 +60,15 @@ exists($$PWD/Script/script.pri): include($$PWD/Script/script.pri)
 
 # 工作流 M：设置存储
 exists($$PWD/Settings/settings.pri): include($$PWD/Settings/settings.pri)
+
+exists($$PWD/Archive/archive.pri): include($$PWD/Archive/archive.pri)
+
+exists($$PWD/Table/table.pri): include($$PWD/Table/table.pri)
+
+exists($$PWD/Version/version.pri): include($$PWD/Version/version.pri)
+
+exists($$PWD/Media/media.pri): include($$PWD/Media/media.pri)
+
+exists($$PWD/Registry/registry.pri): include($$PWD/Registry/registry.pri)
+
+exists($$PWD/FolderMerge/foldermerge.pri): include($$PWD/FolderMerge/foldermerge.pri)

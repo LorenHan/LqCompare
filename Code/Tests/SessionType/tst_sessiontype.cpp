@@ -44,11 +44,9 @@ QString readSourceFile(const QString &relativePath)
 
 /// 取出 `homepage.cpp` 里 `sections()` 的函数体。
 ///
-/// 为什么能靠文本定位：`sections()` 是一段纯字面量的 return，
-/// 函数体里除了各分组的标题与卡片文案之外没有别的逻辑，因此「标题目录」
-/// 与「代码」这两件事不会分家。真正要防的是**它被改名或换签名**——
-/// 那样这里返回空串，调用方会直接报「找不到函数体」而不是静默地
-/// 「比对了一个空集合」（后者会恒真通过）。
+/// 此处只守服务层与视图的目录来源约定，不再从源码提取卡片 ID。
+/// 真实控件数量、顺序、显示名与点击行为由 Tests/HomeRegistry 覆盖。
+/// 函数被改名或换签名时返回空串，让该约定显式失败。
 QString sectionsBodyOfImpl(const QString &source)
 {
     const QString marker = QStringLiteral("QList<HomePage::Section> HomePage::sections() const");
@@ -60,24 +58,16 @@ QString sectionsBodyOfImpl(const QString &source)
     return end < 0 ? source.mid(start) : source.mid(start, end - start);
 }
 
-/// 从 `sections()` 的函数体里取出全部类型卡片声明的 ID，按出现顺序。
-///
-/// 只认 `QStringLiteral("…")` 这一种写法：它是这个函数里唯一可能出现类型 ID
-/// 的形式（卡片标题走 `tr()`，分组标题也走 `tr()`）。写死这一种形式看起来
-/// 脆，但它换来的是**换写法就会红**——比写成宽松的「任意引号里的字符串」
-/// 然后把 `tr("Text Compare")` 一起收进来好得多。
-QStringList typeIdsInBody(const QString &body)
+/// 保留纯 QtCore 工程的窄架构护栏：Home 从共享目录读取 ID 与显示名。
+/// 不复制类型清单，也不要求某种 for/append 的拼写；控件结果另做行为验证。
+bool usesSessionTypeCatalog(QString body)
 {
-    QStringList ids;
-    if (body.isEmpty()) {
-        return ids;
-    }
-    const QRegularExpression pattern(QStringLiteral("QStringLiteral\\(\"([^\"]*)\"\\)"));
-    QRegularExpressionMatchIterator iterator = pattern.globalMatch(body);
-    while (iterator.hasNext()) {
-        ids.append(iterator.next().captured(1));
-    }
-    return ids;
+    // 注释或文案里的 API 名不算真正调用。这里不试图解析 C++ 语法。
+    body.remove(QRegularExpression(QStringLiteral("//[^\\n]*|/\\*[\\s\\S]*?\\*/|\"(?:\\\\.|[^\"\\\\])*\"")));
+    return QRegularExpression(QStringLiteral("\\bbuiltInSessionTypes\\s*\\(\\s*\\)"))
+               .match(body).hasMatch()
+        && QRegularExpression(QStringLiteral("\\.\\s*id\\b")).match(body).hasMatch()
+        && QRegularExpression(QStringLiteral("\\.\\s*displayName\\b")).match(body).hasMatch();
 }
 
 /// `Pictures.qrc` 里声明的图标文件名。
@@ -972,51 +962,50 @@ void TstSessionType::enumerationCoversEveryIdExactlyOnce()
 
 void TstSessionType::homePageHardcodedIdsMatchTheRegistry()
 {
-    // SESS-002 落地前，类型 ID 的事实来源是 `HomePage::sections()` 里那张
-    // 硬编码的表——它是事实上的第一批「已发布 ID」。注册表落地后**必须与它一致**，
-    // 否则 Home 页点出来的入口会指向不存在的类型（现象是「点卡片没反应」）。
-    //
-    // 为什么不干脆让 HomePage 改成读注册表：那是 SESS-003（Home 视图）的范围，
-    // 本轮改了会与它撞车。折中方案是用一条**源码级**用例把两边钉在一起——
-    // 与 SESS-001 用源码级用例守「基类不依赖具体视图」是同一个手法。
+    // 保留旧槽名以兼容现有测试过滤器。Home 已由内置注册目录派生，
+    // 不应再要求它保留一张重复的硬编码 ID 表才能通过测试。
+    // 真正的每类型入口、标题、顺序、分组及点击 ID 在 HomeRegistry 测试。
     const QString source = readSourceFile(QStringLiteral("/Views/Shell/homepage.cpp"));
     const QString body = sectionsBodyOf(source);
     QVERIFY2(!body.isEmpty(),
              "在 homepage.cpp 里找不到 sections() 的函数体——它可能被改名或改了签名，"
              "请同步更新这条护栏（恒真的护栏比没有护栏更糟）");
 
-    const QStringList fromHomePage = typeIdsInBody(body);
-    QCOMPARE(fromHomePage, builtInSessionTypeIds());
+    QVERIFY2(usesSessionTypeCatalog(body),
+             "Home 必须从 builtInSessionTypes() 派生类型 ID 与显示名；"
+             "行为验证见 Tests/HomeRegistry，而不是在视图中复制硬编码类型清单");
 }
 
 void TstSessionType::homePageIdCheckCanFailOnBrokenSource()
 {
-    // 反向验证：拿一段**结构相同但 ID 写错**的源码文本跑同一个判定流程。
-    // 如果没有这条，`homePageHardcodedIdsMatchTheRegistry` 有可能因为
-    // 「正则没匹配上、两边都是空集合」而恒真通过——那比没有护栏更糟。
-    const QString broken = QStringLiteral(
+    const QString derived = QStringLiteral(
         "QList<HomePage::Section> HomePage::sections() const\n"
         "{\n"
-        "    return {\n"
-        "        {tr(\"Text\"), tr(\"忽略这一段\"),\n"
-        "         {{QStringLiteral(\"text\"), tr(\"Text Compare\")},\n"
-        "          {QStringLiteral(\"text-typo\"), tr(\"Text Merge\")}}},\n"
-        "    };\n"
+        "    for (const auto &entry : builtInSessionTypes())\n"
+        "        section.entries.append({entry.id, entry.displayName});\n"
         "}\n");
-
-    const QString body = sectionsBodyOf(broken);
+    const QString body = sectionsBodyOf(derived);
     QVERIFY2(!body.isEmpty(), "函数体定位失败");
+    QVERIFY(usesSessionTypeCatalog(body));
 
-    const QStringList ids = typeIdsInBody(body);
-    QCOMPARE(ids, QStringList({QStringLiteral("text"), QStringLiteral("text-typo")}));
+    // 移除共享目录来源，或把 ID/标题改回字面量，都必须使护栏失败。
+    QString broken = body;
+    broken.replace(QStringLiteral("builtInSessionTypes()"), QStringLiteral("localTypes()"));
+    QVERIFY(!usesSessionTypeCatalog(broken));
+    broken = body;
+    broken.replace(QStringLiteral("entry.id"), QStringLiteral("QStringLiteral(\"text-typo\")"));
+    QVERIFY(!usesSessionTypeCatalog(broken));
+    broken = body;
+    broken.replace(QStringLiteral("entry.displayName"), QStringLiteral("tr(\"Text Compare\")"));
+    QVERIFY(!usesSessionTypeCatalog(broken));
 
-    // 关键的一条：它必须与注册表**不等**。等于就说明这条判定恒真。
-    QVERIFY(ids != builtInSessionTypeIds());
-
-    // 另外两句反向验证：函数被改名时返回空（而不是「空对空」地通过），
-    // 以及只有 QStringLiteral 会被当类型 ID（tr() 里的文案不算）。
+    // 空源码、被改名的函数，以及只有注释/字符串提到目录都不能绿。
+    QVERIFY(!usesSessionTypeCatalog(QString()));
     QVERIFY(sectionsBodyOf(QStringLiteral("void Other::thing() const\n{\n}\n")).isEmpty());
-    QVERIFY(typeIdsInBody(QStringLiteral("tr(\"Text\") tr(\"Folders\")")).isEmpty());
+    QVERIFY(!usesSessionTypeCatalog(QStringLiteral(
+        "// builtInSessionTypes() entry.id entry.displayName\n"
+        "/* builtInSessionTypes() entry.id entry.displayName */\n"
+        "QStringLiteral(\"builtInSessionTypes() entry.id entry.displayName\")")));
 }
 
 // =============================================================================

@@ -30,8 +30,10 @@ protected slots:
     /// 语言切换后刷新 Ribbon 自有控件的文案（UI-030）。
     void switchLanguage();
 
-private:
+protected:
     void setupQuickAccessBar();
+
+private:
     void setupSearchBar();
 
     Q_DISABLE_COPY(RibbonWindow)

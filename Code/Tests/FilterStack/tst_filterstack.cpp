@@ -705,7 +705,26 @@ void TstFilterStack::expressionCombinesWhitelistsWithAndBlacklistsWithOr()
     const FilterStack stack = stackWith(QStringLiteral("*.cpp"),
                                         QStringLiteral("*.h"),
                                         QStringLiteral("-*.tmp"));
-    QCOMPARE(stack.combinedExpression(), QStringLiteral("(*.cpp || *.h) && !(*.tmp)"));
+    QCOMPARE(stack.combinedExpression(), QStringLiteral("*.cpp && *.h && !(*.tmp)"));
+    QVERIFY(!acceptsName(stack, QStringLiteral("a.cpp")));
+    QVERIFY(!acceptsName(stack, QStringLiteral("a.h")));
+}
+
+void TstFilterStack::expressionPreservesLayerGroupsAndActualIntersection()
+{
+    FilterStack stack = stackWith(QStringLiteral("*.cpp\n*.h\n-*_test.cpp"),
+                                  QStringLiteral("main.*\nhelper.*\n-helper.cpp"),
+                                  QStringLiteral("*.cpp"));
+    QCOMPARE(stack.combinedExpression(),
+             QStringLiteral("(*.cpp || *.h) && (main.* || helper.*) && *.cpp && !(*_test.cpp || helper.cpp)"));
+    QVERIFY(acceptsName(stack, QStringLiteral("main.cpp")));
+    QVERIFY(!acceptsName(stack, QStringLiteral("main.h")));
+    QVERIFY(!acceptsName(stack, QStringLiteral("other.cpp")));
+    QVERIFY(!acceptsName(stack, QStringLiteral("helper.cpp")));
+    stack.setLayerEnabled(FilterLayer::View, false);
+    QCOMPARE(stack.combinedExpression(),
+             QStringLiteral("(*.cpp || *.h) && (main.* || helper.*) && !(*_test.cpp || helper.cpp)"));
+    QVERIFY(acceptsName(stack, QStringLiteral("main.h")));
 }
 
 void TstFilterStack::expressionIsEmptyWhenNothingIsActive()
@@ -724,7 +743,7 @@ void TstFilterStack::expressionOmitsDisabledAndEmptyLayers()
     FilterStack stack = stackWith(QStringLiteral("*.cpp"),
                                   QStringLiteral("*.h"),
                                   QStringLiteral(""));
-    QCOMPARE(stack.combinedExpression(), QStringLiteral("(*.cpp || *.h)"));
+    QCOMPARE(stack.combinedExpression(), QStringLiteral("*.cpp && *.h"));
 
     stack.setLayerEnabled(FilterLayer::Session, false);
     QCOMPARE(stack.combinedExpression(), QStringLiteral("*.cpp"));
@@ -737,7 +756,7 @@ void TstFilterStack::expressionQuotesAtomsThatContainOperators()
     const FilterStack stack = stackWith(QStringLiteral("a|b.txt"),
                                         QStringLiteral("c&d.txt"),
                                         QString());
-    QCOMPARE(stack.combinedExpression(), QStringLiteral("('a|b.txt' || 'c&d.txt')"));
+    QCOMPARE(stack.combinedExpression(), QStringLiteral("'a|b.txt' && 'c&d.txt'"));
 }
 
 void TstFilterStack::expressionQuotesAtomsThatContainSpaces()

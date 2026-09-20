@@ -1,0 +1,10 @@
+QT += core testlib
+QT -= gui
+TEMPLATE = app
+CONFIG += c++17 console
+CONFIG -= app_bundle
+TARGET = tst_sessiondocument
+INCLUDEPATH += $$PWD/../../Services/Session
+SOURCES += $$PWD/tst_sessiondocument.cpp $$PWD/../../Services/Session/sessiondocument.cpp
+HEADERS += $$PWD/../../Services/Session/sessiondocument.h
+DESTDIR = $$OUT_PWD/bin

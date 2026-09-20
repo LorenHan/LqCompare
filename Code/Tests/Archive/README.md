@@ -1,0 +1,105 @@
+# Archive metadata reader behavioral tests
+
+This suite tests `Code/Services/Archive/archivecompare.h` through its public API.
+The executable links QtCore and QtTest, without a GUI, Views, external ZIP tools,
+or a production decompression dependency. Python 3's standard library creates
+real ZIP32 archives and deliberately corrupts selected header fields. It never
+extracts member paths.
+
+## Run
+
+```sh
+mkdir -p /tmp/lqcompare-archive-build
+cd /tmp/lqcompare-archive-build
+/Users/loren/Qt/5.15.2/clang_64/bin/qmake /Users/loren/Desktop/Work/LqCompare/Code/Tests/Archive/ArchiveTests.pro
+make -j2
+./bin/tst_archive
+```
+
+`initTestCase()` finds `python3`, then `python`, and regenerates all fixtures,
+including a 50,000-member ZIP, in a `QTemporaryDir`. Set `LQCOMPARE_PYTHON` to an
+absolute Python 3 executable path if it is not on PATH. Python is invoked with
+an argument list through `QProcess`; no shell evaluates source paths. Fixtures
+are removed by `QTemporaryDir` when the process completes normally.
+
+To regenerate the small checked-in samples independently:
+
+```sh
+python3 Code/Tests/Archive/generate_fixtures.py --output Code/Tests/Archive/fixtures
+```
+
+Add `--large` with a temporary output directory for the large fixture. The
+50,000-member archive is intentionally not checked in. The 91 small fixtures
+and their manifest total less than 25 KiB. `fixtures/manifest.json`
+describes the exact purpose of every file. The generated valid payload samples
+are independently read and CRC-checked by Python `zipfile.testzip()` during
+generation; unsafe paths are never passed to an extraction function.
+
+## Verified behaviors
+
+- Real stored and deflated members; empty archives; explicit and synthesized
+  parent directories; signature-based ZIP/JAR recognition; nested ZIP payload
+  treated as an ordinary member.
+- Sorted, case-sensitive normalized paths; NFC; slash/dot normalization; strict
+  flagged UTF-8 and CP437; valid and stale Info-ZIP Unicode path fields; rejection
+  of inconsistent, duplicated, invalid, or unsafe Unicode aliases; supplementary
+  format/control code points rejected while normal emoji remains accepted;
+  local-only Unicode aliases cannot change a file into a directory.
+- Signed and unsigned data descriptors, and rejection of inconsistent
+  descriptor CRC metadata.
+- Valid deflated empty directories with nonzero compressed size; false EOCD and
+  ZIP64 locator signatures inside valid archive/member comments.
+- Explicit failure for traversal, absolute paths, drive/UNC names, alternate
+  stream colons, NUL/control characters, Windows reserved names and ambiguous
+  trailing dots/spaces, symlinks, normalized duplicates and file/parent conflicts.
+- Explicit unsupported/encrypted/ZIP64/unknown-format/I/O errors; truncation,
+  local/central inconsistency, invalid offsets, overlapping members, directory
+  payload corruption, inconsistent stored sizes, malformed extra fields and
+  central-directory size/count corruption.
+- Limits on archive size, central-directory bytes, stored plus synthesized
+  entry count, raw and decoded path bytes, path depth, single and total declared
+  uncompressed bytes, and compression ratio. Exact boundary values are accepted.
+- Immediate and mid-read cancellation; all structural/safety/limit errors return
+  zero entries and zero aggregate sizes; failed sides produce no false
+  one-sided comparison rows.
+- Every supported comparison state, sorted row alignment, evidence text and
+  absent-side indices; reads preserve input bytes and create no extracted paths.
+  Explicit deflated directory versus an implicit directory does not create a
+  spurious difference from metadata missing on the implicit side.
+- A 50,000-member ZIP must enumerate within a conservative 15-second regression
+  ceiling, then reject explicitly when the entry budget is 49,999.
+
+## Metadata is not content verification
+
+The service deliberately does not decompress payloads, recompute payload CRCs,
+or perform byte comparison. The fixture pair `collision-left.zip` and
+`collision-right.zip` contains different 12-byte payloads with the genuine same
+CRC32 `0x8c58dcdc`:
+
+```text
+425ab9e9e0aa2213b4c3e192
+be55214eb39dda0761897cc1
+```
+
+The generator independently verifies the collision. Tests require the reader
+to return `Difference::MatchingMetadata` and metadata-qualified evidence; there
+is no byte-equality state. `payload-corrupted.zip` and `deflate-corrupted.zip`
+retain consistent headers while carrying damaged payloads, so the metadata-only
+reader accepts them. Their tests prevent a claim of payload integrity. A zero
+`differenceCount` therefore means no directory-metadata differences, not equal
+or healthy file contents.
+
+## Execution record and remaining scope
+
+2026-09-20, macOS 26.6, Qt 5.15.2, C++17: **106 passed, 0 failed, 0 skipped**.
+The full run took about 1.2 seconds after building; 50,000-member enumeration
+took **152 ms**. The test build uses `make -j2`. The installed newer macOS SDK
+causes Qt's existing SDK-version warning; compilation and execution succeeded.
+
+Windows/MinGW execution has not been performed. This suite does not claim the
+complete ARC-001–008 specification: extraction, writing/round trips, payload
+CRC/integrity verification, byte comparison, decryption, ZIP64, non-ZIP formats,
+GBK heuristics, nested expansion, CLI integration and GUI lifecycle are outside
+this metadata service suite. Read-only ARC view tests are maintained separately.
+No third-party ZIP source or GPL binary is included; the fixture generator uses
+the developer's existing Python standard library only.

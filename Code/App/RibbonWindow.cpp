@@ -1,6 +1,7 @@
 #include "RibbonWindow.h"
 
 #include "commandregistry.h"
+#include "commandactionbinder.h"
 #include "logging.h"
 
 #include <QAction>
@@ -20,7 +21,6 @@ RibbonWindow::RibbonWindow(QWidget *parent) : LqRibbon::RibbonMainWindow(parent)
     ribbonBar()->setSimplifiedModeEnabled(false);
     ribbonBar()->setMinimizationEnabled(true);
 
-    setupQuickAccessBar();
     setupSearchBar();
 
     connect(ribbonBar(), &RibbonBar::showRibbonContextMenu, this,
@@ -40,19 +40,9 @@ void RibbonWindow::setupQuickAccessBar()
         "file.open", "file.save", "edit.undo", "edit.redo", "nav.prevdiff", "nav.nextdiff",
     };
     for (const char *id : kAlwaysVisible) {
-        const Command *command = CommandRegistry::instance().find(QString::fromLatin1(id));
-        if (!command) {
-            continue;
-        }
-        auto *action = new QAction(QIcon(command->icon), command->text, this);
-        action->setToolTip(QStringLiteral("%1\n%2\n[%3]").arg(command->text, command->description,
-                                                            command->actionId));
-        action->setEnabled(command->isImplemented());
-        if (command->isImplemented()) {
-            const QString commandId = command->id;
-            connect(action, &QAction::triggered, this,
-                    [commandId]() { CommandRegistry::instance().trigger(commandId); });
-        }
+        auto *binder = CommandActionBinder::forWindow(this);
+        auto *action = binder->createAction(QString::fromLatin1(id), bar, {}, {},
+                                           CommandActionBinder::Presentation::Toolbar, false);
         bar->addAction(action);
     }
 }

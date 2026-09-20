@@ -1,0 +1,8 @@
+diff -u old/sample.txt new/sample.txt
+--- old/sample.txt	2026-09-20 12:00:00.000000000 +0800
++++ new/sample.txt	2026-09-20 12:00:01.000000000 +0800
+@@ -1,3 +1,3 @@
+ one
+-old
++new
+ three

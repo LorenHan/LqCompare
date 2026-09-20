@@ -26,12 +26,14 @@ public:
     explicit HomePage(QWidget *parent = nullptr);
 
     /// 记录一次会话打开，用于「最近会话」区（SESS-009 的界面部分）。
-    void rememberSession(const QString &title, const QString &detail);
+    void setRecentSessions(const QList<QPair<QString, QString>> &entries);
+    void setTypeAvailable(const QString &typeId, bool available, const QString &reason = QString());
 
 signals:
     /// 用户选择了某个会话类型的新建入口。
     /// \param typeId 会话类型 ID，取值见 Services/Session/sessiontype.h
     void sessionTypeRequested(const QString &typeId);
+    void recentSessionRequested(int index);
 
 private:
     struct Section

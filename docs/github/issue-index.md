@@ -1,6 +1,6 @@
 # PRD Issue 索引
 
-> 由 `tools/publish_issues.py` 生成，请勿手工编辑。生成时间：2026-09-19 17:25 UTC
+> 由 `tools/publish_issues.py` 生成，请勿手工编辑。生成时间：2026-09-20 15:25 UTC
 >
 > 条目总数 369，已发布 369。规格正文见 [PRD-actions](../PRD-actions.md)。
 
@@ -166,7 +166,7 @@
 - `DIR-033` 压缩包作为文件夹参与比对　[#141](https://github.com/LorenHan/LqCompare/issues/141)　*P1*
 - `DIR-034` 扫描进度、取消与增量刷新　[#143](https://github.com/LorenHan/LqCompare/issues/143)　*P1*
 - `DIR-035` 文件夹比对的报表导出　[#144](https://github.com/LorenHan/LqCompare/issues/144)　*P1*
-- `DIR-036` WebDAV / 网络位置与长路径支持　[#145](https://github.com/LorenHan/LqCompare/issues/145)　*P1*
+- `DIR-036` UNC、系统挂载网络位置与长路径支持　[#145](https://github.com/LorenHan/LqCompare/issues/145)　*P1*
 - `DIR-037` 符号链接、硬链接与特殊文件处理　[#146](https://github.com/LorenHan/LqCompare/issues/146)　*P1*
 - `DIR-038` 文件夹比对的自动化测试与语料　[#147](https://github.com/LorenHan/LqCompare/issues/147)　*P1*
 
@@ -362,7 +362,7 @@
 - `VCS-011` 修订图（Revision Graph）　[#282](https://github.com/LorenHan/LqCompare/issues/282)　*P1*
 - `VCS-012` 逐行追溯（Blame）　[#283](https://github.com/LorenHan/LqCompare/issues/283)　*P1*
 - `VCS-013` 追溯视图的着色与交互　[#284](https://github.com/LorenHan/LqCompare/issues/284)　*P1*
-- `VCS-014` 提交对话框的文件列表与差异预览　[#285](https://github.com/LorenHan/LqCompare/issues/285)　*P1*
+- `VCS-014` 提交前变更审阅与外部提交工具入口　[#285](https://github.com/LorenHan/LqCompare/issues/285)　*P1*
 - `VCS-015` 冲突解决工作流　[#286](https://github.com/LorenHan/LqCompare/issues/286)　*P1*
 - `VCS-016` 外部版本控制工具的协作　[#287](https://github.com/LorenHan/LqCompare/issues/287)　*P1*
 - `VCS-017` 多仓库、子模块与工作树　[#288](https://github.com/LorenHan/LqCompare/issues/288)　*P1*

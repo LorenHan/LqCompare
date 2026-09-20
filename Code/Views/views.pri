@@ -35,3 +35,19 @@ exists($$PWD/Vcs/vcsview.pri): include($$PWD/Vcs/vcsview.pri)
 
 # 工作流 M：选项与外观
 exists($$PWD/Options/options.pri): include($$PWD/Options/options.pri)
+
+exists($$PWD/Archive/archiveview.pri): include($$PWD/Archive/archiveview.pri)
+
+exists($$PWD/Table/tableview.pri): include($$PWD/Table/tableview.pri)
+
+exists($$PWD/Sync/syncview.pri): include($$PWD/Sync/syncview.pri)
+
+exists($$PWD/Filter/filterview.pri): include($$PWD/Filter/filterview.pri)
+
+exists($$PWD/Version/versionview.pri): include($$PWD/Version/versionview.pri)
+
+exists($$PWD/Media/mediaview.pri): include($$PWD/Media/mediaview.pri)
+
+exists($$PWD/Registry/registryview.pri): include($$PWD/Registry/registryview.pri)
+
+exists($$PWD/FolderMerge/foldermergeview.pri): include($$PWD/FolderMerge/foldermergeview.pri)
