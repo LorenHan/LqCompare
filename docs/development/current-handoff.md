@@ -7,12 +7,14 @@
 
 规格（369 条）与 GitHub issue 已全部铺好；Qt 工程骨架已在 macOS 上编译通过、
 主程序可启动、测试全绿。**服务层开始有真实功能**：文件系统抽象层（PLAT-002）、
-回收站服务（PLAT-003）、名称处理（PLAT-007）、批量操作的失败处置（PLAT-008）
-与系统图标服务（PLAT-004）已落地。其中回收站在本机是**真的能删进废纸篓再还原回来**的；
-名称处理连「无效 UTF-8 的文件名」这种只在 Linux 上出现的输入都写好了测试（CI 上会真实执行）；
-错误路径现在携带**原始系统错误码**（errno / Win32 / Cocoa），批量操作会给出
-按原因分组的失败清单并支持只重试失败项；系统图标是按**类型**缓存 + 后台解析 + 去重的，
-在本机能真的拿到 Finder 那一套图标。
+回收站服务（PLAT-003）、名称处理（PLAT-007）、批量操作的失败处置（PLAT-008）、
+系统图标服务（PLAT-004）与 Shell 集成（PLAT-005）已落地。其中回收站在本机是
+**真的能删进废纸篓再还原回来**的；名称处理连「无效 UTF-8 的文件名」这种只在 Linux 上
+出现的输入都写好了测试（CI 上会真实执行）；错误路径现在携带**原始系统错误码**
+（errno / Win32 / Cocoa），批量操作会给出按原因分组的失败清单并支持只重试失败项；
+系统图标是按**类型**缓存 + 后台解析 + 去重的，在本机能真的拿到 Finder 那一套图标；
+Shell 集成的注册表计划、安装回滚、卸载还原与残留检查全部在**内存注册表**上真实执行，
+因此这台 macOS 上跑的是完整流程，而不只是编译过。
 界面上仍是 169 个按钮里 31 条带处理器，其余点击后提示对应 ACTION-ID。
 
 ## 1.1 已落地的服务层模块
@@ -20,19 +22,21 @@
 | 模块 | 条目 | 状态 | 测试 |
 | --- | --- | --- | --- |
 | `Services/Command/` | UI-024 | 骨架 | `Tests/CommandRegistry`（14 用例） |
-| `Services/Log/` | ENG-006 | 骨架 | — |
+| `Services/Log/` | ENG-006 | 骨架（**已知缺陷**：`Log::write()` 不过滤级别，见 §6 末条；无测试） | — |
 | `Services/Files/`（文件系统） | PLAT-002 | **部分完成**（Windows 实现未编译验证） | `Tests/FileSystem`（50 用例） |
 | `Services/Files/`（回收站） | PLAT-003 | **部分完成**（Windows 实现未编译验证） | `Tests/Trash`（35 用例） |
 | `Services/Files/`（名称与 Unicode） | PLAT-007 | **部分完成**（长路径只写在 Windows 侧，未编译验证） | `Tests/PathName`（40 用例 + 1 个仅 Linux 执行） |
 | `Services/Files/`（错误携带与批量处置） | PLAT-008 | **部分完成**（界面动作尚未接上） | `Tests/Batch`（36 用例） |
 | `Services/Platform/`（系统图标） | PLAT-004 | **部分完成**（Windows / Linux 实现未在目标平台验证；界面尚未取用） | `Tests/PlatformIcon`（46 个用例函数，含 3 条走真实图标源） |
+| `Services/Platform/`（Shell 集成） | PLAT-005 | **部分完成**（Windows 注册表薄层未编译过；界面尚未接入；本机平台能力置灰说明已落地） | `Tests/ShellIntegration`（101 个用例函数） |
 
 PLAT-002 的详细说明与其「第 2 条完成标准为何不勾选」见
 [issue #325](https://github.com/LorenHan/LqCompare/issues/325)；
 PLAT-003 见 [issue #324](https://github.com/LorenHan/LqCompare/issues/324)；
 PLAT-007 见 [issue #328](https://github.com/LorenHan/LqCompare/issues/328)；
 PLAT-008 见 [issue #330](https://github.com/LorenHan/LqCompare/issues/330)；
-PLAT-004 见 [issue #329](https://github.com/LorenHan/LqCompare/issues/329)。
+PLAT-004 见 [issue #329](https://github.com/LorenHan/LqCompare/issues/329)；
+PLAT-005 见 [issue #326](https://github.com/LorenHan/LqCompare/issues/326)。
 
 ### 1.2 回收站（PLAT-003）落地到了什么程度
 
@@ -88,13 +92,43 @@ PLAT-004 见 [issue #329](https://github.com/LorenHan/LqCompare/issues/329)。
 48/256 需要 `IImageList` COM——代码里已注明，`actualPixelSize` 会如实报出
 「其实只拿到了 32」，不会假装请求的尺寸就是拿到的尺寸。
 
+### 1.5 PLAT-005 落地到了什么程度
+
+规格的五条完成标准对应到代码：
+
+| 完成标准 | 落在哪里 | 在本机验证过 |
+| --- | --- | --- |
+| Windows：右键菜单项（比较 / 与…比较 / 作为左右侧比较），通过注册表实现 | `buildShellIntegrationPlan()` 生成三类目标（`*` / `Directory` / `Directory\Background`）下的 `shell\LqCompare.<动作>` 动词键（`MUIVerb` / `MultiSelectModel` / `Position` / `Icon` + `shell\command`）；`install()` 写入 | **是（在内存注册表上）**——菜单项内容、加速键唯一性、单选/多选约束、位置与图标选项、命令行的引号与动作开关都有用例；但**没有**在真实 Windows 资源管理器里看过 |
+| 「选择第二个文件后比较」的两步式交互（占位菜单项） | `ShellAction::CompareSecondStep` + `shellActionIsPlaceholder()`；菜单文字带省略号，命令行走 `%V`（第二个选中项） | **是**——`onlySecondStepIsPlaceholder` 断言只有它是占位；`includedByOptionsRespectsTwoStepSwitch` 断言关掉后「与…比较」与占位项一起消失 |
+| 文件关联可注册 `.patch` / `.diff`，可单独关闭 | 计划里 `.patch` / `.diff` 写 `Software\Classes\.<ext>` 的默认值指向 `LqCompare.PatchFile` / `LqCompare.DiffFile`；扩展名键是 **Shared**（用户的既有值先备份），ProgID 是 **Owned** | **是**——`planWithoutPatchOmitsPatchEntries` 断言关掉 `.patch` 后 `.diff` 完好，反之亦然；`uninstallRestoresPreviousAssociation` 断言还原成用户原来的 ProgID 而不是删掉 |
+| 一键安装与一键卸载；卸载后注册表无残留（有校验） | `install()`（含步骤 0「已安装则先按记录的选项拆掉」、失败整体回滚）、`uninstall()`、`verify()`、`findResidue()`；`InstalledState` 记录版本、路径、选项与备份数 | **是**——101 个用例覆盖安装/回滚（`failedInstallLeavesStoreEmpty` 断言回滚后存储**一条不剩**）、卸载还原（含 `Unsupported` 值类型逐字节还原）、重复安装沿用最初那份备份、外来内容保留并说明、校验能区分「缺失」与「值不对」、残留四类发现 |
+| 非 Windows 平台该能力置灰并说明 | `registrystore_stub.cpp` 的 `UnsupportedRegistryStore` + `platformRegistryUnsupportedReason()` / `platformRegistryUnsupportedAdvice()`；macOS 建议走「自动操作 / 访达扩展」、Linux 建议走「Dolphin 服务菜单 / Nautilus 脚本」 | **是**——本机就是非 Windows，`capability().available` 为假、原因与建议都断言非空；读给出「什么都没有」（不报错）、写返回 `NotSupported` 而不是「假成功」 |
+
+**还没有做的**：
+
+1. `registrystore_win.cpp` **从未被编译过**（与 `trash_win.cpp` 等同一个道理）。
+   它里面有一处必须留意的选择：所有访问都带 `KEY_WOW64_64KEY`。交付目标是
+   32 位 MinGW 构建，不加这个标志时会写进 `WOW6432Node` 影子副本，
+   而 64 位资源管理器看不见那里——安装、校验、卸载全都报成功，菜单里却什么都没有。
+2. **界面还没接上**。`ShellIntegration` 目前只有测试在用，Ribbon 上还没有
+   「安装 Shell 集成 / 卸载 / 检查残留」的入口，也没有一个对话框展示
+   `ShellIntegrationReport::lines()`。这一步与 PLAT-004 的界面接入是同一件事的两半，
+   一起做更省事（都需要 OPT 设置页）。
+3. **命令行入口只解析、不执行**。`parseShellInvocation()` 已经能把
+   `--shell-action=compare "a.txt" "b.txt"` 解成结构化的 `ShellInvocation`
+   （含「同一个路径选两次」这类无效输入），但 `main.cpp` 还没有按它去开会话——
+   那要等 SESS 会话框架就位（CLI-001）。
+4. `Icon` 注册表值用的是可执行文件的图标索引 0。想要一个专用图标需要把图标
+   编进 exe 的资源节（`.rc` 文件），本项目还没有加——索引指向不存在的资源时
+   资源管理器显示**空白占位**而不是报错，所以这个值必须与打包方式一起改。
+
 ## 2. 已验证的事实（不用再花时间确认）
 
 | 项目 | 结论 | 验证方式 |
 | --- | --- | --- |
 | 构建 | Qt 5.15.2 clang_64 上 qmake + make 通过，产出 `dist/macos/LqCompare.app` | `qmake && make -j8` |
 | 运行 | 主程序离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
-| 测试（全量） | **223 passed / 0 failed / 1 skipped**（Batch 36 + CommandRegistry 14 + FileSystem 50 + PathName 40 + PlatformIcon 48 + Trash 35） | `Code/Tests/run-tests.sh` |
+| 测试（全量） | **324 passed / 0 failed / 1 skipped**（Batch 36 + CommandRegistry 14 + FileSystem 50 + PathName 40 + PlatformIcon 48 + ShellIntegration 101 + Trash 35） | `Code/Tests/run-tests.sh` |
 | 文件系统抽象层 | 47 个纯逻辑用例 + 3 个真实文件系统用例全通过；其中 20 个覆盖 **Windows** 路径规则（盘符 / UNC / 长路径前缀 / 大小写），在 macOS 上真实执行 | `Code/Tests/run-tests.sh FileSystem` |
 | 回收站 | 35 个用例全通过。其中 9 个验证 XDG（Linux）的路径与 `.trashinfo` 规则、2 个是**真实**的废纸篓往返与冲突拒绝、多个断言「不可用时搬移函数一次都没被调用」 | `Code/Tests/run-tests.sh Trash` |
 | 名称与 Unicode | 40 个用例通过 + 1 个跳过（无效 UTF-8 名字的用例只在 Linux 上执行，CI 会跑）。覆盖字节保真往返、UTF-8 边界与过长编码、Unicode 组合形式、六类文件名问题的原因与位置 | `Code/Tests/run-tests.sh PathName` |
@@ -102,12 +136,14 @@ PLAT-004 见 [issue #329](https://github.com/LorenHan/LqCompare/issues/329)。
 | 系统图标 | 46 个用例函数（QTest 合计 48，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分四组：17 个验证缓存键与尺寸规则（扩展名折叠 7 + 键的合成与解析 5 + DPI 缩放 4 + Windows 档位收拢 1）、9 个验证有界 LRU 的淘汰与命中统计、6 个验证请求去重队列、11 个验证服务层（同步/异步/去重/回退/换比例清缓存）；另有 **3 个走真实系统图标源**（macOS 上真实执行：断言拿到非空像素、断言文字文件与文件夹的图确实不同） | `Code/Tests/run-tests.sh PlatformIcon` |
 | 主程序构建 | 通过，`iconservice_mac.mm` 编进主程序，**0 warning**（原先 7 条 `-Wunguarded-availability-new` 已用 `API_AVAILABLE` 消掉，不是压掉） | `qmake && make -j8` |
 | 主程序运行 | 离屏启动正常，日志 `Ribbon 构建完成：10 页 / 45 组 / 169 个按钮`，注册表自检 0 问题 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
+| Shell 集成 | 99 个用例函数（QTest 合计 101，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分十一组：A 动作与目标 14、B 选项 8、C 命令行引号 8、D 计划 13、E 安装 10、F 卸载与还原 9、G 校验 5、H 残留 6、I 能力 4、J 预演 3、K 命令行解析 9。**全部跑在功能完整的内存注册表上**，因此安装回滚与卸载还原是在本机真实执行的流程，不是桩 | `Code/Tests/run-tests.sh ShellIntegration` |
+| Shell 集成的命令行引号 | 用测试内置的 `CommandLineToArgvW` 参考实现做往返：`"C:\Program Files\…\LqCompare.exe" --shell-action=compare "%1"` 切回来必须还是两个原值，含「结尾反斜杠要翻倍」这条最容易写错的规则 | `Code/Tests/run-tests.sh ShellIntegration` |
 | 分层检查 | 通过（Services 未反向依赖界面） | `python3 tools/check_layering.py` |
 | 图标检查 | 通过（27 个图标，声明/引用/文件三者一致） | `python3 tools/check_icons.py` |
 | 规格自检 | 通过（369 条，P0 59 条，PRD 与数据同步） | `python3 tools/check_spec.py` |
 | Shell 可移植性 | 通过（1 个脚本，无 bash 4 内建与 GNU 工具扩展） | `python3 tools/check_shell.py` |
-| Windows 宽字符 API | 通过（40 个源文件、清单内 43 个 API；自测 17 个样本） | `python3 tools/check_winapi.py [--self-test]` |
-| 测试套件 | `223 passed / 0 failed`，且「无套件匹配」被视为失败（exit 2） | `Code/Tests/run-tests.sh` |
+| Windows 宽字符 API | 通过（63 个源文件、清单内 43 个 API；自测 17 个样本） | `python3 tools/check_winapi.py [--self-test]` |
+| 测试套件 | `324 passed / 0 failed`，且「无套件匹配」被视为失败（exit 2） | `Code/Tests/run-tests.sh` |
 | 命令注册表自检 | 启动时 0 问题（说明不缺图标、不缺说明、无快捷键冲突） | 启动日志 |
 
 **已知未验证**：Windows MinGW 32 位构建未在本机验证（无该环境）；
@@ -137,7 +173,9 @@ Code/
 │   │                             filesystem_posix/_win、trash_mac.mm/_linux/_win
 │   ├── Platform/                 iconkey（缓存键与尺寸）、iconcache（有界 LRU + 去重队列）、
 │   │                             iconservice（同步/异步/回退 + 提供者接口）、
-│   │                             iconservice_mac.mm/_win/_linux
+│   │                             registrystore（注册表抽象 + 内存实现 + 故障注入）、
+│   │                             shellintegration（计划 / 安装回滚 / 卸载还原 / 校验 / 残留）、
+│   │                             iconservice_mac.mm/_win/_linux、registrystore_win.cpp/_stub.cpp
 │   ├── command.pri / log.pri / files.pri / platform.pri / services.pri
 ├── Pictures/                     27 个 SVG 图标 + Pictures.qrc
 ├── Tests/
@@ -149,6 +187,7 @@ Code/
 │   ├── Trash/                    tst_trash + .pro（35 用例）
 │   ├── Batch/                    tst_batch + .pro（36 用例）
 │   ├── PlatformIcon/             tst_platformicon + .pro（48 用例）
+│   ├── ShellIntegration/         tst_shellintegration + .pro（99 用例函数）
 │   └── run-tests.sh              统一测试运行器
 └── ThirdParty/                   myclasspath.pri（定位 LqRibbon）、lqribbon.pri
 
@@ -188,7 +227,8 @@ docs/
 | `de1ba13` | 回收站与可逆删除服务 | PLAT-003 |
 | `ad7f004` | Unicode、特殊文件名与名称的字节保真 | PLAT-007 |
 | `03a481c` | 错误携带（分类 + 原始系统码）与批量操作的失败处置 | PLAT-008 |
-| `ffa093a` | 系统图标的缓存、去重与异步解析 | PLAT-004 |
+| `81a33a4` | 系统图标的缓存、去重与异步解析 | PLAT-004 |
+| `3701144` | 推送流程里「租约永远过期」的成因与正确写法（纯文档） | ENG-003 |
 
 远端：369 个 issue 全部创建，标签为 `需求 / 待实现 / <模块> / <优先级>`，
 其中 P0 59 条。反查入口是 `docs/github/prd-issues.json`。
@@ -222,21 +262,22 @@ git push --force-with-lease=main:<远端当前提交> \
 
 | 对话 | 工作流 | 从哪条 issue 开始 | 交付什么 |
 | --- | --- | --- | --- |
-| **A 平台底座** | 继续 | `PLAT-005`（Shell 集成） | 在 `Services/Platform/` 内新增文件；`.pri` 已接好，`QT += gui` 已在 `platform.pri` 里 |
+| **A 平台底座** | 继续 | `PLAT-006`（此后） | 仍在 `Services/Platform/` 内；`platform.pri` 已把 QtGui 与注册表相关的 `LIBS` 都接好 |
 | **B 会话框架** | 新开 | `SESS-001`（会话基类）→ `SESS-002`（类型注册表）→ `SESS-006`（设置框架） | `Services/Session/`、`Views/Session/`，含测试 |
 | **H 过滤与格式** | 新开 | `FILT-001`（掩码解析器，纯算法、最容易写出完整测试） | `Services/Filter/`、`Services/Format/` |
 
 三个工作流的目录互不重叠，`services.pri` 的 include 已一次加齐（`exists()` 保护），
 因此三方都不需要改共享文件。详见 [parallel-workstreams.md](parallel-workstreams.md) §1。
 
-**A 工作流的六件要紧事：**
+**A 工作流的七件要紧事：**
 
-1. `trash_linux.cpp`、`trash_win.cpp`、`filesystem_win.cpp`、`iconservice_win.cpp`
-   需要在各自的平台上首次构建并修正。它们是当前唯一**从未被编译过**的代码，
-   PLAT-002 / PLAT-003 / PLAT-004 / PLAT-007 的各一条完成标准因此未勾选。拿到 Windows
-   机器时一次性过一遍——几份文件共用同一套手写常量 + `static_assert` 模式，
-   错法也相似（先看 `NSFileManagerUnmountBusyError` 写成 768 那件事就知道，
-   这类错误编译期会直接报出来，不必等运行）。
+1. `trash_linux.cpp`、`trash_win.cpp`、`filesystem_win.cpp`、`iconservice_win.cpp`、
+   `registrystore_win.cpp` 需要在各自的平台上首次构建并修正。它们是当前唯一
+   **从未被编译过**的代码，PLAT-002 / PLAT-003 / PLAT-004 / PLAT-005 / PLAT-007
+   的各一条完成标准因此未勾选。拿到 Windows 机器时一次性过一遍——几份文件共用
+   同一套手写常量 + `static_assert` 模式，错法也相似（先看
+   `NSFileManagerUnmountBusyError` 写成 768 那件事就知道，这类错误编译期会直接报出来，
+   不必等运行）。
    `iconservice_linux.cpp` 未在 Linux 上跑过，但它只依赖 QtGui 的 `QMimeDatabase`
    与 `QIcon::fromTheme`，风险低于 Windows 那几个。
 2. **删除只有一条入口：`TrashService`**。`FileSystem::deleteToTrash` 已经移除，
@@ -277,6 +318,20 @@ git push --force-with-lease=main:<远端当前提交> \
    **不要**把「哪个键对应哪些行」维护在服务里——那是第二份事实来源。
    另外记得 `IconService` 是从 `Platform::` 拿 `Files::PathUtils::Style` 的，
    与 `Files/` 的路径规则共用同一个事实来源，别在视图里自己拼扩展名。
+8. **Shell 集成的三个入口要一起接，不要只接「安装」**。
+   `installedState()`（现在是什么状态）、`previewInstall()`（这次会改什么）、
+   `install()` / `uninstall()`（动手）——`previewInstall()` 用一个内存存储
+   把「会覆盖你现有的 `.patch` 关联」这类结论在动手之前算出来，
+   而 `uninstall()` 之后**必然**会跑一次残留检查并把结果写进同一个报告。
+   三条容易踩的纪律：
+   一是**不要**绕过 `buildShellIntegrationPlan()` 自己拼注册表路径，
+   计划是唯一的事实来源，安装/卸载/校验/残留四件事都从它推导；
+   二是安装要允许「重新配置」（用户改了选项再装一次），
+   `install()` 的步骤 0 已经会先按**记录的**选项拆干净，
+   否则旧选项留下的项卸载不掉，而报告会说「残留检查通过」；
+   三是**非 Windows 平台不要试图给一个「能用的替代实现」**——
+   `capability().available` 为假时照 `advice` 给用户可执行的替代路径就行，
+   把「写不进去」做成「假成功」比直接说不行糟得多。
 
 三个并行对话不是硬性数量，也可以只开两个（A + B），或把 B 换成 **O 工程与文档**
 （`ENG-002` 模块构建守卫、`DOC-001` 用户手册）。**H 建议早做**：掩码解析器是纯算法，
@@ -365,3 +420,14 @@ git push --force-with-lease=main:<远端当前提交> \
 | 对真实系统图标源做「一定不是回退图标」的断言 | macOS 对未知扩展名（`.zzzznope`）会给**通用文档图标**，来源是 `System` 而不是 `Builtin`——与 Finder 的行为一致，这是正确行为。断言 `hasFallback() == true` 会失败，而看起来像代码有 bug | 按来源分支断言：`System` 时断言 `usable()` 且 `actualPixelSize > 0`；`Builtin` 时才断言 `hasFallback()`。**教训**：对「外部系统会怎么回答」的断言，先确认外部系统的真实行为，不要按自己的直觉写期望值 |
 | `check_spec.py` 的文档计数护栏会误报「N 个条目」这种口语 | 我在架构文档里用「几千文件的目录会占几千格」举例时，最初写成了「N 个条目」的形状（数字紧跟「个条目」），护栏的 `(\d+)\s*个条目` 把它当成规格条目数，直接报错；改完这行**引用它的坑表本身**又踩了第二次 | 该护栏的模式是刻意宽进严出的（宁可误报也不漏报过期数字）。**写文档时避免让数字紧贴「个条目」「条规格」这类词**，表达缓存/列表数量时换成「格」「项」。反过来也不要把这个模式改窄——它正是靠宽匹配才抓到了 5 处过期数字 |
 | `git push --force-with-lease` 在本仓永远报 `stale info` | `origin` 是 https URL，推送走的是 SSH URL，两者是不同远端；git 找不到对应的 remote-tracking 引用，无法核对租约，于是保守拒绝。**报错信息读起来像「远端被别人推过」**，会被误判成协作冲突而不敢继续 | 显式写期望值：`git push --force-with-lease=main:<远端当前提交> git@github.com:LorenHan/LqCompare.git main`，前置一次 `git fetch origin`。更根本的做法是能不强推就不强推——先回填提交号再推 |
+| 32 位进程写注册表却不加 `KEY_WOW64_64KEY` | 交付目标是 32 位 MinGW 构建。默认视图下写入会落到 `WOW6432Node` 影子副本，而 64 位资源管理器**看不见**那里。现象是安装、校验、卸载全都报成功，只有右键菜单「没有变化」——用户唯一能看到的证据就是什么都没发生 | 全部注册表访问固定带 `KEY_WOW64_64KEY`。判定依据不是「我们的程序多宽」，而是「谁要读它」——读它的是 64 位资源管理器 |
+| 用「某个值一直写不进去」的注入测回滚 | `failOnValue()` 把该值的**删除**也一起挡住，于是回滚必然也失败，用例只留下一句「回滚未完全成功」。而「回滚逻辑写错了」与「注册表真的删不掉」从结果上完全分不开，这个用例等于什么都没测 | 另加一次性注入 `failNextWriteOnValue()`，只挡这一次写入、不影响删除。真实世界的写入失败大多是瞬时的（被杀毒软件短暂锁住），这才是想模拟的那一类。断言才能落在 `rollbackClean` 上 |
+| 失败记录只打印「错误分类」 | 报告写成「失败 ……：找不到 该路径」，用户看不出找不到的是**哪一项**、期望它是什么值。而「缺失」与「值不对」的处置不同（一个要补、一个要改），全部区分信息都在 `detail` 里，却被丢掉了 | `ShellChangeRecord::describe()` 失败分支必须带上 `detail`。**凡是「成功/失败」两类共用一条格式化路径的地方，都要检查失败那一路有没有把诊断信息丢掉** |
+| 登记子树里的下标键不在静态计划里 | `Backup\1`、`Backup\2` 是运行时生成的，卸载时按静态计划「键下有别人的内容就保留」会把这些备份键误判成**外来内容**从而拒绝删除 —— 卸载报「残留」，而用户什么都没做错 | 登记子树是唯一允许递归删除的地方（`removeKey` 整棵删）。回滚与卸载共用同一份 `removeInstallation()`，两处都写明了这个例外 |
+| 「重新配置」被实现成「再叠一层」 | 用户取消勾选某项后再点安装，旧选项留下的注册表项仍在，而卸载的依据（登记里的选项）已经变成新选项——那些项永不被删，**报告却说「残留检查通过」**。这类错误只在「改过选项」时才出现 | 安装的步骤 0：已安装则先按**记录的**选项 `removeInstallation()` 拆掉再装；拆不干净就中止。凡是「安装记录 + 当前配置」两处状态的系统，都要先想清楚改配置时旧记录谁来负责 |
+| `QString::SkipEmptyParts` | Qt 5.15 起弃用（`-Wdeprecated-declarations`），Qt 6 里被删。它在**只在 Windows 编译**的文件里不会在本机报出来，于是主程序 0 warning 而 Windows 构建会多 4 条 | 一律写 `Qt::SkipEmptyParts`（行为相同，两个大版本都不报警告）。**没被编译过的平台文件也要跟着改**，否则「0 warning」这个结论只对本机成立 |
+| 用 `key.contains("\\shell\\")` 判「这是不是右键菜单项」 | 文件关联侧的命令键（`Software\Classes\LqCompare.PatchFile\shell\open\command`）同样含 `\shell\`，但它挂在 **ProgID** 下，不是加在右键菜单里的项。用它判会导致「关掉右键菜单」这条断言必然失败，而失败原因与它想验证的事实无关 | 按**挂在哪个类键下**判：菜单项挂在 `*` / `Directory` / `Directory\Background` 三个目标类下，关联挂在 ProgID 下。测试里把 `menuPrefix(target)` 提成辅助函数，让「菜单项」这个概念只有一个定义 |
+| 用动词键去查命令条目 | 菜单文字挂在 `...\shell\LqCompare.compare`，命令挂在它**下面一层**的 `...\shell\command`。用前者调 `entriesFor()` 一条命令都取不到，断言 `foundCommand` 永远为假 | 命令条目要按 `verbKey + "\\shell\\command"` 查。测试里配了 `commandKey()` 辅助函数，避免第二次写错 |
+| 「值名/键名大小写不敏感」被顺手做成了「存储也转小写」 | 归一后直接拿去创建键，会把 `LqCompare.DiffFile` 写成 `lqcompare.difffile`。功能上没问题，但用 regedit 打开时看起来像随手敲的乱码，下一个人会以为这是 bug 而去「修」它 | **归一仅用于比较，存储保留原拼法**。真实实现与内存实现都按这条写，且各有一条断言拼法的用例 |
+| 认不出的注册表值类型被当成「没有值」 | 只记「有个值」而不记类型与字节，备份就等于记成「本来没有值」；卸载时会把用户原本那个我们看不懂的值**删掉**——这是不可逆的数据丢失，而报告会说「已还原」 | `RegistryValueKind::Unsupported` 把原始类型码与字节一起带上，`operator==` 逐字节比较；用例断言往返后字节完全一致。**凡是「读旧值 → 覆盖 → 还原」的流程，都要先问「我看不懂的旧值会怎样」** |
+| `--log-level` 目前**只对宏生效，对直接调用无效**（已发现，尚未修） | `logging.h` 的 `LQCOMPARE_*` 宏会先比级别再调 `write()`，但 `Log::write()` 自己**完全不过滤**。`main.cpp` 里有 5 处直接调 `Log::write(...)`（含启动横幅与命令行未接入的警告），于是 `--log-level error` 下它们照样打印。`logging.h` 写着「低于该级别的日志被丢弃」，读代码的人不会预期到这条差异；反过来，日志文件也因此无法靠调级别瘦身 | 两条路选一条并写清楚：要么 `write()` 也按级别过滤（宏的预过滤仍然有用——它避免求值昂贵的参数），要么把直接调用的那 5 处改成宏。**在改之前先注意**：启动横幅目前是「无论等级都可见」的，改完它会只在 `--log-level info` 以上出现（交接文档里的验证命令本来就带 `--log-level info`，会照常通过） |
