@@ -70,6 +70,15 @@ FILT-001 的「排除优先」。一句话概括取舍：并集的意思是「�
 层级表是唯一的事实来源，`validateFilterLayerTable()` 在启动时查顺序与落点，
 其中「视图层的落点是否仍然是仅当前视图」单独占一条——它错了没有任何运行期现象，
 用户只会觉得「我删掉的临时过滤又回来了」。
+**单实例与进程间通信也落地了（PLAT-006，见 §1.16）**：第二次启动不再开第二个窗口，
+而是把参数（连同**第二个实例的当前目录**——相对路径要按他的目录解析）通过本地套接字
+转交给已在运行的那个实例，转交结果翻译成退出码（**刻意错开 CLI-004 已占用的 0~4**，
+否则脚本会把「没转交成功」读成「比较过了且没有差异」）；首个实例不应答时按边界条款
+**照常启动新实例**、绝不弹错误框；「要不要把窗口抢到前台」是一个三值策略。
+它的规则（标识符推导、线协议的编解码与分帧、退出码表、开关表、置前判定）全在
+纯 QtCore 的 `instanceprotocol` 里，动作只有一层；测试是本仓**第一个起真子进程**的套件。
+**一条限制必须一起记住**：本机 `QSharedMemory` 建不起来，实际跑的是
+「进程锁 + 本地套接字」这条回退路径，共享内存那条腿与它的遗留段回收分支在本机不可达。
 界面还没接：设置页的过滤 Tab、Filters 页与「查看最终生效过滤」面板都还没有挂上去，
 面板的内容目前是服务层的**数据 + 文本**。
 **属性条件也定下来了（FILT-003）**：大小（1024 进制单位，含中文「字节」）、修改时间
@@ -152,6 +161,22 @@ Qt 6.0 才有 `setMatchTimeout()`，本仓钉在 5.15，因此超时是自己做
 两条的验证结论、变异命中情况与**未落地的规格条目**见
 `team-report-patch.md` 与 `team-vcs.md` 的「续做」小节。
 
+### 1.0.3 收尾一条「已实现但从未闭环」的条目（2026-09-21 03:3x）
+
+夜间那批产出里，`PLAT-006`（单实例与进程间通信）的实现与 104 条测试都在，
+但 **issue #327 一直是「待实现 / 0 个勾 / 0 条评论」**，而 §4 的推荐还在说「下一轮做它」。
+这一轮没有写新的生产代码，做的是**验证并把闭环补上**，另外补了一条被漏掉的用例：
+
+- 单套件 105 通过 → 全量 **3394 passed / 0 failed / 2 skipped（64 套件）**；
+  五道护栏全过；`make -B -j8` 全量重编 0 条本仓 warning；离屏启动正常
+  （新增的日志行见 §2「主程序运行」）。
+- 12 处变异**检出 11 处**：唯一未检出的「不再回收遗留标识」受本机环境限制
+  （`QSharedMemory` 建不起来，那条分支不可达），已在 §1.16 与 issue 里写明。
+- **补的那条用例是实质产出**：变异 M9 证明 `splitFrame()` 里「声明长度 == 实际长度」
+  这一比较被去掉后零条用例变红（原有两条都被「载荷必须读尽」兜住了）。
+  新增 `decodeRejectsAFrameShorterThanItsDeclaredPayload()` 之后该变异被检出。
+- 结论与接口细节见 §1.16；「本机跑的是回退路径」这条也记进了 §6 的坑表。
+
 ## 1.1 已落地的服务层模块
 
 | 模块 | 条目 | 状态 | 测试 |
@@ -169,6 +194,7 @@ Qt 6.0 才有 `setMatchTimeout()`，本仓钉在 5.15，因此超时是自己做
 | `Services/Files/`（错误携带与批量处置） | PLAT-008 | **部分完成**（界面动作尚未接上） | `Tests/Batch`（36 用例） |
 | `Services/Platform/`（系统图标） | PLAT-004 | **部分完成**（Windows / Linux 实现未在目标平台验证；界面尚未取用） | `Tests/PlatformIcon`（46 个用例函数，含 3 条走真实图标源） |
 | `Services/Platform/`（Shell 集成） | PLAT-005 | **部分完成**（Windows 注册表薄层未编译过；界面尚未接入；本机平台能力置灰说明已落地） | `Tests/ShellIntegration`（101 个用例函数） |
+| `Services/Platform/`（单实例与进程间通信） | PLAT-006 | **部分完成**（第 1、2、4、5 条已勾；第 3 条只落地「把已有窗口激活到前台」那一半——「创建会话」已由 `MainWindow::openRequest()` 接上，但「不抢焦点可配置」只有服务层 API（`ActivationPolicy` 三值），**没有任何设置项或命令行开关暴露它**，故第 3 条留空。另有一条环境限制：**共享内存这条腿在本机不可用**，实际走的是进程锁 + 本地套接字，`recoverStaleIdentifier()` 分支在本机不可达） | `Tests/SingleInstance`（103 个用例函数 / QTest 合计 105，含真实子进程） |
 | `Services/Session/`（会话设置接口） | SESS-001 | **部分完成**（只有接口与内存实现；作用域链与落盘留给 SESS-006 / SESS-007） | `Tests/Session`（42 个用例函数，与下一行同一套件） |
 | `Views/Session/`（会话基类） | SESS-001 | **部分完成**（第 2 条里「并注册」那半句依赖 SESS-002，已落地但基类尚未接上注册表；界面尚未取用） | `Tests/Session`（42 个用例函数） |
 | `Services/Session/`（类型注册表） | SESS-002 | **部分完成**（第 2 条里「并注册」的前半句——按类型 ID 造会话——要等各会话类型实现出来；界面尚未取用） | `Tests/SessionType`（57 个用例函数，**纯 QtCore**） |
@@ -188,6 +214,7 @@ PLAT-003 见 [issue #324](https://github.com/LorenHan/LqCompare/issues/324)；
 PLAT-007 见 [issue #328](https://github.com/LorenHan/LqCompare/issues/328)；
 PLAT-008 见 [issue #330](https://github.com/LorenHan/LqCompare/issues/330)；
 PLAT-004 见 [issue #329](https://github.com/LorenHan/LqCompare/issues/329)；
+PLAT-006 见 [issue #327](https://github.com/LorenHan/LqCompare/issues/327)；
 PLAT-005 见 [issue #326](https://github.com/LorenHan/LqCompare/issues/326)；
 ENG-006 见 [issue #338](https://github.com/LorenHan/LqCompare/issues/338)；
 FILT-001 见 [issue #228](https://github.com/LorenHan/LqCompare/issues/228)；
@@ -705,14 +732,57 @@ FILT-005（三层叠加与作用域）与 FILT-003（属性过滤）已在后续
   「去掉空行」的写法。曾经有一版在入口处对空行提前返回，把精确与正则也一起挡掉了。
 - **说不清的结论一律放行并报出来**：文本条目遇到关键字节规则给 `NotApplicable`
   而不是 `Rejected`；一条规则都没写时给 `Accepted` 且不给理由（空规则集不构成约束）。
-  与 FILT-002 / FILT-003 的三态结论同源。
+   与 FILT-002 / FILT-003 的三态结论同源。
+
+### 1.16 PLAT-006 单实例与进程间通信落地到了什么程度
+
+代码在 `Code/Services/Platform/instanceprotocol.{h,cpp}`（纯 QtCore 的数据与判定）
+与 `singleinstance.{h,cpp}`（动作，需要 QtNetwork），测试在 `Tests/SingleInstance`
+（103 个用例函数 / QTest 合计 105，十二组 A~L）。
+
+**四条完成标准已勾、第 3 条只勾得动一半**，逐条对应：
+
+| 完成标准 | 落地情况 |
+| --- | --- |
+| 1. 跨平台单实例机制（共享内存 + 本地套接字 / QLocalServer） | **已勾**。无一行平台 `#ifdef`：选主走 `QLockFile`、标识走 `QSharedMemory`、转交走 `QLocalServer`/`QLocalSocket`。**但有一条环境限制**：本机与本次执行环境里共享内存不可用，实际跑的是「进程锁 + 本地套接字」，见下面 |
+| 2. 第二个实例把参数转发给首个实例并退出，退出码反映转发结果 | **已勾**。`RelayStatus` 五种结局 → `relayExitCodeTable()` → 退出码；转交与应答在**一个总截止时间**内完成，应答里带回首个实例实际解析出的参数个数供比对 |
+| 3. 收到参数后首个实例创建会话并把窗口置前（不抢焦点…可配置） | **只勾一半，保持 `[ ]`**。「创建会话」已由 `main.cpp` 的 `relayReceived` → `MainWindow::openRequest()` 接上；「窗口置前」由 `activationRequested` 的结论驱动。缺的是**「可配置」**：`ActivationPolicy`（`Always` / `UnlessTypingRecently` / `Never`）与「距上次输入多久」的注入点在服务层齐备并有 6 条用例，但**没有任何设置项或命令行开关把策略暴露给用户**，生产路径只会用默认的 `Always` |
+| 4. 首个实例无响应时（超时）第二个实例自行启动并记录日志 | **已勾**。默认 `RelayFallback::StartNewInstance` → `InstanceRole::Degraded`，并且 `m_report.detail` 在**成功路径上也非空**（「什么都没打印」会让人分不清「降级了」与「日志级别把它挡住了」），`main.cpp` 用 `LQCOMPARE_INFO("instance", …)` 落日志 |
+| 5. 单实例行为可由选项关闭（见 OPT-002） | **已勾**。设置键 `general.singleInstance` 已在 `OptionsRepository::definitions()` 里登记（「复用已有实例」，说明里写明「下次启动生效」），`OptionsDialog::applyChanges()` 对它的改动会给出「单实例行为将在下次启动时生效」的状态文案，`main.cpp` 读它决定 `setEnabled()`；另有命令行开关表 `singleInstanceSwitches()`（`--single-instance` / `--no-single-instance`，表尾胜出）与 `--new-instance` / `--wait` |
+
+**为什么第 3 条的「可配置」不做成硬做**：给 `ActivationPolicy` 加一个设置键是小事，
+但它的宿主是「比较与界面」那一组选项（OPT-003 / OPT-007），而那一组现在还没有落地；
+在 `general` 下另起一个键会让后续的选项分组与规格对不上。因此按 §4.1 的纪律
+把它留空，并在这里写明依赖。
+
+**按存储分别读的三层教训不适用于本模块**：这里的三层是「进程锁 / 共享内存 / 端点」，
+它们都住在系统里，没有本仓的设置覆盖链。
+
+**环境限制（接手必读，否则会误判成没写）**：`QSharedMemory` 在本机**跑不起来**。
+实测：裸 `shmget()` 返回 `ENOMEM`（errno 12）、Qt 报 `OutOfResources`，
+因此 `takePrimaryIdentifier()` 里 `memory->error() == AlreadyExists` 这个分支
+**从不进入**，而 `recoverStaleIdentifier()` 只在该分支里被调用 → **它在本机不可达**，
+「崩溃遗留标识被回收」的三条用例在本机是「跳过式通过」（`crash-primary` 子进程
+`_exit()` 之后本机根本没有遗留段可回收）。生产日志如实报告了这一点：
+
+```
+[instance] 共享内存不可用（QSharedMemory::create: out of resources），
+已由进程锁保证单实例；本进程是首个实例，已在端点 lqcompare-loren-org.lqcompare.d-4102bf82 上等待转交
+```
+
+因此：**「共享内存标识 + 崩溃遗留回收」这半条腿写好了、编译进了产物、但没有在本机执行过**，
+与 Windows 薄层的处境同类。勾第 1 条的理由是「共享内存 / 本地套接字」在本条里是可替代的
+两条实现路径，而套接字那条已被真子进程端到端验证；共享内存那条**未验证**这件事
+在这里、`architecture.md` §3.5 与 issue #327 的落地说明里都写明了。
 
 ## 2. 已验证的事实（不用再花时间确认）
 | 项目 | 结论 | 验证方式 |
 | --- | --- | --- |
 | 构建 | Qt 5.15.2 clang_64 上 qmake + make 通过，产出 `dist/macos/LqCompare.app` | `qmake && make -j8` |
 | 运行 | 主程序离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
-| 测试（全量） | **3393 passed / 0 failed / 2 skipped，64 个套件**（2026-09-21 实测，连跑两次结果一致）。此前一轮是 3308 passed / 63 套件；本轮新增 `Tests/ContentFilter`（85）并把 `tools/check_spec.py` 的文档计数护栏从「全仓 `os.walk`」收紧成「只扫被 git 跟踪的 `.md`」（它此前会扫到 `.workbuddy/` 下的工作日志，造成**本机红、CI 绿**）。2 条跳过分别来自 `PathName` 与 `Registry`，都是按平台条件跳过的用例 | `Code/Tests/run-tests.sh` |
+| 测试（全量） | **3394 passed / 0 failed / 2 skipped，64 个套件**（2026-09-21 实测）。此前一轮是 3393 / 64 套件；本轮为 PLAT-006 补了 1 条用例（`Tests/SingleInstance` 104 → **105**，见下面「单实例能反向验证」那一行），其余数字不变。2 条跳过分别来自 `PathName` 与 `Registry`，都是按平台条件跳过的用例 | `Code/Tests/run-tests.sh` |
+| 单实例与进程间通信（PLAT-006） | **103 个用例函数（QTest 合计 105，含 `initTestCase` 与 `cleanupTestCase`）**全通过、0 跳过。分十二组：A 标识符 12、B 线协议编解码 20、C 分帧 6、D 退出码表 6、E 退出码表自检的反向验证 9、F 命令行开关 6、G 置前策略 6、H 角色与启动结论 4、I 真子进程的转交 8、J 真子进程的失败与降级 9、K 崩溃遗留与生存期 13、L 源码级护栏 4。**它是本仓第一个起真子进程的套件**：`ChildProcess` 用 `QProcess` 把**自己**再拉起一次（`--child <mode>`），因此「第二个实例把参数交出去并带退出码退出」「首个实例不应答时降级」「进程 `_exit()` 之后标识仍可用」这些事是真的在两个进程之间发生的，不是在同一个进程里假装。子进程模式写在测试源码里，**没有往生产代码里加测试钩子** | `Code/Tests/run-tests.sh SingleInstance` |
+| 单实例能反向验证 | **12 处变异检出 11 处、1 处为环境受限（不是漏检）**。检出的是：净化后丢掉原始输入摘要、FNV-1a 乘法改加法、标识不再附带字段边界摘要、转发结局一律返回退出码 0、开关优先级改成「表里靠前的胜出」、`Never` 策略仍然抢焦点、静默窗口失效（正在打字时抢焦点）、帧探测不再拒绝超界载荷声明、解码不再校验协议版本、关掉单实例后仍占标识、解码不再要求「正好一帧」（**这一处最初漏检，本轮补了一条用例才抓住，见 §6**）。**唯一未检出**的是「`recoverStaleIdentifier()` 不再回收遗留标识」——本机 `QSharedMemory` 不可用，该分支不可达，对此类环境无法构造判定输入（理由与实测数据见 §1.16） | 变异测试（结论写在 issue #327 的落地说明里） |
 | 三层过滤叠加与落点 | 84 个用例函数（QTest 合计 84），0 失败 0 跳过。分七组：A 层级与落点 8、B 三层叠加 20、C 启用与生效 14、D 表达式与面板 15、E 视图层不落盘 11、F 计数 6、G 层级表自检 8（含 6 条对**故意写坏**的表跑同一个判定，证明护栏不是恒真的）。这套件**刻意不链接 QtGui**，但**必须**链接 `Services/Session`——第 4 条要拿真正的 `SessionSettings` 存储来断言，测试替身会连「存到哪个存储」一起替掉 | `Code/Tests/run-tests.sh FilterStack` |
 | 三层过滤能反向验证 | 十六处变异逐一被拦下：视图层落点改成随会话保存 → 多条红；`active()` 只看启用标志 → 多条红；去掉层间的排除优先 → 多条红；排除集合用 AND 连接 → 表达式红；原子一律不加引号 → 引号用例红；表达式不去重 → 去重用例红；视图存储缺失时退而写入会话存储 → 「不许退而写入」红；会话层也从视图存储读 → 「按存储分别读」红；`loadInto` 整份替换状态（丢掉启用标志）→ 红；`setLayerState` 不按声明重新解析 → 红；大小写覆盖在重新解析后不再应用 → 红；不统计 `decided` → 面板与计数红；不计入逐层统计 → 红；自检去掉「视图层落点」这一条 → 红；自检不查顺序 → 红；汇总文案改成另一句 → 红。**16 处全部检出，0 处漏检** | 变异测试（结论写在 issue #233 的落地说明里） |
 | 会话设置声明与草稿 | 65 个用例函数（QTest 合计 71，含 `initTestCase` 与六种控件的 6 行数据）。分六组：A 声明与六种控件 17、B 自检 11、C 草稿读写与脏判定 13、D 应用与恢复默认 10、E 询问策略 6、F 声明目录与反向验证 8。这套件**刻意不链接 QtGui**（声明与草稿都是纯数据），因此「任一会话设置 Tab 均可无界面构造与读写」这条标准是靠构建配置 + 用例两边一起钉住的 | `Code/Tests/run-tests.sh Settings` |
@@ -724,8 +794,8 @@ FILT-005（三层叠加与作用域）与 FILT-003（属性过滤）已在后续
 | 名称与 Unicode | 40 个用例通过 + 1 个跳过（无效 UTF-8 名字的用例只在 Linux 上执行，CI 会跑）。覆盖字节保真往返、UTF-8 边界与过长编码、Unicode 组合形式、六类文件名问题的原因与位置 | `Code/Tests/run-tests.sh PathName` |
 | 错误携带与批量处置 | 36 个用例全通过。其中 9 个验证错误码在三种域下的携带与显示（含「未识别的码只给数字」）、11 个验证失败清单分组、12 个验证执行流程（含「重试只跑失败项」与「停止不移除已完成进度」）、4 个走真实文件系统做一次「设为只读 → 解除只读」往返 | `Code/Tests/run-tests.sh Batch` |
 | 系统图标 | 46 个用例函数（QTest 合计 48，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分四组：17 个验证缓存键与尺寸规则（扩展名折叠 7 + 键的合成与解析 5 + DPI 缩放 4 + Windows 档位收拢 1）、9 个验证有界 LRU 的淘汰与命中统计、6 个验证请求去重队列、11 个验证服务层（同步/异步/去重/回退/换比例清缓存）；另有 **3 个走真实系统图标源**（macOS 上真实执行：断言拿到非空像素、断言文字文件与文件夹的图确实不同） | `Code/Tests/run-tests.sh PlatformIcon` |
-| 主程序构建 | 通过，**本仓库自己的代码 0 warning**。链接行里能看到 `contentfilter.o`（内容过滤）以及此前的 `patchapply.o`（补丁应用）与 `blameview.o` / `moc_blameview.o`（逐行追溯），`nm -C` 在产出的可执行文件里数到 `LqCompare::Filter::LineFilter` 64 个、`LqCompare::Filter::KeyByteFilter` 16 个符号（合计 80，`contentfilter` 单文件重编的输出里 0 warning）——即新模块**确实进了产物**而不只是躺在磁盘上。全量重建（`make -B`）时唯一的告警是第 3 方 `MyClass/3rd-party/LqRibbon/…/LqRibbon.cpp:569: unused function 'nativeWindowScaleFactor' [-Wunused-function]`，不在本仓改动范围内 | `cd _build-lqcompare && ~/Qt/5.15.2/clang_64/bin/qmake ../Code/LqCompare.pro && make -j8`（**注意是 `Code/LqCompare.pro`**，仓库根没有 `LqCompare.pro`） |
-| 主程序运行 | 离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」「LqCompare 0.1.0 启动完成」，且**一次 `qt.svg: Cannot open file` 都没有**。**⚠️ 指令变更**：夜间对 `main.cpp` 的重写（233 删 / 91 增）**不再调用**之前几轮加的启动自检——`validateSessionTypeTable` / `validateFilterLayerTable` / `validateAttributeConditionTable` / `validateNameFilterTables` 现在**全仓没有任何调用方**（本轮新增的 `validateContentFilterTables()` 从一开始就没有调用方，它落在同一个处境里），日志里也不会再出现「会话类型注册表：…」「三层过滤：…」「属性过滤：…」「名称过滤：…」那四行。保留下来的只有 `CommandRegistry::instance().validate()`（`main.cpp` 里那一处 `LQCOMPARE_ERROR("command", …)`）。这些表的校验**仍然被单元测试覆盖**（例如 `Tests/FilterStack` G 组有 6 条把**故意写坏**的表喂进同一个判定），因此丢的是「启动时的一声警报」，不是唯一的防线；**要不要把这四行自检加回 `main.cpp` 是一个待定的决定**，加回之前不要在文档里声称启动时会打印它们 | `QT_QPA_PLATFORM=offscreen ./dist/macos/LqCompare.app/Contents/MacOS/LqCompare --log-level info`（**别用 `\| head` 收尾**，管道关闭会把进程直接杀掉、看不到真实退出码）。另：**上一轮的离屏实例可能还活着**，那时这次启动会走转发路径、立刻以 **10** 退出且**不打任何日志**——要做一次干净的启动确认请加 `--new-instance`（本轮实测的日志是「单实例机制已由选项关闭：不占用标识、不建端点，直接启动」+「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」+「LqCompare 0.1.0 启动完成」），确认完记得把进程杀掉，详见 §6 |
+| 主程序构建 | 通过，**本仓库自己的代码 0 warning**（`make -B -j8` 全量重编，实测 0 条本仓 warning、0 条 error）。链接行里能看到 `singleinstance.o` / `moc_singleinstance.o` 与 `instanceprotocol.o`，`nm -C` 在产出的可执行文件里数到 `LqCompare::Platform::SingleInstanceGuard` **70** 个符号——即单实例模块**确实进了产物**而不只是躺在磁盘上。全量重建时唯一的告警仍是第 3 方 `MyClass/3rd-party/LqRibbon/…/LqRibbon.cpp:569: unused function 'nativeWindowScaleFactor' [-Wunused-function]`，不在本仓改动范围内 | `cd _build-lqcompare && ~/Qt/5.15.2/clang_64/bin/qmake -o Makefile ../Code/LqCompare.pro && make -B -j8`（**注意是 `Code/LqCompare.pro`**，仓库根没有 `LqCompare.pro`；用户指令里写的 `../LqCompare.pro` 会报 `Cannot find file`） |
+| 主程序运行 | 离屏启动正常，日志显示「LqCompare 0.1.0 启动完成」与「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」，且**一次 `qt.svg: Cannot open file` 都没有**。本轮新增了 PLAT-006 那一行：默认启动（单实例开启）时是「共享内存不可用（QSharedMemory::create: out of resources），已由进程锁保证单实例；本进程是首个实例，已在端点 lqcompare-loren-org.lqcompare.d-4102bf82 上等待转交」；加 `--new-instance` 时是「单实例机制已由选项关闭：不占用标识、不建端点，直接启动」。**⚠️ 指令变更**：夜间对 `main.cpp` 的重写（233 删 / 91 增）**不再调用**之前几轮加的启动自检——`validateSessionTypeTable` / `validateFilterLayerTable` / `validateAttributeConditionTable` / `validateNameFilterTables` 现在**全仓没有任何调用方**（`validateContentFilterTables()` 从一开始就没有调用方，它落在同一个处境里），日志里也不会再出现「会话类型注册表：…」「三层过滤：…」「属性过滤：…」「名称过滤：…」那四行。保留下来的只有 `CommandRegistry::instance().validate()`（`main.cpp` 里那一处 `LQCOMPARE_ERROR("command", …)`）。这些表的校验**仍然被单元测试覆盖**（例如 `Tests/FilterStack` G 组有 6 条把**故意写坏**的表喂进同一个判定），因此丢的是「启动时的一声警报」，不是唯一的防线；**要不要把这四行自检加回 `main.cpp` 是一个待定的决定**，加回之前不要在文档里声称启动时会打印它们 | `QT_QPA_PLATFORM=offscreen ./dist/macos/LqCompare.app/Contents/MacOS/LqCompare --log-level info [--new-instance]`（**别用 `\| head` 收尾**，管道关闭会把进程直接杀掉、看不到真实退出码）。另：**上一轮的离屏实例可能还活着**，那时这次启动会走转发路径、立刻以 **10** 退出且**不打任何日志**——要做一次干净的启动确认请加 `--new-instance`，确认完记得把进程杀掉并清掉它留下的端点与 `.lock`（本轮清过一次：`/tmp/lqcompare-loren-org.lqcompare.d-4102bf82{,.lock}`），详见 §6 |
 | Shell 集成 | 99 个用例函数（QTest 合计 101，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分十一组：A 动作与目标 14、B 选项 8、C 命令行引号 8、D 计划 13、E 安装 10、F 卸载与还原 9、G 校验 5、H 残留 6、I 能力 4、J 预演 3、K 命令行解析 9。**全部跑在功能完整的内存注册表上**，因此安装回滚与卸载还原是在本机真实执行的流程，不是桩 | `Code/Tests/run-tests.sh ShellIntegration` |
 | Shell 集成的命令行引号 | 用测试内置的 `CommandLineToArgvW` 参考实现做往返：`"C:\Program Files\…\LqCompare.exe" --shell-action=compare "%1"` 切回来必须还是两个原值，含「结尾反斜杠要翻倍」这条最容易写错的规则 | `Code/Tests/run-tests.sh ShellIntegration` |
 | 分级日志 | 32 个用例函数（QTest 合计 34，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分五组：A 级别与过滤 6、B 格式 4、C 输出目标 11、D 耗时辅助 6、E 级别名解析 4、以及 `initTestCase`/`cleanupTestCase`。这套件**刻意不链接 QtGui**：哪天有人往 `logging.cpp` 里加图形依赖，本工程会立刻构建失败 | `Code/Tests/run-tests.sh Logging` |
@@ -837,6 +907,10 @@ Code/
 │   │                             iconservice（同步/异步/回退 + 提供者接口）、
 │   │                             registrystore（注册表抽象 + 内存实现 + 故障注入）、
 │   │                             shellintegration（计划 / 安装回滚 / 卸载还原 / 校验 / 残留）、
+│   │                             instanceprotocol（标识符规则 / 线协议编解码 / 分帧 /
+│   │                             退出码表 / 开关表 / 置前判定，纯 QtCore）、
+│   │                             singleinstance（进程锁选主 + 共享内存标识 + QLocalServer 转交
+│   │                             + 超时降级 + 遗留标识回收）、
 │   │                             iconservice_mac.mm/_win/_linux、registrystore_win.cpp/_stub.cpp
 │   ├── command.pri / log.pri / filter.pri / files.pri / platform.pri / services.pri
 ├── Pictures/                     32 个 SVG 图标 + Pictures.qrc
@@ -869,6 +943,10 @@ Code/
 │   ├── Batch/                    tst_batch + .pro（36 用例）
 │   ├── PlatformIcon/             tst_platformicon + .pro（48 用例）
 │   ├── ShellIntegration/         tst_shellintegration + .pro（99 用例函数）
+│   ├── SingleInstance/           tst_singleinstance + .pro（103 用例函数 / QTest 105；
+│   │                             **本仓唯一会起真子进程的套件**——把 QProcess 拉起
+│   │                             自己（--child <mode>）做两进程的转交与超时；子进程
+│   │                             模式写在测试源码里，生产代码没有测试钩子）
 │   ├── Session/                  tst_session + probesession + .pro（46 用例函数，
 │   │                             唯一链接 QtWidgets 的套件；INCLUDEPATH 只有
 │   │                             Views/Session 与 Services/Session，兼作编译期护栏）
@@ -994,7 +1072,32 @@ git push --force-with-lease=main:<远端当前提交> \
 
 ### 4.0 2026-09-21 更新：夜间产出的收尾与下一步
 
-本轮（02:2x）在这一节的基础上又推进了一条：**`FILT-004` 内容过滤器的服务层**
+**本轮（03:3x）闭环了 `PLAT-006`（单实例与进程间通信，issue #327）**，并纠正了
+上两轮对它的两处误判，接手前请先读 §1.16：
+
+- 夜间那 24 个工作流**已经把这一条实现完了**（`instanceprotocol.{h,cpp}` +
+  `singleinstance.{h,cpp}` + `Tests/SingleInstance` 104 条），但 issue #327
+  一直是「待实现 / 0 个勾 / 0 条评论」，文档里的「下一步」也还在推荐做它。
+  本轮做的是**验证 + 闭环**：全量测试、五道护栏、全量重编、离屏启动，
+  外加 12 处变异（检出 11，1 处受环境影响不可判定）。
+- **本轮的实质产出是一条被漏掉的用例**：变异 M9 把 `splitFrame()` 里
+  「声明长度必须等于实际长度」这一比较去掉后，**没有一条用例变红**——
+  因为原有两条用例构造的输入都恰好被另一处「载荷必须读尽」的检查兜住了。
+  补的 `decodeRejectsAFrameShorterThanItsDeclaredPayload()` 让声明比实际多一个字节、
+  而**已有的字节本身仍是一个完整可解析的请求**，于是那一比较成为唯一拦得住它的检查。
+  这就是「两处纵深防御里，去掉任意一处都不该让整套测试全绿」的具体一例。
+- **另一条结论是环境限制**：本机 `QSharedMemory` 不可用（裸 `shmget()` → `ENOMEM`，
+  Qt → `OutOfResources`），因此单实例实际跑的是**进程锁 + 本地套接字**这条回退路径，
+  `recoverStaleIdentifier()` 分支在本机不可达。**不要**把「单实例测试全绿」
+  读成「共享内存那条腿验证过了」。
+
+**下一步**：`PLAT-006` 之后，A 工作流里已经**没有「纯判定、本机可完整闭环」的条目**了
+（见 §4.1 那张表）。因此下一轮应转到**界面接通**那一批（下面第 1 条），
+而在那之前先做第二件事更划算——**决定那几条启动自检的去留**：`main.cpp`
+现在既不打印它们、又没人删它们，四个 `validate*()` 处于「有实现、有单测、
+无生产调用点」的状态，悬着不决定的话下一个人会照 §2 的旧描述去找那几行日志。
+
+下面这一轮（02:2x）在同一节的基础上推进了 **`FILT-004` 内容过滤器的服务层**
 （`Services/Filter/contentfilter.{h,cpp}` + `Tests/ContentFilter` 85 个用例函数）。
 第 1、2 条已落，第 3 条落了一半（顺序定死并有用真比对引擎的证据，接进 `Services/Text`
 的那一步未做），第 4、5 条缺状态栏与文件格式定义。它**没有**解阻塞任何界面类条目——
@@ -1039,7 +1142,7 @@ git push --force-with-lease=main:<远端当前提交> \
 | --- | --- | --- | --- |
 | **B 会话框架** | 继续（**`SESS-001`、`SESS-002`、`SESS-006`、`SESS-007` 都已落地；SESS-007 剩下的全是「界面接通」，而界面要等第一个真正的会话类型**） | 先落一个具体会话类型（`TEXT-*` 或 `FOLD-*`），或改做 `SESS-008`（会话文件保存与加载） | 这里有一个**新产生的依赖链**：SESS-007 第 2、3 条被「第一个真正的会话类型」卡住（对话框要有设置目标才谈得上去向提示，标签要有持有设置的会话才谈得上关标签丢弃）。因此不要再往「框架」方向加条目 |
 | **H 过滤与格式** | **本模块的「纯判定、本机可完整闭环」条目已经全数落地**（`FILT-001` / `FILT-002` / `FILT-003` / `FILT-005` / `FILT-004` 的服务层都在），继续往 H 加条目只会继续攒界面接口 | `FILT-006` 第 4 条（构造隐藏条目并断言两个选项下的行为差异，纯逻辑）；`FILT-007` 仍缺别的模块 | 仍在 `Services/Filter/` 内，纯逻辑，复用 `splitLines()` 那套与「表当参数的自检」做法；**不要**再去碰 `FILT-004` 剩下的三处——它们分别在 `Services/Text`、状态栏与 `Format/` |
-| **A 平台底座** | 继续（**H 里已无「纯判定、本机可完整闭环」的条目**，因此转 A 工作流） | `PLAT-006` 第 1、2、4 条（跨平台单实例、参数转发与退出码、首个实例无响应时超时降级）——**这一条能完整闭环并测试**（共享内存 + `QLocalServer` 在 macOS 上真跑），第 3、5 条见 §4.1 | 新增 `Services/Platform/` 下的单实例模块；需给 `platform.pri` 接上 `QtNetwork` |
+| **A 平台底座** | **本模块的「纯判定、本机可完整闭环」条目也已见底**（`PLAT-006` 已落地，见 §1.16 与 §4.1） | 改做「界面接通」那一批（本节第 1 条），或先做本节第 2 条那个待定决定；`PLAT-004` / `PLAT-005` 第 1 条只能在真的 Windows 上做 | 服务层都已就绪；**不要再往 `Services/Platform/` 里加条目**——剩下的全是「界面取用」或「目标平台验证」 |
 
 **为什么 H 的下一步不再是「先接 FILT-005 / FILT-003 / FILT-002 / FILT-004 的界面」**：这四条的
 服务层都已经落地（三层叠加、启用状态、合并表达式、面板数据、落点路由；大小/时间/
@@ -1049,14 +1152,14 @@ Filters 页、面板的控件宿主、属性条件与名称过滤的输入框、
 比对引擎里应用忽略规则的那一步、文件格式定义）。`OPT-*` 一天不落地，这几件事一天接不上，
 再往 `Services/Filter/` 里加条目也只是继续攒界面接口。因此转 A 工作流。
 
-**为什么 A 的下一步是 `PLAT-006` 的第 1、2、4 条**：这一条的三条完成标准
-（跨平台单实例、参数转发与退出码、首个实例无响应时超时降级）**只依赖本机就能真跑的东西**
-——`QSharedMemory` 与 `QLocalServer` / `QLocalSocket` 在 macOS 上都是真可用的，
-测试可以起一个真的本地套接字服务器做握手与超时用例，不必假装。它不依赖 `OPT-*`（第 5 条
-才依赖），也不依赖第一个真正的会话类型（第 3 条才依赖），因此是本轮之后唯一一条
-**能整条闭环并勾完成标准**的候选。同模块的 H 现在只剩 `FILT-006` 第 4 条（纯逻辑，但没有
-「应用规则」这一层宿主，价值低于整条闭环的 `PLAT-006`）与 `FILT-007`（缺别的模块），
-因此排在 `PLAT-006` 之后。
+**为什么 A 工作流的 `PLAT-006` 已经不再是一个「该开工」的条目**：它在前两轮被写成
+本机唯一能整条闭环的候选（这一条的三条完成标准——跨平台单实例、参数转发与退出码、
+首个实例无响应时超时降级——只依赖本机就能真跑的东西），但夜间那批工作流**已经把它
+实现完了**，本轮只是验证并闭环（issue #327 现在是「部分完成」，第 3 条等一个把置前
+策略暴露给用户的地方）。因此现在 A 工作流里已经没有「纯判定、本机可完整闭环」的条目，
+下一步转「界面接通」那一批。**这一段的教训值得记**：那份「下一个该做哪条」的判断
+是在 `docs/development/team-*.md` 与各 issue 的落地说明**之外**写出来的，
+它们跟不上夜间那批产出；选条目前先核对源码。
 
 **FILT-005 留下的确切接口**：`FilterStack` 收三层声明（`setDeclaration`）与启用标志
 （`setLayerEnabled`），`decide()` / `accepts()` 出结论，`combinedExpression()` /
@@ -1144,11 +1247,11 @@ Filters 页、面板的控件宿主、属性条件与名称过滤的输入框、
 | ~~`SESS-002` 会话类型注册表~~ | **已落地**（提交见 §3.1，issue #37） | 四条完成标准全部已勾，见 §1.9。**它解除了三处的阻塞**：`SESS-003` 第 1 条、`SESS-005` 第 1 条，以及「在 `Views/` 里新增会话入口的条目」。但它**没有**解除 `PLAT-006` 第 3 条与 `CLI-001` 的执行部分——原因见下面那两行 |
 | ~~`SESS-006` 会话设置对话框框架~~ | **已落地**（提交见 §3.1，issue #39） | 四条完成标准全部已勾，见 §1.10。它**解除了 `SESS-007` 的阻塞**（作用域下拉就住在它的对话框底部，`SettingScope` 的三个取值与说明也已定好）。它**没有**解除「界面接入」那一类——框架里一项具体设置都没有，现在接通 Rules 按钮打开的是空对话框；要等第一个真正的会话类型登记声明 |
 | `SESS-007` 设置作用域语义 | **已落地**（提交见 §3.1，issue #42） | 第 1、4 条已勾；第 2、3 条的服务层逻辑（去向文案、切换提示、丢弃计划）已落地并被 12 处变异逐一验证，**剩下的是界面接通**。它**解除了一处阻塞**：`FILT-005` 第 4 条（「视图临时过滤不写入会话」）现在有 `SettingScope::View` 可用了——该条已随后落地（见下一行）。它**没有**解除自己那两条——它们要等第一个真正的会话类型 |
-| `PLAT-006` 第 3 条（收到参数后首个实例**创建会话**并把窗口置前） | 从「`SESS-002` 未落地」**降级为「缺第一个真正的会话类型」** | 机制已经就位（`SessionTypeRegistry::find(id)` 拿到条目后取 `factory`），但**内置的类型一个工厂都没有**，因此「按类型 ID 造会话」在真实数据上仍然造不出东西。可做的是「把已有窗口激活到前台」 |
+| `PLAT-006` 第 3 条（收到参数后首个实例**创建会话**并把窗口置前） | 从「缺第一个真正的会话类型」**降级为「缺一个把置前策略暴露给用户的地方」** | 「创建会话」这一半**已经接上**：`main.cpp` 把 `relayReceived` 连到 `MainWindow::openRequest()`（它按类型/掩码造会话并显示），窗口置前由 `activationRequested` 的结论驱动。剩下的是括注里那句「不抢焦点导致用户中断输入时**可配置**」：`ActivationPolicy` 三值与「距上次输入多久」的注入点都在服务层、有 6 条用例，但没有任何设置项或命令行开关暴露它，生产路径只用默认的 `Always`。要做的话它的住所是「比较与界面」那一组选项（OPT-003 / OPT-007），**不要**在 `general` 下另起一个键 |
 | `SESS-003` Home 视图 | 部分解除：第 1 条不再被阻塞 | 第 1 条（按会话类型分组的「新建会话」入口卡片）现在**可做**——注册表能按分组枚举，且每条带显示名、英文名与一句话说明。第 2、3 条（最近会话 / 最近比较）等 `SESS-009`，第 4 条（会话树）等 `SESS-004` 与 `SESS-008`，第 5 条（关完会话回 Home）只依赖 `SessionArea` |
 | `SESS-005` 新建会话向导 | 部分解除：第 1 条不再被阻塞 | 第 1 条（按「文本类 / 文件夹类 / 数据类 / 高级」分组列出全部可用类型）现在**可做**：四个分组枚举与「按分组枚举可用类型」正是为此准备的。第 2 条要等各类型的路径模型，第 3 条（剪贴板作数据源）要等 `SESS-012` |
-| `PLAT-006` 第 5 条（单实例行为可由选项关闭） | `OPT-002`（设置框架）未落地 | 可以做成显式接口 + 命令行开关；「选项界面里能关」做不了 |
-| `PLAT-006` 第 1、2、4 条 | 无 | **可完整落地并测试**（跨平台单实例、参数转发与退出码、超时降级），因此这一条值得开，只勾这三条 |
+| `PLAT-006` 第 5 条（单实例行为可由选项关闭） | ~~`OPT-002`（设置框架）未落地~~ **已解除**（本轮勾选） | 设置键 `general.singleInstance` 已在 `OptionsRepository::definitions()` 里登记，`OptionsDialog` 会为它的改动给出「单实例行为将在下次启动时生效」的文案，`main.cpp` 读它决定 `setEnabled()`。另有命令行开关表（`--single-instance` / `--no-single-instance` / `--new-instance` / `--wait`） |
+| ~~`PLAT-006` 第 1、2、4 条~~ | **已落地**（提交见 §3.1，issue #327） | 第 1、2、4、5 条已勾，第 3 条只勾一半，因此标签是「部分完成」，理由与两条环境限制见 §1.16。**注意**：它在上两轮一直被写成「下一轮该开工的条目」，而夜间那批工作流其实已经把它实现完了——**「issue 还是待实现」不等于「代码没写」**，接手时先核对 issue 与源码，别按 §4.0 的旧推荐直接开工 |
 | `PLAT-004` 第 1 条、`PLAT-005` 第 1 条 | 需要在真的 Windows 上编译 + 在资源管理器里看 | 只能等有 Windows 机器 |
 | `PLAT-004` / `PLAT-005` / `ENG-006` / `FILT-001` 的界面接入 | `OPT-001` / `OPT-002`（设置页）未落地 | 服务层已就绪，界面接口留好即可（`ENG-006` 的接收者机制、`FILT-001` 的 `maskSyntaxReferenceText()` 与 `preview()` 都已备好） |
 | 任何在 `Views/` 里新增真正会话界面的条目 | ~~`SESS-001`（会话基类）~~ **已解除** | 基类与类型注册表都已落地，会话界面现在可以真正开工；缺的只是各自具体的会话类型实现。**一个反例值得记住**：`SESS-006` 的设置对话框外壳已经在 `Views/Session/` 里落地并跑通了 44 条用例，但它**没有**被容器接起来——框架层可以先于具体视图落地，只要它的输入（声明）是纯数据 |
@@ -1425,3 +1528,6 @@ Filters 页、面板的控件宿主、属性条件与名称过滤的输入框、
 | 源码级护栏扫到自己的注释 | 新加的「本模块不许读文件」护栏直接报错，而它扫到的是 `contentfilter.h` **自己说明里**逐字写的 `QFile` / `readAll`。与 `check_icons.py` 那条同源（护栏认的是**形状**，不区分代码与注释），但这次的代价更隐蔽：人会顺手把护栏放宽或删掉 | 护栏先 `stripComments()`（去 `//` 与 `/* */`）再判；并且**成对**断言「原文里有 `QFile`、去注释后没有」——这样 `stripComments()` 写错时用例会红，而不是**静默通过**（一个去注释做过头、把所有内容都丢掉的实现同样能让「去注释后没有 `QFile`」成立） |
 | `check_spec.py` 的文档计数护栏扫到 gitignored 目录 | 护栏原本 `os.walk(REPO_ROOT)` 扫全仓 `.md`（含 `.md` 的宽匹配模式），于是扫到了 `.workbuddy/` 下的工作日志——那里写的数字是**测试用例条数**，不是规格条目数。结果是**本机红、CI 绿**：CI 只 checkout 被跟踪的文件，本地多出的工作日志只在开发机上触发误报 | `doc_count_candidates()` 优先用 `git ls-files -z '*.md'`（退化到「仓库根 + docs/」），只扫被跟踪的文档。**「本机与 CI 结论不一致」的护栏要优先修**——本机红会让人习惯性忽略它，而那一天之后它连真问题也拦不住了 |
 | `QRegularExpression::patternErrorOffset()` 指向出错点**之后** | 用它算列号（`issue.column = textColumn + offset`）会指向出错字符的下一位：`(` 报 `offset == 1`，而 `(` 在位置上只占 0 那一格。断言写成「列号等于 3」时才看得出这半格偏差 | 要么按「下一格」的语义写注释与断言（本模块目前就是这么处理的，并在用例里注明），要么减 1 再交出去。**先测一次再定语义**，不要照直觉写期望值 |
+| **本机的 `QSharedMemory` 根本建不起来** | `SingleInstanceGuard` 会退回到「进程锁 + 本地套接字」，并在日志里如实写「共享内存不可用（QSharedMemory::create: out of resources），已由进程锁保证单实例」。于是 `takePrimaryIdentifier()` 里 `error() == AlreadyExists` 那个分支**从不进入**，只在那里被调用的 `recoverStaleIdentifier()` 因此**不可达**，它的三条用例在本机是「跳过式通过」。**这不会让任何用例变红**——只会让「共享内存这条腿」的结论凭空成立 | 实测办法（30 行的小程序就够）：先 `nm -u ~/Qt/5.15.2/clang_64/lib/QtCore.framework/Versions/5/QtCore \| grep -E 'shmget\|shmat\|ftok'` 确认本机 Qt 走的是 **SysV** 后端，再直接调一次 `shmget()` ——本机返回 `ENOMEM`（errno 12），Qt 报 `OutOfResources`。**凡是「有回退路径」的功能，都要问一句：本机跑的是主路径还是回退路径**；只看「测试全绿」会把回退路径通过当成主路径验证过 |
+| 两处**纵深防御**里去掉其中一处，整套测试仍全绿 | `splitFrame()` 校验「声明的载荷长度 == 实际长度」，`decodeRelay*()` 又在读完字段后校验「载荷必须读尽」——两道都拦「粘帧/截断」。变异把前一处去掉后**零条用例变红**：原有两条用例构造的输入恰好被后一处兜住（一条少一个字节 → 字段读不完；一条多一个字节 → 读不尽）。**「去掉任意一道防线都不该全绿」这件事没人保证** | 补的用例要专门构造「只有那一道拦得住」的输入：声明比实际**多一个字节**，而**已有的字节本身仍是一个完整可解析的请求**。写纵深防御时，每一道都要问「有没有哪一类输入是只有我拦得住的」；有，就为它写一条用例，否则那道检查随时可能被人当成冗余删掉 |
+| **「issue 还是「待实现」」不等于「代码没写」** | 夜间 24 个工作流一次落地 454 个文件，其中 `PLAT-006`（单实例与进程间通信）的实现与其测试套件全都在，但 issue #327 仍是「待实现 / 0 个勾 / 0 条评论」，而 `current-handoff.md` §4 还在推荐「下一轮做它」。照那份推荐开工就会**把已经写完的东西再写一遍**。同类情形在 OPT-001 / OPT-002 上也存在（选项对话框与设置仓库都已落地，issue 还挂着「待实现」） | 换工作流推进、或接手一次大批量产出之后，**选条目前先核对源码**：`gh issue list` 拿到的标签是滞后信号，`Code/` 下的文件与 `Code/Tests/<套件>/` 是否已存在才是当下的状态。核对成本很低（一次 `ls`），重复实现的成本极高 |

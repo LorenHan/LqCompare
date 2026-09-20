@@ -985,6 +985,32 @@ void Tst_SingleInstance::decodeRejectsDeclaredAndActualMismatch()
     QVERIFY(!decodeRelayRequest(frame, nullptr, nullptr));
 }
 
+void Tst_SingleInstance::decodeRejectsAFrameShorterThanItsDeclaredPayload()
+{
+    // 「声明得比实际多」是分片没到齐时的真实形态：调用方把一段还没收全的字节
+    // 交给解码器。此处刻意让**已有的这段字节本身就是一个完整可解析的请求**，
+    // 于是「声明的长度必须等于实际长度」是唯一能拦住它的检查——少了这一条，
+    // 一段没到齐的帧会被当成完整的请求放行，第二个参数从此凭空消失。
+    // 这条用例是反向验证补出来的：把 splitFrame 里那一比较去掉，只有它能变红。
+    RelayRequest request;
+    request.arguments = QStringList{QStringLiteral("a")};
+    QByteArray frame = encodeRelayRequest(request);
+
+    // 头部布局：魔数 4 + 类型 1 + 版本 1 + 载荷长度 4（大端），因此长度在偏移 6。
+    const int declaredOffset = 6;
+    quint32 declared = 0;
+    for (int i = 0; i < 4; ++i) {
+        declared = (declared << 8) | static_cast<quint8>(frame.at(declaredOffset + i));
+    }
+    const quint32 raised = declared + 1;
+    for (int i = 0; i < 4; ++i) {
+        frame[declaredOffset + i] = static_cast<char>((raised >> (8 * (3 - i))) & 0xffu);
+    }
+
+    RelayRequest out;
+    QVERIFY(!decodeRelayRequest(frame, &out, nullptr));
+}
+
 void Tst_SingleInstance::decodeRejectsTruncatedString()
 {
     RelayRequest request;

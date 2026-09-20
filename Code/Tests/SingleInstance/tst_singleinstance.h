@@ -56,6 +56,7 @@ private slots:
     void decodeRejectsVersionMismatch();
     void decodeRejectsOversizedDeclaredPayload();
     void decodeRejectsDeclaredAndActualMismatch();
+    void decodeRejectsAFrameShorterThanItsDeclaredPayload();
     void decodeRejectsTruncatedString();
     void decodeRejectsAbsurdArgumentCount();
     void decodeRejectsInvalidUtf8();
