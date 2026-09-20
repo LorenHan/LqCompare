@@ -75,7 +75,7 @@ FILT-001 的「排除优先」。一句话概括取舍：并集的意思是「�
 | `Services/Command/` | UI-024 | 骨架 | `Tests/CommandRegistry`（14 用例） |
 | `Services/Log/` | ENG-006 | **部分完成**（界面输出面板尚未接线） | `Tests/Logging`（32 个用例函数） |
 | `Services/Filter/` | FILT-001 | **部分完成**（界面上的速查与实时预览尚未接线） | `Tests/Filter`（87 个用例函数）；`FILT-005` 另见下一行 |
-| `Services/Filter/`（三层叠加与落点） | FILT-005 | **部分完成**（第 1、2、4、5 条的**服务层**部分已落地并有启动自检；第 3 条的「面板」做成了数据 + 文本，界面住所要等设置页 OPT-*；界面尚未接线） | `Tests/FilterStack`（84 个用例函数，**纯 QtCore**） |
+| `Services/Filter/`（三层叠加与落点） | FILT-005 | **部分完成**（第 1、4、5 条的服务层已完整落地并有启动自检；第 2、3 条的服务层部分——启用状态与四态文案、面板数据与全文——也已落地，**缺的只是显示控件**，住所是设置页 OPT-*） | `Tests/FilterStack`（84 个用例函数，**纯 QtCore**） |
 | `Services/Files/`（文件系统） | PLAT-002 | **部分完成**（Windows 实现未编译验证） | `Tests/FileSystem`（50 用例） |
 | `Services/Files/`（回收站） | PLAT-003 | **部分完成**（Windows 实现未编译验证） | `Tests/Trash`（35 用例） |
 | `Services/Files/`（名称与 Unicode） | PLAT-007 | **部分完成**（长路径只写在 Windows 侧，未编译验证） | `Tests/PathName`（40 用例 + 1 个仅 Linux 执行） |
@@ -436,10 +436,10 @@ FILT-002（正则与超时保护）、FILT-003（属性过滤）等都还没开�
 
 | 完成标准 | 落在哪里 | 状态 |
 | --- | --- | --- |
-| 三层叠加：文件格式定义内建过滤 → 会话设置过滤 → 视图临时过滤 | `FilterLayer`（顺序即叠加顺序）、`FilterStack::decide()`（层间取**交集**、层内排除优先）、`FilterLayerBinder::loadInto()`（**按存储分别读**三层） | **服务层已落** |
-| 每层可单独启用/禁用，并显示该层是否当前生效 | `setLayerEnabled()` / `isLayerEnabled()`、`FilterLayerState::active()`（= 启用**且**有规则）、`layerStatusText()`（四种状态各一句话） | **服务层已落**（界面尚未接线） |
-| 提供「查看最终生效过滤」面板，展示三层合并后的表达式与匹配计数 | `buildEffectiveFilterPanel()` → `EffectiveFilterPanel`（标题 / 层级语义 / 一行表达式 / 逐层行 / 计数 / 全文 `describe()`）；`FilterStack::combinedExpression()` | **数据 + 文本已落**，面板的**住所**是设置页（OPT-*），尚未接线 |
-| 视图临时过滤不写入会话，关闭标签即丢弃 | `filterLayerStorage(View) == ViewMemory`、`FilterLayerBinder::saveLayer()` 按落点路由且**目标存储缺失时报失败、不退而写入另一个存储**、`discardViewLayer()`；视图存储**借用**（归视图所有，随视图一起消失） | **服务层已落** |
+| 三层叠加：文件格式定义内建过滤 → 会话设置过滤 → 视图临时过滤 | `FilterLayer`（顺序即叠加顺序）、`FilterStack::decide()`（层间取**交集**、层内排除优先）、`FilterLayerBinder::loadInto()`（**按存储分别读**三层） | **已落** |
+| 每层可单独启用/禁用，并显示该层是否当前生效 | `setLayerEnabled()` / `isLayerEnabled()`、`FilterLayerState::active()`（= 启用**且**有规则）、`layerStatusText()`（四种状态各一句话） | **服务层已落**；「显示」的控件属设置页，因此**未勾** |
+| 提供「查看最终生效过滤」面板，展示三层合并后的表达式与匹配计数 | `buildEffectiveFilterPanel()` → `EffectiveFilterPanel`（标题 / 层级语义 / 一行表达式 / 逐层行 / 计数 / 全文 `describe()`）；`FilterStack::combinedExpression()` | **数据 + 文本已落**；面板的控件宿主属设置页（OPT-*），因此**未勾** |
+| 视图临时过滤不写入会话，关闭标签即丢弃 | `filterLayerStorage(View) == ViewMemory`、`FilterLayerBinder::saveLayer()` 按落点路由且**目标存储缺失时报失败、不退而写入另一个存储**、`discardViewLayer()`；视图存储**借用**（归视图所有，随视图一起消失） | **已落** |
 | 层级语义有单元测试（每层的包含/排除关系） | `Tests/FilterStack` 的 B 组（20 个用例覆盖交集、层内排除优先、起决定作用的层、跨层排除清单） | **已落** |
 
 **还没做的**（都只是「界面尚未接通」，不是逻辑缺失）：
@@ -788,7 +788,7 @@ git push --force-with-lease=main:<远端当前提交> \
 | `PLAT-004` / `PLAT-005` / `ENG-006` / `FILT-001` 的界面接入 | `OPT-001` / `OPT-002`（设置页）未落地 | 服务层已就绪，界面接口留好即可（`ENG-006` 的接收者机制、`FILT-001` 的 `maskSyntaxReferenceText()` 与 `preview()` 都已备好） |
 | 任何在 `Views/` 里新增真正会话界面的条目 | ~~`SESS-001`（会话基类）~~ **已解除** | 基类与类型注册表都已落地，会话界面现在可以真正开工；缺的只是各自具体的会话类型实现。**一个反例值得记住**：`SESS-006` 的设置对话框外壳已经在 `Views/Session/` 里落地并跑通了 44 条用例，但它**没有**被容器接起来——框架层可以先于具体视图落地，只要它的输入（声明）是纯数据 |
 | ~~`FILT-001` 掩码解析器~~ | **已落地**（提交见 §3.1，issue #228） | 已完成，其余 FILT 条目都复用它 |
-| `FILT-005` 过滤器的层级与作用域 | **已落地**（提交见 §3.1，issue #233） | 第 1、2、5 条已勾，第 4 条的**服务层**部分被 8 条用例钉住；第 3 条做成了**数据 + 文本**（`buildEffectiveFilterPanel()`），它的控件宿主与整个设置页属 `OPT-*`，因此标签是「部分完成」。它**解除了一处阻塞**：`FILT-003` 第 4 条（「与名称过滤构成整体的与关系」）现在有一张三层的表可以挂。它**没有**解除任何「界面接入」类条目——那需要设置页 |
+| `FILT-005` 过滤器的层级与作用域 | **已落地**（提交见 §3.1，issue #233） | 第 1、4、5 条已勾；第 2、3 条的服务层部分（启用状态与四态文案、面板数据与全文）已落地并被测试，**缺的是显示控件**——两者的住所都是设置页（`OPT-*`），因此标签是「部分完成」。它**解除了一处阻塞**：`FILT-003` 第 4 条（「与名称过滤构成整体的与关系」）现在有一张三层的表可以挂。它**没有**解除任何「界面接入」类条目——那需要设置页 |
 | `FILT-003` 属性过滤 | 第 5 条（「扫描阶段早期生效」的性能断言）要等 `Folder/` 的扫描器 | 第 1~4 条可做：大小/时间/属性位的纯判定、多条件的与关系、以及与名称过滤的整体与关系（后者现在有 `FilterStack` 的三层表可用）。**本条目现在是 H 工作流性价比最高的一条** |
 | `FILT-002` 名称过滤器（正则与超时保护） | **不是被别的模块阻塞，而是被 Qt 版本卡住**——见下面的专门说明 | 第 1、3、4 条可做（三种模式、组合语义、实时校验）；**第 2 条（200ms 超时）在 Qt 5.15 上需要绕道** |
 | `CLI-001` 起的命令行条目 | `SESS-002` 已落地，但**内置类型都没有工厂** | 解析部分可做（`ShellIntegration::parseShellInvocation()` 已是例子）；`--list-session-types` 这类**列出**类型的子命令现在也可做（注册表可枚举）。「执行」（真造出会话）仍要等第一个真正的会话类型 |
