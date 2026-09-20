@@ -256,8 +256,10 @@ FILT-003 见 [issue #230](https://github.com/LorenHan/LqCompare/issues/230)。
 `maskSyntaxReferenceText()` 目前只有测试在用——「输入掩码后显示匹配 N / 共 M」
 需要一个 Filters 页或会话设置页来承载，而那要等 SESS/OPT 的工作流；
 与 PLAT-004 / PLAT-005 / ENG-006 的界面接入是同一批活。另外
-FILT-002（正则与超时保护）、FILT-003（属性过滤）等都还没开始，它们都会**复用**
-这一份掩码实现；FILT-005（三层叠加与作用域）已在后续一轮落地，见 §1.12。
+FILT-002（正则与超时保护）还没开始，它会**复用**这一份掩码实现；
+FILT-005（三层叠加与作用域）与 FILT-003（属性过滤）已在后续两轮落地，
+分别见 §1.12 与 §1.13；FILT-003 还顺势把声明切行 `splitDeclarationLines()` 提成了
+本模块的公共 API，FILT-002 可直接复用。
 
 ### 1.8 SESS-001 落地到了什么程度
 
