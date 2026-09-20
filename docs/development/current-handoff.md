@@ -104,7 +104,7 @@ Qt 6.0 才有 `setMatchTimeout()`，本仓钉在 5.15，因此超时是自己做
 | `Services/Filter/` | FILT-001 | **部分完成**（界面上的速查与实时预览尚未接线） | `Tests/Filter`（87 个用例函数）；`FILT-005` 另见下一行 |
 | `Services/Filter/`（三层叠加与落点） | FILT-005 | **部分完成**（第 1、4、5 条的服务层已完整落地并有启动自检；第 2、3 条的服务层部分——启用状态与四态文案、面板数据与全文——也已落地，**缺的只是显示控件**，住所是设置页 OPT-*） | `Tests/FilterStack`（84 个用例函数，**纯 QtCore**） |
 | `Services/Filter/`（属性条件） | FILT-003 | **部分完成**（第 1~4 条已落；第 5 条只落了能独立验证的那一半——「与内容比对解耦」由读源码的护栏钉住，「扫描阶段提前丢弃」要等 `Folder/` 扫描器） | `Tests/AttributeFilter`（89 个用例函数，**纯 QtCore**） |
-| `Services/Filter/`（名称过滤） | FILT-002 | **部分完成**（第 1~4 条已落；第 5 条只勾得动「命名 + 导出往返」这一半，「与界面上的名称过滤框共用一套解释」要等界面接入） | `Tests/NameFilter`（93 个用例函数，**纯 QtCore**） |
+| `Services/Filter/`（名称过滤） | FILT-002 | **部分完成**（第 1、2、4、5 条已落；第 3 条只落服务层一半——组合语义与文案都已落地并被测试，「界面明确显示当前语义」要等界面接入） | `Tests/NameFilter`（93 个用例函数，**纯 QtCore**） |
 | `Services/Files/`（文件系统） | PLAT-002 | **部分完成**（Windows 实现未编译验证） | `Tests/FileSystem`（50 用例） |
 | `Services/Files/`（回收站） | PLAT-003 | **部分完成**（Windows 实现未编译验证） | `Tests/Trash`（35 用例） |
 | `Services/Files/`（名称与 Unicode） | PLAT-007 | **部分完成**（长路径只写在 Windows 侧，未编译验证） | `Tests/PathName`（40 用例 + 1 个仅 Linux 执行） |
@@ -550,21 +550,25 @@ FILT-005（三层叠加与作用域）与 FILT-003（属性过滤）已在后续
 
 | 完成标准 | 落在哪里 | 状态 |
 | --- | --- | --- |
-| 支持通配符与正则两种写法 | `NameMatchMode::{Exact,Wildcard,Regex}`、`NameFilterExpression::mode`、`analyzeNameFilterLine()` 按行前缀判模式（`=` 精确 / `*` 通配 / `~` 正则） | **已落** |
-| 正则模式必须有超时保护（避免灾难性回溯卡死） | `NameMatchBudget`（默认 `perEntryMs=200`、`consecutiveTimeoutLimit=2`）+ `NameMatchRunner` 抽象 + `ThreadNameMatchRunner`（工作线程 + 截止时间）+ `analyzeRegexPatternRisk()` 静态预检 + 连续超时断路器 | **已落** |
-| 按名称过滤（支持包含 / 排除组合） | `NameCombineMode::{AnyOf,NoneOf,AllOf}`、`setCombineMode()`、`decide()` 的三态合成 | **已落** |
-| 过滤结果可保存为具名预设并导出 | `serializeNamedNameFilters()` / `parseNamedNameFilters()`、`NameFilterPreset`、`setName()/name()` | **已落** |
-| 名称过滤与界面上的名称过滤框共用同一套解释 | 只有「同一套解释」这一半——`analyzeNameFilterLine()` 是解析、实时校验、复验的**唯一实现**（由读源码的护栏钉住，见 `Tests/NameFilter` 的 J 组）；「界面上的名称过滤框」还没接线 | **部分落**（服务层一半已落） |
+| 支持精确名、通配符、以及正则三种匹配模式并可切换 | `NameMatchMode::{Exact,Wildcard,Regex}`、`NameFilterExpression::mode` / `setMode()`；`analyzeNameFilterLine()` 按**行首前缀**判模式（`=` 精确 / `*` 通配 / `~` 正则，无前缀按通配） | **已落** |
+| 正则匹配有超时保护（默认 200ms/条），超时记录为错误条目并继续 | `NameMatchBudget`（`perEntryMs=200`、`consecutiveTimeoutLimit=2`）+ `NameMatchRunner` 抽象 + `ThreadNameMatchRunner`（工作线程 + 截止时间）+ `analyzeRegexPatternRisk()` 静态预检 + 连续超时断路器；超时**记成 `problems()` 里的 `NameFilterIssueKind::Timeout` 条目并继续**（该条结论为 `Undecided`，按放行处理） | **已落** |
+| 支持「包含任一」「不包含任何」「全部满足」三种组合语义，且界面明确显示当前语义 | 语义已落：`NameCombineMode::{AnyOf,NoneOf,AllOf}`、`setCombineMode()`、`decide()` 的三态合成；文案也已备好（组合语义表里的「共用解释」）。**「界面明确显示当前语义」未接**——Filters 页还没挂上去 | **部分落**（服务层一半已落） |
+| 过滤表达式的编辑有实时校验，非法正则就地报错且不生效 | `analyzeNameFilterLine(line, lineNumber, platform)` 返回 `NameFilterProblems`（带行号 / 列号 / 长度 / 严重度 / 建议）；有语法错、或静态风险预检命中的正则**不进入生效集合**（`disabledExpressionCount()` 可查）；它同时是解析 / 实时校验 / 复验的**唯一实现**（由读源码的护栏钉住，见 `Tests/NameFilter` 的 J 组） | **已落** |
+| 表达式可命名保存为预设并导出 | `NameFilterPreset`、`setName()` / `name()`、`serializeNamedNameFilters()` / `parseNamedNameFilters()`——往返**逐字一致**，含大小写选项、组合语义与每条的启用状态 | **已落**（导出格式是文本；落盘/文件选择那一层属设置页批次） |
 
 **还没做的**：
 
-1. **界面的名称过滤框接入**（第 5 条的后半句）。输入框、实时标红、与 `NameFilter::parseDeclaration()`
-   的就地校验接线都属于界面批次；服务层已把 `NameFilterProblems`（带行号/列号/长度/严重度）
-   与 `toDeclarationText()` 准备好了。
-2. **扫描阶段真正用上名称预筛**。与 FILT-003 同理，`Folder/` 扫描器未落地，
+1. **界面的名称过滤框与「当前组合语义」显示**（第 3 条的界面半句，以及第 4 条的就地标红）。
+   输入框、错误标红、组合语义的下拉与说明文字都属于界面批次（设置页 `OPT-*` /
+   Filters 页）；服务层已把 `NameFilterProblems`（带行号/列号/长度/严重度）与
+   `toDeclarationText()` 准备好了。
+2. **预设的界面保存 / 导入导出入口**。数据层已经能命名、序列化、往返（`NameFilterPreset` +
+   `serializeNamedNameFilters()` / `parseNamedNameFilters()`），缺的只是「保存为预设」与
+   「导出到文件」两个动作的宿主控件；`QFileDialog` 那一层不属本模块。
+3. **扫描阶段真正用上名称预筛**。与 FILT-003 同理，`Folder/` 扫描器未落地，
    「先用名称把条目丢掉、不进入内容比对」这条性能断言现在没有承接方。
    落地方式同上：扫描器拿到名字后调 `decide()`，`NotMatched` 跳过、`Undecided` 照常进入。
-3. **运行期超时的平台侧验证**。真线程用例（E 组）在本机跑过，但「一台被别的进程压满的机器上
+4. **运行期超时的平台侧验证**。真线程用例（E 组）在本机跑过，但「一台被别的进程压满的机器上
    200ms 这个默认值够不够」需要在目标平台真跑一次性能基线才能定；现在这个值是可配的。
 
 **五条刻意的取舍**（改之前先读）：
@@ -974,7 +978,7 @@ git push --force-with-lease=main:<远端当前提交> \
 | ~~`FILT-001` 掩码解析器~~ | **已落地**（提交见 §3.1，issue #228） | 已完成，其余 FILT 条目都复用它 |
 | `FILT-005` 过滤器的层级与作用域 | **已落地**（提交见 §3.1，issue #233） | 第 1、4、5 条已勾；第 2、3 条的服务层部分（启用状态与四态文案、面板数据与全文）已落地并被测试，**缺的是显示控件**——两者的住所都是设置页（`OPT-*`），因此标签是「部分完成」。它**解除了一处阻塞**：`FILT-003` 第 4 条（「与名称过滤构成整体的与关系」）现在有一张三层的表可以挂。它**没有**解除任何「界面接入」类条目——那需要设置页 |
 | ~~`FILT-003` 属性过滤~~ | **已落地**（提交见 §3.1，issue #230） | 第 1~4 条已勾；第 5 条只勾得动一半——「与内容比对解耦」由 `Tests/AttributeFilter` 的读源码护栏钉住了，「扫描阶段提前丢弃」那半句要等 `Folder/` 的扫描器，因此标签是「部分完成」，理由与接手方式写在 §1.13。它**为 `Folder/` 的扫描器留好了接口**：扫描器拿到 `EntryMetadata` 后调 `decideEntry()`，`accepted == false` 直接跳过 |
-| ~~`FILT-002` 名称过滤器（正则与超时保护）~~ | **已落地**（提交见 §3.1，issue #229） | 第 1~4 条已勾（三种模式、组合语义、**200ms 超时保护 + 连续超时断路器**、具名预设与导出往返）；第 5 条只勾得动「同一套解释」这一半，另一半（界面的名称过滤框）要等 `OPT-*`，因此标签是「部分完成」，理由与接手方式写在 §1.14。它**解除了「Qt 版本卡住」这处阻塞**：超时走的是自建的工作线程 + 截止时间，不依赖任何 Qt 6 API。它**为 `Folder/` 的扫描器留好了接口**：扫描器拿到名字后调 `decide()`，`NotMatched` 跳过、`Undecided` 照常进入 |
+| ~~`FILT-002` 名称过滤器（正则与超时保护）~~ | **已落地**（提交见 §3.1，issue #229） | 第 1、2、4、5 条已勾（三种模式、**200ms 超时保护 + 连续超时断路器**、就地实时校验且非法表达式不生效、具名预设与导出往返）；第 3 条只勾得动服务层一半（组合语义与文案已落，「界面明确显示当前语义」要等界面），因此标签是「部分完成」，理由与接手方式写在 §1.14。它**解除了「Qt 版本卡住」这处阻塞**：超时走的是自建的工作线程 + 截止时间，不依赖任何 Qt 6 API。它**为 `Folder/` 的扫描器留好了接口**：扫描器拿到名字后调 `decide()`，`NotMatched` 跳过、`Undecided` 照常进入 |
 | `FILT-004` 内容过滤器（行过滤与关键字节） | 部分阻塞：第 3、4、5 条缺承接方 | 第 1 条（行过滤器：给一段文本，排除匹配模式的行）与第 2 条（关键字节：给一段字节，判断是否含指定序列）是**纯判定**，本机可完整闭环与测试；第 3 条（先过滤行再应用忽略规则，且顺序有测试）需要**比对引擎**里的忽略规则那一步，第 4 条（状态栏提示）要状态栏，第 5 条（存为文件格式定义的一部分）要文件格式定义模块。参照 FILT-003 的做法：只落能独立验证的部分，把依赖写清 |
 | `FILT-006` 过滤结果的可见性与批量操作安全 | 第 4 条可做；其余要扫描器/状态栏 | 第 4 条（构造隐藏条目并断言两个选项下的行为差异）是纯逻辑，可做；「当前可见项」这类数量来源要等 `Folder/` 扫描器，状态栏常显要界面 |
 | `CLI-001` 起的命令行条目 | `SESS-002` 已落地，但**内置类型都没有工厂** | 解析部分可做（`ShellIntegration::parseShellInvocation()` 已是例子）；`--list-session-types` 这类**列出**类型的子命令现在也可做（注册表可枚举）。「执行」（真造出会话）仍要等第一个真正的会话类型 |
