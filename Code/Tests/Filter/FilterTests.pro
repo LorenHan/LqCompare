@@ -28,6 +28,17 @@ INCLUDEPATH += $$CODE_ROOT/Services
 
 include($$CODE_ROOT/Services/Filter/filter.pri)
 
+# filter.pri 从 FILT-005 起多了一个 filterstack.cpp，它引用了 Services/Session 的
+# `SessionSettings` 接口（第 4 条「视图临时过滤不写入会话」的落点靠它表达）。
+# filter.pri 只给搜索路径不给源文件（两边互相 include 会让 .cpp 进两次 SOURCES），
+# 所以**本工程要自己再 include 一次 Session 的 .pri**——不 include 的话，
+# `SessionSettings` 的构造与虚表在这一侧找不到定义，链接报未定义符号。
+#
+# 之所以放心的一个前提：session.pri 里的四个 .cpp 都是纯 QtCore 的
+#（Tests/Settings 与 Tests/SettingsScope 同样 `QT -= gui` 地编译它们），
+# 因此上面那句「本工程刻意不链接 QtGui」仍然成立。
+include($$CODE_ROOT/Services/Session/session.pri)
+
 SOURCES += $$PWD/tst_filter.cpp
 HEADERS += $$PWD/tst_filter.h
 

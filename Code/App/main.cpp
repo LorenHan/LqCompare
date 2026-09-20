@@ -1,7 +1,9 @@
 #include "MainWindow.h"
 
 #include "commandregistry.h"
+#include "filterstack.h"
 #include "logging.h"
+#include "mask.h"
 #include "settingschema.h"
 #include "sessiontype.h"
 
@@ -137,6 +139,34 @@ int main(int argc, char *argv[])
                            .arg(settingsCatalog.common() ? QStringLiteral("通用声明")
                                                          : QStringLiteral("无通用声明"))
                            .arg(settingsProblems.size()));
+
+    // 过滤层级表自检（FILT-005）：三层顺序、落点是否完整、以及**视图层是否仍然是
+    //「关标签即丢弃」**。最后一条单独列出来，因为它是本条目里最贵的一处错误：
+    // 视图层的落点一旦被改成会话文件，过滤照样工作，只是关掉标签它还在——
+    // 没有任何运行期现象会提示这件事，用户只会觉得「我删掉的临时过滤又回来了」。
+    //
+    // 与上面两条自检同一个手法：表是**数据**，自检查的是「手写那张表时容易写错、
+    // 写错了也不影响别的」的几件事。眼下的调用点只有这一处与 Tests/FilterStack——
+    // 三层过滤真正接进界面（设置页的过滤 Tab 与 Filters 页）属于 OPT-* 与视图批次。
+    const QStringList filterLayerProblems =
+        LqCompare::Filter::validateFilterLayerTable(LqCompare::Filter::filterLayerTable());
+    for (const QString &problem : filterLayerProblems) {
+        LQCOMPARE_ERROR("filter", problem);
+    }
+    LqCompare::Filter::FilterStack emptyFilterStack;
+    // 空栈必须「全部保留」——这是三层都没配置时的行为，也是用户第一次打开过滤
+    // 设置时看到的样子。它要是坏了，用户什么都还没设就看不到文件了。
+    const bool emptyKeepsEverything = emptyFilterStack.accepts(
+        LqCompare::Filter::MaskSubject::forName(QStringLiteral("probe.txt")));
+    if (!emptyKeepsEverything) {
+        LQCOMPARE_ERROR("filter",
+                        QStringLiteral("空的三层过滤拒绝了条目——没有配置过滤时应当全部保留"));
+    }
+    LQCOMPARE_INFO("filter",
+                   QStringLiteral("三层过滤：%1 层，%2 项问题；空栈保留条目=%3")
+                           .arg(LqCompare::Filter::filterLayerTable().size())
+                           .arg(filterLayerProblems.size())
+                           .arg(emptyKeepsEverything ? QStringLiteral("是") : QStringLiteral("否")));
 
     window.resize(1280, 820);
     window.show();
