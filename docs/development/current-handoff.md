@@ -14,7 +14,8 @@
 （errno / Win32 / Cocoa），批量操作会给出按原因分组的失败清单并支持只重试失败项；
 系统图标是按**类型**缓存 + 后台解析 + 去重的，在本机能真的拿到 Finder 那一套图标；
 Shell 集成的注册表计划、安装回滚、卸载还原与残留检查全部在**内存注册表**上真实执行，
-因此这台 macOS 上跑的是完整流程，而不只是编译过。
+因此这台 macOS 上跑的是完整流程，而不只是编译过；分级日志（ENG-006）现在
+级别过滤对宏与直接调用一视同仁、输出行带线程 id、并支持挂任意接收者与 RAII 计时。
 界面上仍是 169 个按钮里 31 条带处理器，其余点击后提示对应 ACTION-ID。
 
 ## 1.1 已落地的服务层模块
@@ -22,7 +23,7 @@ Shell 集成的注册表计划、安装回滚、卸载还原与残留检查全�
 | 模块 | 条目 | 状态 | 测试 |
 | --- | --- | --- | --- |
 | `Services/Command/` | UI-024 | 骨架 | `Tests/CommandRegistry`（14 用例） |
-| `Services/Log/` | ENG-006 | 骨架（**已知缺陷**：`Log::write()` 不过滤级别，见 §6 末条；无测试） | — |
+| `Services/Log/` | ENG-006 | **部分完成**（界面输出面板尚未接线） | `Tests/Logging`（32 个用例函数） |
 | `Services/Files/`（文件系统） | PLAT-002 | **部分完成**（Windows 实现未编译验证） | `Tests/FileSystem`（50 用例） |
 | `Services/Files/`（回收站） | PLAT-003 | **部分完成**（Windows 实现未编译验证） | `Tests/Trash`（35 用例） |
 | `Services/Files/`（名称与 Unicode） | PLAT-007 | **部分完成**（长路径只写在 Windows 侧，未编译验证） | `Tests/PathName`（40 用例 + 1 个仅 Linux 执行） |
@@ -36,7 +37,8 @@ PLAT-003 见 [issue #324](https://github.com/LorenHan/LqCompare/issues/324)；
 PLAT-007 见 [issue #328](https://github.com/LorenHan/LqCompare/issues/328)；
 PLAT-008 见 [issue #330](https://github.com/LorenHan/LqCompare/issues/330)；
 PLAT-004 见 [issue #329](https://github.com/LorenHan/LqCompare/issues/329)；
-PLAT-005 见 [issue #326](https://github.com/LorenHan/LqCompare/issues/326)。
+PLAT-005 见 [issue #326](https://github.com/LorenHan/LqCompare/issues/326)；
+ENG-006 见 [issue #338](https://github.com/LorenHan/LqCompare/issues/338)。
 
 ### 1.2 回收站（PLAT-003）落地到了什么程度
 
@@ -122,13 +124,45 @@ PLAT-005 见 [issue #326](https://github.com/LorenHan/LqCompare/issues/326)。
    编进 exe 的资源节（`.rc` 文件），本项目还没有加——索引指向不存在的资源时
    资源管理器显示**空白占位**而不是报错，所以这个值必须与打包方式一起改。
 
+### 1.6 ENG-006 落地到了什么程度
+
+规格的五条完成标准对应到代码：
+
+| 完成标准 | 落在哪里 | 在本机验证过 |
+| --- | --- | --- |
+| 分级日志（五级）与分类标签 | `Level`（Error/Warning/Info/Debug/Trace）、`LQCOMPARE_ERROR/WARN/INFO/DEBUG/TRACE`，分类是宏的第一个参数 | **是**——五个级别逐个走过「名字 → 级别 → 输出」，且断言级别标识互不相同、都不为空、都不等于兜底的 `unknown` |
+| 级别未启用时参数不求值 | 宏先调 `isEnabled()` 再拼消息 | **是**——用带计数副作用的表达式验证：关掉时求值 0 次，打开时**恰好 1 次**（2 次说明宏体里出现了两遍参数） |
+| 输出到控制台、文件、界面输出面板三个目标 | 控制台（`stderr`）与文件已接；界面输出面板通过 `addSink()` / `removeSink()` / `clearSinks()` 接入 | **两个半**——控制台与文件有覆盖（追加而非截断、不可写路径要返回失败、关掉之后不再写入）；接收者机制有覆盖（结构化字段、多接收者顺序、移除、重入不死锁、跨线程调用）；**输出面板本身尚未接线**，原因见下 |
+| 格式含时间戳、级别、分类、线程 id、消息 | `Record`（结构化载体）+ `Record::line()`（规范文本行）。线程名非空时也带上 | **是**——时间戳可还原成合理时刻（不是「行里有数字」）、级别是定宽短名、分类、`[t:<十六进制>]`、消息；并断言两个目标拿到**逐字相同**的文本 |
+| 「记录耗时」辅助（进入/退出自动计时） | `Log::Stopwatch`（RAII）+ `LQCOMPARE_SCOPE_TIMER` 宏 | **是**——析构时记一条「X 耗时 N ms」、级别关掉时静默、备注写在同一行、中途可查 `elapsedMs()`、`finish()` 可重复调用只记一条、**级别在析构时判断**（先放计时器再调级别也能出结果） |
+
+**顺带修掉的一个真实缺陷**：`Log::write()` 原先**完全不做级别过滤**，
+只有宏里那个 `if` 在过滤。于是 `main.cpp` 里 5 处直接调用（含启动横幅）
+在 `--log-level error` 下照样打印，与 `logging.h` 写的「低于该级别的日志被丢弃」
+相反，日志文件也没法靠调级别瘦身。现在 `isEnabled()` 是唯一的判断处，
+宏、`write()`、`Stopwatch` 三处都走它——各自写一遍 `<=` 的话，把方向弄反
+只会发生在其中一处，而现象是「某个级别偶发不输出」。
+
+**行为上的一个可见变化**：默认级别是 `warning`，而启动横幅是 `info`，
+所以**不带参数启动时日志里不再有启动横幅**（原先有，因为当时 `write()` 不过滤）。
+交接文档里的验证命令本来就带 `--log-level info`，照常工作。
+如果希望「用户什么都不说时日志里也有一条启动锚点」，那是 OPT-010 的默认值问题，
+不是日志模块的问题——不要用「让 `write()` 不过滤」去解决它。
+
+**还没有做的**：界面输出面板尚未接线。接收者机制（第三个目标）已经就位并有跨线程用例，
+但把 `MainWindow` 的输出面板挂上去时要**加一次排队跳转**：
+接收者在「记录日志的那个线程」上被调用，而图标解析跑在后台线程上，
+从那里碰控件会崩。正确姿势是让接收者只 `emit` 一个信号，
+再以 `Qt::QueuedConnection` 连到面板的槽。这一步与 PLAT-004 / PLAT-005 的
+界面接入是同一批活（都需要 OPT 设置页），一起做更省事。
+
 ## 2. 已验证的事实（不用再花时间确认）
 
 | 项目 | 结论 | 验证方式 |
 | --- | --- | --- |
 | 构建 | Qt 5.15.2 clang_64 上 qmake + make 通过，产出 `dist/macos/LqCompare.app` | `qmake && make -j8` |
 | 运行 | 主程序离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
-| 测试（全量） | **324 passed / 0 failed / 1 skipped**（Batch 36 + CommandRegistry 14 + FileSystem 50 + PathName 40 + PlatformIcon 48 + ShellIntegration 101 + Trash 35） | `Code/Tests/run-tests.sh` |
+| 测试（全量） | **358 passed / 0 failed / 1 skipped**（Batch 36 + CommandRegistry 14 + FileSystem 50 + Logging 34 + PathName 40 + PlatformIcon 48 + ShellIntegration 101 + Trash 35） | `Code/Tests/run-tests.sh` |
 | 文件系统抽象层 | 47 个纯逻辑用例 + 3 个真实文件系统用例全通过；其中 20 个覆盖 **Windows** 路径规则（盘符 / UNC / 长路径前缀 / 大小写），在 macOS 上真实执行 | `Code/Tests/run-tests.sh FileSystem` |
 | 回收站 | 35 个用例全通过。其中 9 个验证 XDG（Linux）的路径与 `.trashinfo` 规则、2 个是**真实**的废纸篓往返与冲突拒绝、多个断言「不可用时搬移函数一次都没被调用」 | `Code/Tests/run-tests.sh Trash` |
 | 名称与 Unicode | 40 个用例通过 + 1 个跳过（无效 UTF-8 名字的用例只在 Linux 上执行，CI 会跑）。覆盖字节保真往返、UTF-8 边界与过长编码、Unicode 组合形式、六类文件名问题的原因与位置 | `Code/Tests/run-tests.sh PathName` |
@@ -138,12 +172,14 @@ PLAT-005 见 [issue #326](https://github.com/LorenHan/LqCompare/issues/326)。
 | 主程序运行 | 离屏启动正常，日志 `Ribbon 构建完成：10 页 / 45 组 / 169 个按钮`，注册表自检 0 问题 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
 | Shell 集成 | 99 个用例函数（QTest 合计 101，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分十一组：A 动作与目标 14、B 选项 8、C 命令行引号 8、D 计划 13、E 安装 10、F 卸载与还原 9、G 校验 5、H 残留 6、I 能力 4、J 预演 3、K 命令行解析 9。**全部跑在功能完整的内存注册表上**，因此安装回滚与卸载还原是在本机真实执行的流程，不是桩 | `Code/Tests/run-tests.sh ShellIntegration` |
 | Shell 集成的命令行引号 | 用测试内置的 `CommandLineToArgvW` 参考实现做往返：`"C:\Program Files\…\LqCompare.exe" --shell-action=compare "%1"` 切回来必须还是两个原值，含「结尾反斜杠要翻倍」这条最容易写错的规则 | `Code/Tests/run-tests.sh ShellIntegration` |
+| 分级日志 | 32 个用例函数（QTest 合计 34，含 `initTestCase`/`cleanupTestCase`）全通过、0 跳过。分五组：A 级别与过滤 6、B 格式 4、C 输出目标 11、D 耗时辅助 6、E 级别名解析 4、以及 `initTestCase`/`cleanupTestCase`。这套件**刻意不链接 QtGui**：哪天有人往 `logging.cpp` 里加图形依赖，本工程会立刻构建失败 | `Code/Tests/run-tests.sh Logging` |
+| 日志级别真的生效 | 不带参数启动**不产生任何日志输出**（默认 `warning`，启动横幅是 `info`）；`--log-level info` 打印带线程 id 的完整启动序列；`--log-level debgu`（拼错）打印「无法识别的日志级别「debgu」，改用 warning」 | `QT_QPA_PLATFORM=offscreen ./LqCompare [--log-level …]` |
 | 分层检查 | 通过（Services 未反向依赖界面） | `python3 tools/check_layering.py` |
 | 图标检查 | 通过（27 个图标，声明/引用/文件三者一致） | `python3 tools/check_icons.py` |
 | 规格自检 | 通过（369 条，P0 59 条，PRD 与数据同步） | `python3 tools/check_spec.py` |
 | Shell 可移植性 | 通过（1 个脚本，无 bash 4 内建与 GNU 工具扩展） | `python3 tools/check_shell.py` |
 | Windows 宽字符 API | 通过（63 个源文件、清单内 43 个 API；自测 17 个样本） | `python3 tools/check_winapi.py [--self-test]` |
-| 测试套件 | `324 passed / 0 failed`，且「无套件匹配」被视为失败（exit 2） | `Code/Tests/run-tests.sh` |
+| 测试套件 | `358 passed / 0 failed`，且「无套件匹配」被视为失败（exit 2） | `Code/Tests/run-tests.sh` |
 | 命令注册表自检 | 启动时 0 问题（说明不缺图标、不缺说明、无快捷键冲突） | 启动日志 |
 
 **已知未验证**：Windows MinGW 32 位构建未在本机验证（无该环境）；
@@ -165,7 +201,7 @@ Code/
 │   ├── shell.pri / page.pri / views.pri
 ├── Services/
 │   ├── Command/                  commandregistry（命令注册中心）
-│   ├── Log/                      logging（分级日志）
+│   ├── Log/                      logging（分级日志 / 级别过滤 / 三目标 / 耗时辅助）
 │   ├── Files/                    filesystem（抽象层 + 错误携带）、pathutils（路径与名称规则）、
 │   │                             pathname（字节保真 / Unicode / 显示）、
 │   │                             trash（回收站服务 + XDG 规则）、
@@ -183,6 +219,7 @@ Code/
 │   │                             （内存回收站），多套件共用
 │   ├── CommandRegistry/          tst_commandregistry + .pro（14 用例）
 │   ├── FileSystem/               tst_filesystem + .pro（50 用例）
+│   ├── Logging/                  tst_logging + .pro（32 用例函数，刻意不链接 QtGui）
 │   ├── PathName/                 tst_pathname + .pro（40 用例 + 1 个仅 Linux）
 │   ├── Trash/                    tst_trash + .pro（35 用例）
 │   ├── Batch/                    tst_batch + .pro（36 用例）
@@ -230,6 +267,8 @@ docs/
 | `81a33a4` | 系统图标的缓存、去重与异步解析 | PLAT-004 |
 | `3701144` | 推送流程里「租约永远过期」的成因与正确写法（纯文档） | ENG-003 |
 | `01165d6` | Shell 集成的注册表计划、安装回滚与卸载残留校验 | PLAT-005 |
+| `20602e6` | 补上 PLAT-005 的提交记录，并纠正「回填提交号」的做法（纯文档） | ENG-003 |
+| （提交号由下一条提交补写） | 分级日志的级别过滤、结构化记录、接收者目标与耗时辅助 | ENG-006 |
 
 > 上面这一行由**单独的提交**补写，原因见下一段——把一个提交的提交号写进它自己，
 > 会因为 `--amend` 每次都改变提交号而永远对不上。
@@ -270,14 +309,14 @@ git push --force-with-lease=main:<远端当前提交> \
 
 | 对话 | 工作流 | 从哪条 issue 开始 | 交付什么 |
 | --- | --- | --- | --- |
-| **A 平台底座** | 继续 | `PLAT-006`（此后） | 仍在 `Services/Platform/` 内；`platform.pri` 已把 QtGui 与注册表相关的 `LIBS` 都接好 |
+| **A 平台底座** | 继续 | `PLAT-006`（单实例与进程间通信） | 仍在 `Services/Platform/` 内；`platform.pri` 已接好 QtGui 与注册表相关的 `LIBS` |
 | **B 会话框架** | 新开 | `SESS-001`（会话基类）→ `SESS-002`（类型注册表）→ `SESS-006`（设置框架） | `Services/Session/`、`Views/Session/`，含测试 |
 | **H 过滤与格式** | 新开 | `FILT-001`（掩码解析器，纯算法、最容易写出完整测试） | `Services/Filter/`、`Services/Format/` |
 
 三个工作流的目录互不重叠，`services.pri` 的 include 已一次加齐（`exists()` 保护），
 因此三方都不需要改共享文件。详见 [parallel-workstreams.md](parallel-workstreams.md) §1。
 
-**A 工作流的七件要紧事：**
+**A 工作流的九件要紧事：**
 
 1. `trash_linux.cpp`、`trash_win.cpp`、`filesystem_win.cpp`、`iconservice_win.cpp`、
    `registrystore_win.cpp` 需要在各自的平台上首次构建并修正。它们是当前唯一
@@ -340,6 +379,16 @@ git push --force-with-lease=main:<远端当前提交> \
    三是**非 Windows 平台不要试图给一个「能用的替代实现」**——
    `capability().available` 为假时照 `advice` 给用户可执行的替代路径就行，
    把「写不进去」做成「假成功」比直接说不行糟得多。
+9. **输出面板接日志要走一次排队跳转**，不要直接把面板挂成日志接收者。
+   接收者在**记录日志的那个线程**上被调用（`Tests/Logging` 里有一条跨线程用例
+   把这个事实钉住），而图标解析跑在 `IconService` 的后台线程上——
+   从那里碰控件会崩，且崩的位置与「我只是接了个日志」看起来毫无关系。
+   正确姿势：接收者只 `emit` 一个信号，用 `Qt::QueuedConnection` 连到面板的槽。
+   另外三个容易踩的点：`addSink()` 传空函数对象会返回 0（无效句柄），
+   面板析构时要按句柄 `removeSink()`（`clearSinks()` 会把别人的接收者一起清掉，
+   例如诊断包导出）；清理顺序是**先移除接收者再关日志文件**，
+   反过来的话关文件时若还挂着接收者，某些实现会顺手写一条「日志文件已关闭」，
+   而这条落到了下一个使用者头上。
 
 三个并行对话不是硬性数量，也可以只开两个（A + B），或把 B 换成 **O 工程与文档**
 （`ENG-002` 模块构建守卫、`DOC-001` 用户手册）。**H 建议早做**：掩码解析器是纯算法，
@@ -438,4 +487,12 @@ git push --force-with-lease=main:<远端当前提交> \
 | 用动词键去查命令条目 | 菜单文字挂在 `...\shell\LqCompare.compare`，命令挂在它**下面一层**的 `...\shell\command`。用前者调 `entriesFor()` 一条命令都取不到，断言 `foundCommand` 永远为假 | 命令条目要按 `verbKey + "\\shell\\command"` 查。测试里配了 `commandKey()` 辅助函数，避免第二次写错 |
 | 「值名/键名大小写不敏感」被顺手做成了「存储也转小写」 | 归一后直接拿去创建键，会把 `LqCompare.DiffFile` 写成 `lqcompare.difffile`。功能上没问题，但用 regedit 打开时看起来像随手敲的乱码，下一个人会以为这是 bug 而去「修」它 | **归一仅用于比较，存储保留原拼法**。真实实现与内存实现都按这条写，且各有一条断言拼法的用例 |
 | 认不出的注册表值类型被当成「没有值」 | 只记「有个值」而不记类型与字节，备份就等于记成「本来没有值」；卸载时会把用户原本那个我们看不懂的值**删掉**——这是不可逆的数据丢失，而报告会说「已还原」 | `RegistryValueKind::Unsupported` 把原始类型码与字节一起带上，`operator==` 逐字节比较；用例断言往返后字节完全一致。**凡是「读旧值 → 覆盖 → 还原」的流程，都要先问「我看不懂的旧值会怎样」** |
-| `--log-level` 目前**只对宏生效，对直接调用无效**（已发现，尚未修） | `logging.h` 的 `LQCOMPARE_*` 宏会先比级别再调 `write()`，但 `Log::write()` 自己**完全不过滤**。`main.cpp` 里有 5 处直接调 `Log::write(...)`（含启动横幅与命令行未接入的警告），于是 `--log-level error` 下它们照样打印。`logging.h` 写着「低于该级别的日志被丢弃」，读代码的人不会预期到这条差异；反过来，日志文件也因此无法靠调级别瘦身 | 两条路选一条并写清楚：要么 `write()` 也按级别过滤（宏的预过滤仍然有用——它避免求值昂贵的参数），要么把直接调用的那 5 处改成宏。**在改之前先注意**：启动横幅目前是「无论等级都可见」的，改完它会只在 `--log-level info` 以上出现（交接文档里的验证命令本来就带 `--log-level info`，会照常通过） |
+| `--log-level` 原先**只对宏生效、对直接调用无效** | `logging.h` 的 `LQCOMPARE_*` 宏会先比级别再调 `write()`，但 `Log::write()` 自己完全不过滤。`main.cpp` 里有 5 处直接调 `Log::write(...)`（含启动横幅），于是 `--log-level error` 下它们照样打印，日志文件也没法靠调级别瘦身——与 `logging.h` 写的「低于该级别的日志被丢弃」相反 | 过滤收进 `isEnabled()`，宏、`write()`、`Stopwatch` 三处共用它；`main.cpp` 的 5 处改成宏。**注意副作用**：默认级别是 `warning` 而启动横幅是 `info`，所以不带参数启动时日志里不再有启动横幅。想改回去要调**默认级别**（OPT-010），不是让 `write()` 不过滤 |
+| 级别过滤写在多处 | 宏、`write()`、`Stopwatch` 各自写一遍 `<=` 比较的话，把方向或级别顺序弄反只会发生在其中一处，而现象是「某个级别偶发不输出」——这种不一致最难查 | 比较只有 `isEnabled()` 一份实现。加新级别时也只改一处 |
+| 日志接收者在记录日志的那个线程上被调用 | 界面输出面板若直接挂成接收者，图标解析（`IconService` 的后台线程）记一条日志时就会从非 GUI 线程碰控件——崩溃位置与「我只是接了个日志」看起来毫无关系 | 面板必须自己加一次排队跳转（接收者只 `emit` 信号，用 `Qt::QueuedConnection` 连槽）。`Tests/Logging` 里有一条跨线程用例把这个事实钉住 |
+| 在持锁期间调用日志接收者 | 接收者里顺手记一条调试日志（很自然的写法）会**死锁**，现象是「界面卡住」，与日志模块毫不相干；接收者在回调里增删接收者还会让容器在遍历中变动 | 进临界区前把接收者清单**拷贝**一份，出临界区再调用。代价是并发移除时那个接收者可能还收到这一条——比死锁好得多 |
+| 日志接收者的句柄用函数对象当键 | lambda 之间没有可靠的相等比较，按值 `remove` 会**静默失效**——接收者以为自己被摘掉了，其实还在收 | `addSink()` 返回整数句柄，`removeSink(handle)` 按句柄移除。传空函数对象时返回 **0**（无效句柄）：空 `std::function` 不是「什么都不做的接收者」，而是调用时崩溃 |
+| `setLogFile()` 会创建一个空文件 | 它要探一次可写性（以追加方式打开再关掉），所以「只配了路径、还没写日志」时文件已经存在。用例若断言「文件不存在」会失败，而失败原因是自己理解错了契约 | 断言应该是「关掉输出之后**不再写入**」（文件大小仍为 0），而不是「文件被删掉」——关掉输出不等于丢掉用户已有的日志。这个代价是刻意付的：宁可配置的那一刻就知道写不进去 |
+| 日志文本格式里线程名的可选段 | 线程名只有主线程之外少数情况才有。直接拼 `[t:<id> <name>]` 时，名字为空会在行里留一个孤立空格，按空格切分日志的工具会多切出一段空字段 | 名字为空时整段不输出（`[t:<id>]` 与 `[t:<id> <name>]` 两种形态）。定宽短名（`"INFO "` / `"WARN "` 都占 5 格）则是为了级别列之后的内容能对齐——日志是给人竖着扫的 |
+| 耗时辅助用 `start()` / `stop()` 两个调用 | 中途 `return`、抛异常、或忘了写 `stop()` 的路径都会漏记——而漏记的那条恰恰最可能是「为什么这里有时很慢」的答案 | 改成 RAII：作用域开头构造一个 `Log::Stopwatch`，离开作用域自动记一条。`finish()` 可重复调用（手动结束过就只记一条）；**级别在析构时判断**，这样「先放计时器、再用命令行调级别」也能出结果 |
+| 日志套件链接 QtGui | 别的套件都是 `QT += gui`（`QKeySequence` 属于 QtGui）。日志只用 QtCore，若也跟着加，等哪天有人往 `logging.cpp` 里加图形依赖就没人会发现 | `LoggingTests.pro` 写 `QT -= gui`，让「混进 QtGui 依赖」变成构建失败。这也是 `QTEST_MAIN` 在这里展开成 `QCoreApplication` 的原因（无需 offscreen 平台） |
