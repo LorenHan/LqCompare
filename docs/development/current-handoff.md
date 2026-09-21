@@ -1276,11 +1276,65 @@ UnicodeDecodeError: 'utf-8' codec can't decode byte 0x82 in position 3: invalid 
 
 - **CI 确认**：本机无法跑真正的 Python 3.14，所以「macOS 腿变成完整」这件事必须由
   下一次 CI 运行回答。在这之前 ENG-004 第 2 条**保持不勾**。
-- ubuntu 的 17 个、Windows 的 26 个套件构建失败仍未定位（要读 §1.20 第 2 项刚上传的
-  `build.log`）——**这是下一轮的第一件事**。
+- Windows 的 26 个套件构建失败**仍未动**（不是「未定位」——已定位到 5 个文件，
+  见 §1.22）。它需要一轮独立的工作，理由写在那一节。
 - 3.14 的 `_open_to_write` 是本机读源码 + 复现器确认的，**没有在真 3.14 上跑过**。
   复现器的锚点（`zinfo.flag_bits = 0x00` 必须出现且只出现一次）会在本机 zipfile 变化时
   立刻报错退出，不会静默失效。
+
+### 1.22 第二条红腿的账本：ubuntu 已修，Windows 是 5 个文件的工作清单
+
+§1.20 第 2 项加的 `build.log` 上传在这一轮直接兑现了价值——**不用猜、不用复现**，
+下载产物就能读到编译器原话。结论如下（原始证据：run `35547633279` 的
+`test-logs-<os>/<套件>/build.log`）。
+
+### ubuntu：一个文件造成 17 个套件失败（**已修**）
+
+`Code/Services/Files/trash_linux.cpp` 用了 `PathUtils::Style::posix()` 与
+`PathUtils::parentPath()` 却没有 `#include "pathutils.h"`，也没有别的头文件会捎带进来：
+
+```
+trash_linux.cpp:35:7:  error: 'PathUtils' does not name a type
+trash_linux.cpp:69:32: error: 'PathUtils' has not been declared
+trash_linux.cpp:78:32: error: 'PathUtils' has not been declared
+```
+
+17 个套件之所以全中，是因为它们都（直接或间接）把 `Services/Files` 编进去。
+**一个只在非开发平台上编译的文件，只要缺一行 include，就能让半条腿红掉。**
+
+这次的验证没有停在「等 CI」：本机 macOS SDK 恰好带 `sys/statvfs.h`，于是可以对整个
+Linux 翻译单元做 `-fsyntax-only`——修后 `clang exit=0` 整份文件通过；把那行 include
+去掉，同一条命令立刻报出同类的 4 处 `use of undeclared identifier 'PathUtils'`。
+**以后修 `*_linux.cpp` 里的编译错误，先用这条命令在本机验一遍**：
+
+```sh
+QTDIR=~/Qt/5.15.2/clang_64
+arch -x86_64 clang++ -std=c++17 -fsyntax-only -fPIC -F$QTDIR/lib \
+  -I Code/Services/Files -I Code/Services/Log -I Code/Services \
+  -I$QTDIR/include -I$QTDIR/include/QtCore \
+  -I$QTDIR/lib/QtCore.framework/Headers \
+  Code/Services/Files/trash_linux.cpp
+```
+
+### Windows：26 个套件失败，**5 个文件**，两类系统性原因 + 几个真 bug
+
+这一节写清楚是为了**下一轮不用重新下载产物**。
+
+| 文件 | 报错（原文节选） | 原因与修法 |
+| --- | --- | --- |
+| `Services/Files/filesystem_win.cpp` | `'REPARSE_DATA_BUFFER' does not name a type; did you mean 'REPARSE_GUID_DATA_BUFFER'?`（403 行）<br>`'FSCTL_GET_REPARSE_POINT' was not declared in this scope`（231 行） | 两类原因各一半：① 文件定义了 `WIN32_LEAN_AND_MEAN`，于是 `windows.h` **不会再带进 `winioctl.h`**，而 `FSCTL_GET_REPARSE_POINT` 与 `MAXIMUM_REPARSE_DATA_BUFFER_SIZE` 都在那里 → 显式 `#include <winioctl.h>`；② `REPARSE_DATA_BUFFER` 在 `winnt.h` 里被 `#if (_WIN32_WINNT >= 0x0600)` 包着，而 MinGW 8.1 的默认值比它低，所以整个结构体没声明（`REPARSE_GUID_DATA_BUFFER` 是无条件的，所以编译器能给出「你是不是想写它」的建议）→ 在**包含 windows.h 之前**把 `_WIN32_WINNT` 抬到 `0x0600` 或更高 |
+| `Tests/MergeOutput/tst_mergeoutput.cpp` | `'SYMBOLIC_LINK_FLAG_DIRECTORY' was not declared`（50 行）<br>`'CreateSymbolicLinkW' was not declared`（53 行） | 同上第 ② 条：都是 Vista 起才在头文件里出现的符号，`_WIN32_WINNT` 不够高 |
+| `Services/Merge/mergeoutput.cpp`、`Services/Text/textdocument.cpp` | `call of overloaded 'number(DWORD&)' is ambiguous`（`QByteArray::number(info.dwVolumeSerialNumber)` 等，共 51 处） | **不是平台问题，是「Windows 分支少写了 POSIX 分支写了的东西」**：同一个文件里 POSIX 分支是 `QByteArray::number(qulonglong(info.st_dev))`，显式转了 64 位；Windows 分支直接把 `DWORD` 交给 `QByteArray::number`，在 MinGW 的重载集上产生歧义 → 照 POSIX 分支的样子补显式转换（`qulonglong` / `qlonglong`）。**这条很值得记**：两边写法不对称时，先看「能编的那一边多做了一步什么」 |
+| `Services/Platform/registrystore_win.cpp` | `conversion from 'QStringList' to non-scalar type 'QString' requested`（355 行）<br>`'class QString' has no member named 'removeAll'; did you mean 'remove'?`（356 行）<br>`'RegDeleteTreeW' was not declared in this scope`（484 行） | 前两条是**真代码 bug**（把 `QStringList::removeAll` 写到 `QString` 上了）；第三条是 MinGW 8.1 的头文件里没有 `RegDeleteTree`（它是 Vista 起的东西，MinGW 只部分提供），要么改成递归 `RegEnumKeyEx`+`RegDeleteKeyW` 自己实现，要么 `LoadLibrary`+`GetProcAddress` 动态取——**这两条都不能靠加 include 糊过去** |
+
+**为什么这一轮不顺手改**：本机是 macOS，**完全无法编译 Windows 分支**（没有 Windows 工具链，
+`HANDLE`/`BY_HANDLE_FILE_INFORMATION` 这类类型也没有可信的替身），所以上面每一条都只能靠
+CI 的 Windows 腿回答，一次 15 分钟。5 个文件、两类系统原因加两个真 bug 一起盲改，
+会把「哪一处改错了」的信号混在一起。**下一轮的正确做法**：先只做 `_WIN32_WINNT` 与
+`winioctl.h` 这两条系统性原因（覆盖面最大且方向确定），跑一次 CI 看剩下什么，
+再逐条处理 `number()` 歧义与 `registrystore_win.cpp` 的两个真 bug。
+另外 `windows-latest` 用的是 MinGW 8.1（Qt 的 `win32_mingw81`），它的头文件比现代 MSVC 旧，
+**判断某个 Windows API 能不能用，要按 MinGW 8.1 的头文件判，不能按 MSDN 判**。
 
 
 ## 2. 已验证的事实（不用再花时间确认）
@@ -1721,11 +1775,21 @@ QtGui）；`Tests/Logging` 34 → **43**、`Tests/Options` 46 → **50**、
    先把「被写出来的字节」与「声明的意图」对齐，再谈改判据。
    **还差一步 CI 确认**：本机跑不了真 3.14，所以要等下一次 CI 运行看 macOS 腿是否变完整，
    在那之前 ENG-004 第 2 条保持不勾。
-2. **读第一次 CI 上传的 `build.log`**，定位 ubuntu 的 17 个与 Windows 的 26 个套件构建失败。
-   这批 `build.log` 是本轮刚加的上传项，第一次跑就有 6 个 artifact 可读
-   （`gh run download <id>`；本机 `gh` 在 `/opt/homebrew/bin/gh`）。
-   **Windows 那条腿尤其重要**：它是交付目标平台，而这 26 个失败此前从未有人看见过。
-   **这是下一轮的第一件事。**
+2. ~~读第一次 CI 上传的 `build.log`，定位 ubuntu 的 17 个与 Windows 的 26 个套件构建失败。~~
+   **已在同一轮读完**（这批 `build.log` 是本轮刚加的上传项，第一次跑就有 6 个 artifact 可读；
+   `gh run download <id>`，本机 `gh` 在 `/opt/homebrew/bin/gh`）。两条腿的账都结清了：
+   - **ubuntu 的 17 个失败＝1 个文件**：`Code/Services/Files/trash_linux.cpp` 缺一句
+     `#include "pathutils.h"`。该文件**只在 Linux 上编译**，所以「本机编得过」对它毫无意义。
+     **已修**（`525a872`），已用 `-fsyntax-only` 在本机造出同样的报错再消掉。
+   - **Windows 的 26 个失败＝5 个文件**：两类系统性原因（`_WIN32_WINNT` 定得太低、
+     `WIN32_LEAN_AND_MEAN` 把 `winioctl.h` 挡掉了）＋两个真 bug
+     （`number(DWORD&)` 因 Windows 分支没写显式转换而歧义；`registrystore_win.cpp`
+     对 `QString` 调了 `QStringList::removeAll`）。**已写成 §1.22 的可执行清单**
+     （逐文件的原始报错、判定、改法）。
+   - **下一轮的第一件事**：只做 §1.22 里那**两条系统性原因**（`_WIN32_WINNT` 与 `winioctl.h`），
+     推上去、看下一次 CI 剩多少红，**再**动那两个真 bug。理由：系统性原因会一次消掉一大片报错，
+     先做能把「26 个」这个数字迅速压小，避免被残留报错误导着去改本来没错的代码；
+     而 Windows 是交付目标平台，这 26 个失败此前**从未有人看见过**，更不该一口气盲改 5 个文件。
 3. 顺手把 `actions/checkout@v4` / `actions/upload-artifact@v4` 升到 v5
    （运行器已有 Node 20 弃用告警，现在是警告、将来是错误）。
 4. 上面三条做完再回到功能条目。
