@@ -1411,6 +1411,36 @@ CI 的 Windows 腿回答，一次 15 分钟。5 个文件、两类系统原因�
 `run-tests.sh ZZProbe` 就能只跑这几个。**注意**：这几个目录一旦留在仓库里，
 全量运行会永远失败——所以只当临时脚手架，用完删掉，配方留在这里就够。
 
+### 1.23.1 第三次运行（`6cd5831` / `7f1d802`）：stderr 那条路**第一次回报**
+
+run **`35551066378`**。三条腿的结论与上一次完全一致（macOS 64 套件 **3568 / 0 / 2**、
+ubuntu 63 套件 **3538 / 0 / 2** 且 `Tests/Folder` 仍是唯一崩溃、Windows 仍是 **26** 个构建失败），
+所以真正的新信息只有一条——**`Tests/Folder` 的 `stderr.log` 里写着**：
+
+```
+*** buffer overflow detected ***: terminated
+```
+
+**这一行把问题定性换掉了**：原来只知道「进程没了」，现在知道它是
+**glibc 的 `_FORTIFY_SOURCE` 抓到了一个缓冲区越界**（`__chk_fail` → 打印这句 → `abort()`）。
+不是死循环、不是栈溢出、不是 OOM。
+
+**为什么苹果机上永远发现不了它**：`_FORTIFY_SOURCE` 是 glibc 的机制，Ubuntu 默认开着
+（24.04 上是 `_FORTIFY_SOURCE=3`，用 `__builtin_dynamic_object_size`，连一部分**堆**分配也查得出来），
+而 **macOS 的 libc 根本没有这个机制**。也就是说：
+
+> **同一个缓冲区越界，在 macOS 上大概率表现为「跑得好好的」，在 Linux 上直接 `abort`。**
+> 这不是「Linux 更严」，而是「macOS 少了一道本来就该有的检查」。
+
+同理可推：`ASan`（`-fsanitize=address`）也能在本机复现这类失败，而它**在 macOS 上可用**——
+这是下一轮最值得先试的一步（见 §4.0.1）。
+
+**另一个顺手拿到的事实**：`stderr.log` 在三平台上分别有
+macOS 4 个、ubuntu 5 个、Windows 3 个套件是**非空**的（`Logging` / `Options` /
+`OptionsDialog` / `SpecialPicture`，内容是正常的 `[WARN]`/`[ERROR]` 与 Qt 的平台提示），
+**其余套件是 0 字节**。所以「失败时才打印 stderr」不会给日志带来噪音，
+而「空 / 非空」这个区分也确实分开了两类情形。
+
 
 ## 2. 已验证的事实（不用再花时间确认）
 | 项目 | 结论 | 验证方式 |
@@ -1419,7 +1449,9 @@ CI 的 Windows 腿回答，一次 15 分钟。5 个文件、两类系统原因�
 | 运行 | 主程序离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
 | 测试（全量） | **3598 passed / 0 failed / 2 skipped，66 个套件**（2026-09-21 09:2x 实测，全量 3 分 53 秒，EXIT=0）。数字与上一轮一致是预期的：本轮没增删用例，只改了 `run-tests.sh` 的「产物清理位置」与「stderr 落盘」。此前一轮是 3596；上上轮为 FMT-001 补了两条用例（`Tests/Format` 80 → **82**）。2 条跳过分别来自 `PathName`（40/0/1）与 `Registry`（61/0/1），都是按平台条件跳过的用例 | `Code/Tests/run-tests.sh` |
 | 套件崩溃的原因现在看得见（本轮新增） | 每个套件跑完都会留下 `<套件>/stderr.log`：**通过时是 0 字节**（Qt 正常跑完不写 stderr），崩溃时有内容且失败日志里直接贴出末尾 15 行；「stderr 是空的」单独成句（被 SIGKILL/段错误直接带走的情形本身也是信息）。用三个临时探针套件端到端验过（配方见 §1.23）：`ZZProbeStderr`（stderr 有内容 + stdout 不泄漏）、`ZZProbeSilent`（空 stderr）、`ZZProbeBadBuild`（qmake 失败 → 陈旧产物必须已删）。**5 处变异 5 处检出**，其中 M4 连漏两次的原因（真等价 vs 观测点选错）见 §6 | `Code/Tests/run-tests.sh ZZProbe`（探针跑完即删，不进仓库）+ `/tmp/lqcompare-mutate-stderr.py` |
-| CI 三条腿的实测（本轮读的是 run `35549157384`） | **macOS 腿完整**：`macos-15-intel` 64 套件全部产出 `Totals:`，**3568 passed / 0 failed / 2 skipped**，其中 `Tests/Archive` **106 passed**——这是第一次真的跑在 **Python 3.14** 上，同时验证了 §1.21 的夹具修法。**ubuntu 腿只剩 1 个运行期崩溃**：构建失败 **17 → 0**（`trash_linux.cpp` 的 include，`525a872`），`3538 passed / 0 failed`，`Tests/Folder` 跑到第 8 个用例 `linksAreComparedWithoutFollowing()` 时进程消失（无 `FAIL`、无 `Totals:`）。**Windows 腿仍是 26 个套件构建失败**（本轮故意未动，清单在 §1.22） | `/opt/homebrew/bin/gh run download 35549157384` 后逐套件读 `results.txt` / `build.log` |
+| CI 三条腿的实测（读的是 run `35549157384`，并已在 `35551066378` 上复现一致） | **macOS 腿完整**：`macos-15-intel` 64 套件全部产出 `Totals:`，**3568 passed / 0 failed / 2 skipped**，其中 `Tests/Archive` **106 passed**——这是第一次真的跑在 **Python 3.14** 上，同时验证了 §1.21 的夹具修法。**ubuntu 腿只剩 1 个运行期崩溃**：构建失败 **17 → 0**（`trash_linux.cpp` 的 include，`525a872`），`3538 passed / 0 failed`，`Tests/Folder` 跑到第 8 个用例 `linksAreComparedWithoutFollowing()` 时进程消失。**Windows 腿仍是 26 个套件构建失败**（本轮故意未动，清单在 §1.22）。两次运行的这三组数字**逐项相同** | `/opt/homebrew/bin/gh run download <id>` 后逐套件读 `results.txt` / `build.log` / `stderr.log` |
+| `Tests/Folder` 崩溃的原因已定性（本轮新增） | `stderr.log` 全文只有一行：**`*** buffer overflow detected ***: terminated`**——glibc 的 `_FORTIFY_SOURCE` 抓到的**缓冲区越界**（不是死循环/栈溢出/OOM）。**macOS 的 libc 没有这个机制，所以本机结构性看不到这一类失败**。下一个动作是在本机用 **ASan** 复现（同盯一类错误、macOS 可用），其次才是让脚本在崩溃时自动补跑 `-v2`（详见 §4.0.1 第 4 条与 §6） | `cat /tmp/ci-art2/test-logs-ubuntu-latest/Folder/stderr.log` |
+| `stderr.log` 的误报情况（本轮新增） | 三平台上非空的分别是 macOS **4** 个、ubuntu **5** 个、Windows **3** 个套件（`Logging` / `Options` / `OptionsDialog` / `SpecialPicture`，内容是正常的 `[WARN]`/`[ERROR]` 与 Qt 平台提示），**其余全部 0 字节**。所以「只在失败时打印 stderr」不会带来噪音，而「空 / 非空」这个区分确实分开了两类情形 | 遍历 `test-logs-*/<套件>/stderr.log` 的 `-s` 判定 |
 | 主程序构建与启动（本轮改动不碰 C++，复测确认没被带坏） | 增量构建 0 条本仓 warning（`_build-lqcompare/`，产物 `dist/macos/LqCompare.app`）；离屏启动日志「单实例机制已由选项关闭」→「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」→「LqCompare 0.1.0 启动完成」 | `make -j8` + `QT_QPA_PLATFORM=offscreen …/LqCompare --log-level info --new-instance`（跑完记得 `pkill`） |
 | 文件格式定义与识别（FMT-001） | **82** 个用例函数（QTest 合计 82）全通过、0 跳过。这套件**刻意不链接 QtGui**（定义是纯数据、识别只读文件前缀）。覆盖：优先级顺序（覆盖 → 掩码 → 内容签名 → 未知兜底）、跨侧优先级与掩码冲突诊断、registry 工厂与平台可用性要求、未知兜底与拒绝打开、Unicode BOM / 截断 / 非法字节、真实文件前缀采样与 I/O 错误、18 类内置格式的具体 ID、JSON 继承与未知 `settings` 往返、坏条目跳过与坏文档拒绝、合并不变性与原子保存、以及**本轮新增的重复 ID 与 ID 格式两条**。交付记录见 `docs/development/team-format.md` | `Code/Tests/run-tests.sh Format` |
 | FMT-001 能反向验证 | **5 处变异 5 处检出、0 处漏检**。全部打在 `formatdefinition.cpp` 上：① 去掉 `ids.contains(id)` 的重复检查 → `duplicateIdsAreRejectedWithADiagnostic` 红；② 删掉 `ids.insert(id)`（不再记录已见 ID）→ 同一条红；③ 把 ID 正则放宽成允许大写/空格/点 → `idFormatRulesRejectUnstableIdentifiers` 红；④ 把 `if (!errors.isEmpty())` 改成恒假（有错也不跳过）→ 4 条红；⑤ 把版本校验从 `!= 1` 放宽成 `!= 0` → 7 条红。基线先确认 82/0/0，驱动在改之前与还原之后都删掉 `formatdefinition.o`（`shutil.copy2` 会连旧 mtime 一起还原，见 §6） | 变异测试（结论写在 issue #240 的落地说明里） |
@@ -1880,14 +1912,28 @@ QtGui）；`Tests/Logging` 34 → **43**、`Tests/Options` 46 → **50**、
    符号链接比较，第 8 个用例），Windows 未动。同轮把「崩溃原因看不见」补掉了：
    stderr 现在落盘 `<套件>/stderr.log` 并进上传产物，失败时贴出末尾 15 行
    （5 处变异 5 处检出，配方见 §1.23）。
+   **而且这条路第一次跑就回报了**（run `35551066378`，见 §1.23.1）：
+   `Tests/Folder` 的 `stderr.log` 是 **`*** buffer overflow detected ***: terminated`**
+   ——glibc 的 `_FORTIFY_SOURCE` 抓到的缓冲区越界，**macOS 上永远看不到的那一类**。
    **所以下一轮拿到新 CI 后要看的其实是两件事**：
    - `Tests/Folder` 的 `stderr.log` ——**它现在会给出 Linux 上崩在哪一行**，这是本轮
      特意为它铺的路；先看这个再决定改什么，不要凭猜。
    - Windows 的两条系统性原因有没有把 26 压下来。
-4. 顺手把 `actions/checkout@v4` / `actions/upload-artifact@v4` 升到 v5
+4. **`Tests/Folder` 的下一步（按顺序试，别跳步）**：
+   1. **在本机用 ASan 复现**（最低成本、最可能一次定位）：
+      `Tests/Folder` 单独编一份带 `-fsanitize=address -g` 的、跑
+      `run-tests.sh Folder`——`_FORTIFY_SOURCE` 与 ASan 盯的是同一类错误，
+      而 **ASan 在 macOS 上可用**。它会给出行号。
+   2. 若 ASan 静默：给崩溃的套件**自动重跑一遍 `-v2`**（`run-tests.sh` 里已有
+      「没产出 Totals 行」这条判据，加几行就行），`-v2` 会打印每条 `QVERIFY`，
+      **最后一条打印出来的语句就是崩之前正在执行的那一句**。
+   3. 重点看 `Services/Files/filesystem_posix.cpp::linkTarget()`（`readlink` 的增长循环，
+      第 198~233 行）与 `realpath`/`canonicalFilePath` 那几处——
+      符号链接比较这条路径上只有这几处会碰固定长度缓冲。
+5. 顺手把 `actions/checkout@v4` / `actions/upload-artifact@v4` 升到 v5
    （运行器已有 Node 20 弃用告警，现在是警告、将来是错误）。
-5. 上面几条做完再回到功能条目。
-6. **别再连推四次**：每一个推送都会触发一整轮 CI（三条腿）。攒成一次推送，
+6. 上面几条做完再回到功能条目。
+7. **别再连推四次**：每一个推送都会触发一整轮 CI（三条腿）。攒成一次推送，
    推完把被覆盖的 run 取消掉（`gh run cancel <id>`），否则三条腿会互相抢 runner。
 
 看结果的命令是 `/opt/homebrew/bin/gh run watch` 与
@@ -2452,3 +2498,5 @@ Filters 页、面板的控件宿主、属性条件与名称过滤的输入框、
 | **CI 解释器版本与本机不同**：先假设它会改你产物的字节 | 同一个生成器，本机 Python 3.13 绿、CI 的 Python 3.14 红（`Archive` 在 ubuntu 与 macOS 两条腿上都红）。而且差异不只是「报不报错」——**92 个产物文件里有 72 个字节不同**，因为 3.14 给每个成员都置了 UTF-8 位。本机无法装 3.14（`install_binary` 不可用），于是写了个**行为复现器**：`inspect.getsource()` 取本机源码、把关键那一行换成目标版本的写法、`exec` 回模块再跑被测试脚本——拿到的失败与 CI **逐字一致** | ① **「本机全绿」推不出「CI 全绿」**，凡是走系统解释器/工具链的地方（Python、make、7z、shell）都要假设版本不同；② 差一个版本又装不上时，**照着目标版本的源码把那几行换掉做复现器**比猜快得多，也很容易证明复现器没失效（锚点行必须唯一出现，否则立刻报错退出）；③ 产物的字节要**跨版本可复现**——夹具/快照/生成代码一旦随解释器变，所有基于它的绿灯都要打问号 |
 | **「等价变异」有两类，别把第二类记成第一类** | 本轮 M4（去掉「本轮开头清理旧产物」那句 `rm -f`）**连报两次漏检**，两次原因完全不同：第一次是真的等价——`2>file` 与 `-o file` 自己就会截断/覆盖，所以在「二进制真的被启动」的路径上删不删毫无区别，**那句 `rm` 当时确实没有任何可观察作用**；第二次是**观测点选错了**——探针场景选成「构建失败」，而陈旧产物的危害不在控制台，**在上传的产物里**（构建失败时脚本根本不会去读 stderr），于是输出里当然什么都看不到。把清理挪到本轮最前面、观测点改成「陈旧文件是否残留」之后，M4 才成为一个真变异（`stale_survived: False → True`） | 宣布「这是等价变异」之前，**把观测点换成三种不同粒度各试一遍**（控制台输出 → 产物文件内容 → 退出码/副作用），否则会把「探针写漏了」误判成「代码没问题」。判据：如果是真等价，**换任何观测点都不会变**；只要换一个观测点就检出，那就是探针的问题。另外——真等价的代码要么删掉、要么在注释里写明它为什么留着（本轮选择保留并把清理位置前移，因为**失败路径上它确实有用**） |
 | **「清理上一轮产物」放在构建成功之后，等于失败路径上不清理** | `run-tests.sh` 原本在建完、启动二进制之前 `rm -f results.txt results.xml`，注释还写着「否则崩溃会被旧结果掩盖」。但那三行**执行不到**：构建失败、找不到可执行文件、qmake 失败时流程直接 `continue`，于是**失败的那一轮反而带着上一轮的产物**去上传——一份看起来正常的旧结果配一条「构建失败」的日志。这类「旧结果冒充新结果」是 CI 里最难被发现的一种假信号，因为它两份证据都能自圆其说 | 清理动作放在**本轮最开头**（`mkdir -p "${build_dir}"` 之后、任何可能 `continue` 的动作之前）。判断标准很简单：**问「这个清理在哪些路径上跑不到」，而不是「它写了没有」**。凡是要「先清后写」的产物，清理与写入之间不能夹任何可能提前退出的步骤 |
+| **macOS 上跑得好好的代码，Linux 上可能被 `_FORTIFY_SOURCE` 直接 `abort`** | `Tests/Folder` 的 `linksAreComparedWithoutFollowing()` 在 macOS 上过、在 ubuntu 上把整个套件带走，`stderr` 只有一句 **`*** buffer overflow detected ***: terminated`**——这是 glibc 的 `__chk_fail()` 打印的，即**抓到了一处缓冲区越界**。`_FORTIFY_SOURCE` 是 **glibc 独有**的机制（Ubuntu 默认开，24.04 上是 `=3`，用 `__builtin_dynamic_object_size`，连一部分**堆**分配也查得出来），**macOS 的 libc 里根本没有**。所以「本机全绿」在这里不是「代码没问题」，而是「本机少一道本来该有的检查」 | ① 遇到同一个用例「macOS 过、Linux 崩」，**先假设是内存安全问题**，而不是平台差异——`buffer overflow detected` / `stack smashing detected` 这类 glibc 的话一出现就可以直接定性；② 在本机用 **ASan**（`-fsanitize=address -g`）复现，它盯的是同一类错误、而且 macOS 上可用；③ 这类失败**不可能**靠读代码 + 推理在本机定位，必须让工具说话；④ 写「读进固定/增长缓冲」的代码时（本项目是 `linkTarget()` 里的 `readlink`），**把长度判断写清楚并加一条越界用例**——本机看不见的那一类错误只能靠读代码时更严 |
+| **崩溃时不打印「正在执行哪一句」，等于把定位工作留给下一个人** | `Tests/Folder` 崩了以后 `results.txt` 只剩前面 7 行 `PASS`，**最后执行到哪一句完全不知道**。Qt 的 `-v2` 会把每条 `QVERIFY/QCOMPARE` 都打出来，于是「最后一条打印出来的语句」就是崩之前那一句——但脚本平时不用 `-v2`（日志会大很多），崩溃时又不补跑 | 对「没产出 `Totals:` 行」的套件，**自动重跑一遍带 `-v2`**，把末尾若干行贴出来（`run-tests.sh` 已经有这条判据，加几行即可）。**注意 `-v2` 只在崩溃时用**：它是诊断工具，不是默认输出 |
