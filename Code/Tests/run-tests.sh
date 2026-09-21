@@ -139,6 +139,26 @@ for project in "${PROJECTS[@]}"; do
     echo "──────────────────────────────────────────────────────────────"
     echo "▶ ${suite}"
 
+    # 三种产物必须在**这一轮的任何动作之前**删掉。
+    #
+    # 为什么不能放在「构建成功之后、启动二进制之前」：那一段在构建失败、
+    # 找不到可执行文件时会 `continue` 掉，于是上一轮的产物原样留着，被当作
+    # 「这一轮的输出」上传——构建失败的那一轮反而会带上一份看起来正常的旧结果。
+    # 这类「旧结果冒充新结果」是 CI 里最难发现的一种假信号。
+    #
+    # 注：`results.txt/xml` 由二进制的 `-o` 覆盖写、`stderr.log` 由 `2>` 截断，
+    # 所以在「二进制真的被启动」的路径上删不删是一回事；**区别只在失败路径上**，
+    # 也正是这一句存在的唯一理由（这一点由 §变异 M4 的失败路径探针证明）。
+    results_txt="${build_dir}/results.txt"
+    results_xml="${build_dir}/results.xml"
+    # 崩溃原因（`Received signal 11`、`ASSERT`、`qFatal` 打印的那一句）**只走 stderr**。
+    # 以前这里把它和 stdout 一起丢进 `/dev/null`，于是 CI 上「某个套件红了」能看到的
+    # 只有「没有产出 Totals 行」这一句，看不出**死在哪、为什么死**。
+    # 实测代价：ubuntu 腿上 `Tests/Folder` 跑完第 7 个用例就没了、一个字的线索都没有。
+    # 所以 stderr 要落盘；stdout 继续丢弃——用例输出已经由 `-o <file>` 写进 results.txt 了。
+    stderr_log="${build_dir}/stderr.log"
+    rm -f "${results_txt}" "${results_xml}" "${stderr_log}"
+
     # 构建输出一律落盘到 `<build_dir>/build.log`。以前是直接丢进 /dev/null，
     # 于是 CI 里 17 个（Ubuntu）/ 26 个（Windows）套件「构建失败」而**一个字的原因
     # 都没有**——只有「哪个套件红了」，没有「为什么红」。那正好是这条流水线要
@@ -208,10 +228,10 @@ for project in "${PROJECTS[@]}"; do
     #
     # 跑之前先删掉上一轮的两份产物：套件崩溃时不会写文件，留着旧的会被当成
     # 「这一轮的输出」——那会让一次崩溃看起来像一次通过。
-    results_txt="${build_dir}/results.txt"
-    results_xml="${build_dir}/results.xml"
-    rm -f "${results_txt}" "${results_xml}"
-    "${binary}" -o "${results_txt},txt" -o "${results_xml},junitxml" >/dev/null 2>&1
+    # 跑之前先删掉上一轮的两份产物：套件崩溃时不会写文件，留着旧的会被当成
+    # 「这一轮的输出」——那会让一次崩溃看起来像一次通过。（删除动作已挪到
+    # 本轮最开头，这里只负责启动。）
+    "${binary}" -o "${results_txt},txt" -o "${results_xml},junitxml" >/dev/null 2>"${stderr_log}"
     status=$?
     output=""
     if [[ -f "${results_txt}" ]]; then
@@ -242,6 +262,15 @@ for project in "${PROJECTS[@]}"; do
         # 单独报一行，不去把「用例数」与「套件数」这两个单位混在一起。
         if [[ -z "${summary}" ]]; then
             echo "    （没有产出 Totals 行：套件可能在初始化阶段就崩了）"
+            # 崩溃原因只出现在 stderr 里。有内容就贴结尾若干行——CI 上排查的人
+            # 不必再下载产物；没内容本身也是信息（被 SIGKILL 或段错误直接带走，
+            # 连一句遗言都没留下），所以这两种情况要分开说，不能都只说「崩了」。
+            if [[ -s "${stderr_log}" ]]; then
+                echo "    stderr 结尾（完整内容见 ${stderr_log}，随日志产物一起上传）："
+                tail -n 15 "${stderr_log}" | sed 's/^/    | /'
+            else
+                echo "    stderr 是空的——连一句遗言都没留下（例如被 SIGKILL 或直接段错误带走的）。"
+            fi
             no_summary_suites="${no_summary_suites}${suite} "
             no_summary_count=$((no_summary_count + 1))
         fi

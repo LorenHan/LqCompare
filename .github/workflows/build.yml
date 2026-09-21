@@ -205,6 +205,8 @@ jobs:
       # 落到 `_test-build/<套件>/`，这里整体上传（`always()` 保证失败时也执行）。
       # `build.log` 是**构建**失败时唯一的线索（第一次跑 CI 时 17 个 Ubuntu 套件
       # 与 26 个 Windows 套件构建失败，而构建输出被丢进了 /dev/null，无从排查）。
+      # `stderr.log` 是**运行期崩溃**唯一的线索（套件崩了就写不出 results.txt，
+      # 而「为什么崩」只在 stderr 上；ubuntu 腿的 `Tests/Folder` 就是这么一条）。
       - name: 上传测试日志
         if: always()
         uses: actions/upload-artifact@v4
@@ -214,6 +216,7 @@ jobs:
             _test-build/**/results.txt
             _test-build/**/results.xml
             _test-build/**/build.log
+            _test-build/**/stderr.log
           if-no-files-found: warn
 
       # ENG-004 第 4 条：可执行文件作为构建产物上传，便于手工验证。
