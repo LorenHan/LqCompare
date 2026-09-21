@@ -7,19 +7,6 @@
 
 namespace LqCompare { namespace Text {
 namespace {
-QString normalized(QString text, const CompareOptions &options)
-{
-    if (options.ignoreCase) text = text.toCaseFolded();
-    if (options.whitespace == Whitespace::IgnoreChanges) return text.simplified();
-    if (options.whitespace == Whitespace::IgnoreAll) {
-        QString compact;
-        compact.reserve(text.size());
-        for (const QChar ch : text) if (!ch.isSpace()) compact += ch;
-        return compact;
-    }
-    return text;
-}
-
 QVector<QString> keys(const QVector<Line> &lines, const QVector<Line> &other,
                       const CompareOptions &options)
 {
@@ -32,7 +19,7 @@ QVector<QString> keys(const QVector<Line> &lines, const QVector<Line> &other,
         // Absence of a final newline is independent of the LF/CRLF/CR rule.
         int ending = static_cast<int>(eol);
         if (options.ignoreEol && ending) ending = 1;
-        result.append(normalized(lines[i].text, options) + QChar(0) + QChar(ending));
+        result.append(normalizedLine(lines[i].text, options) + QChar(0) + QChar(ending));
     }
     return result;
 }
@@ -315,6 +302,26 @@ bool hasImplementedDescriptor(const QVector<AlignmentDescriptor> &table, Alignme
         if (descriptor.alignment == alignment) return descriptor.implemented;
     return false;
 }
+}
+
+// 规范化链本体。**只此一份**：`keys()` 走它，测试也走它，
+// 因此「链里有几步、按什么顺序」这件事不存在第二个说法。
+//
+// 顺序上先做大小写折叠、再做空白处理。这两步**可交换**（折叠既不会造出空白、
+// 也不会吃掉空白），所以这个顺序不是契约的一部分——把它调换不会、也不该让任何用例变红。
+// 真正是契约的是「两步都做、两侧都做、做完才判等」，那三条各有用例守着。
+QString normalizedLine(const QString &text, const CompareOptions &options)
+{
+    QString result = text;
+    if (options.ignoreCase) result = result.toCaseFolded();
+    if (options.whitespace == Whitespace::IgnoreChanges) return result.simplified();
+    if (options.whitespace == Whitespace::IgnoreAll) {
+        QString compact;
+        compact.reserve(result.size());
+        for (const QChar ch : result) if (!ch.isSpace()) compact += ch;
+        return compact;
+    }
+    return result;
 }
 
 Result compare(const QVector<Line> &left, const QVector<Line> &right, const CompareOptions &options)

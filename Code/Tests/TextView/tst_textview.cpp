@@ -10,6 +10,7 @@
 #include <QTimer>
 #include <QComboBox>
 #include <QShortcut>
+#include <QTextEdit>
 #include "textcomparesession.h"
 #include "textcompareview.h"
 
@@ -22,6 +23,29 @@ void writeFile(const QString &path, const QByteArray &bytes)
 QByteArray readFile(const QString &path)
 {
     QFile file(path); file.open(QIODevice::ReadOnly); return file.readAll();
+}
+// 行号 → 该行**实际生效**的底色。
+//
+// 读控件里的 `extraSelections`，而不是另抄一份调色板：抄一份就有了第二份事实来源，
+// 改一边不会让另一边红（本仓已经把「同一件事两份实现」列为坑，见 handoff §6）。
+// 顺带这也回答了「视图到底画了什么」这个问题——只有真正进了 `extraSelections`
+// 的行才会被填色，跳过某个 Change 的实现会在这里露出「这一行没有标记」。
+QHash<int, QColor> rowColours(const TextPane *pane)
+{
+    QHash<int, QColor> colours;
+    for (const QTextEdit::ExtraSelection &selection : pane->extraSelections())
+        colours.insert(selection.cursor.blockNumber(), selection.format.background().color());
+    return colours;
+}
+// 「弱」的可比量：底色带多少彩度（最大通道 − 最小通道）。
+//
+// 不用「到白色的距离」或亮度：忽略色 (237,240,246) 的亮度比某些差异色还高，
+// 拿亮度比会得出「忽略比差异更显眼」这种与直觉相反的结论。彩色差异色与
+// 忽略色的真正区别在**有没有颜色**上，所以彩度才是这里该比的量。
+int chromaOf(const QColor &colour)
+{
+    return qMax(qMax(colour.red(), colour.green()), colour.blue())
+         - qMin(qMin(colour.red(), colour.green()), colour.blue());
 }
 }
 class TextViewTests : public QObject {
@@ -389,6 +413,85 @@ private slots:
         for (QShortcut *shortcut : shortcuts) QVERIFY(shortcut->isEnabled());
         session.setUseLocalShortcuts(false);
         for (QShortcut *shortcut : shortcuts) QVERIFY(!shortcut->isEnabled());
+    }
+
+    // TXT-008 标准 1 后半句：被忽略的差异**仍要在视图里留下弱化标记**。
+    //
+    // 为什么这一条非要有视图级用例：标准的前半句（不再算差异）服务层已经守住了，
+    // 而「仍有弱化提示」只在**画出来的东西**上成立。一个把 `Change::Ignored`
+    // 直接 `continue` 掉的 `highlight()` 能让服务层的所有用例全绿，
+    // 界面上却表现为「明明有大小写差异，却干干净净什么都看不出来」——
+    // 用户会以为文件完全一样，这正是本条要防的那种错。
+    void ignoredRowsStayMarkedAndWeakerThanRealDifferences()
+    {
+        // ① 同一对文件里既有「仅大小写不同」的行，也有一处真差异：
+        //    这样忽略色与真实差异色可以在**同一次渲染**里直接比。
+        TextCompareSession session;
+        QVERIFY(session.open());
+        QVERIFY(session.setText(true, "Alpha\nkeep\nBravo\n"));
+        QVERIFY(session.setText(false, "alpha\nkeep\nBravo2\n"));
+        QScopedPointer<QWidget> widget(session.createWidget());
+        widget->resize(1280, 700);
+        widget->show();
+        // 关着时两行都算差异；开了之后只剩第 2 行那处真差异。
+        QCOMPARE(session.comparison().differences.size(), 2);
+        widget->findChild<QCheckBox *>("ignoreCase")->setChecked(true);
+        QCOMPARE(session.comparison().differences.size(), 1);
+        QCOMPARE(session.comparison().ignoredBlocks, 1);
+        auto *left = widget->findChild<TextPane *>("leftTextPane");
+        auto *right = widget->findChild<TextPane *>("rightTextPane");
+        const auto leftColours = rowColours(left);
+        const auto rightColours = rowColours(right);
+        // 第 0 行是「仅大小写不同」→ 差异身份没了，但两侧都仍必须被标记。
+        QVERIFY2(leftColours.contains(0), "左侧的被忽略行没有留下任何标记");
+        QVERIFY2(rightColours.contains(0), "右侧的被忽略行没有留下任何标记");
+        // 第 1 行真的相同，不该有标记——否则「有标记」这件事就不传递任何信息了。
+        QVERIFY(!leftColours.contains(1));
+        QVERIFY(!rightColours.contains(1));
+        // 第 2 行是真差异，必须换一种底色。
+        QVERIFY(leftColours.contains(2));
+        QVERIFY(rightColours.contains(2));
+        const QColor ignored = leftColours.value(0);
+        const QColor replaced = leftColours.value(2);
+        QVERIFY2(ignored != replaced, "被忽略的行与真实差异行用了同一种底色");
+        // 「弱化」在这里的判据是彩度更低：忽略色的作用是让人**能看见但不去处理**，
+        // 真实差异色的作用正相反。这条语料里真差异只会是 Replace（两侧行数相同、
+        // 逐行对应），所以这个比较是确定的。
+        QVERIFY2(chromaOf(ignored) < chromaOf(replaced),
+                 qPrintable(QStringLiteral("忽略色 %1 的彩度不低于差异色 %2")
+                                .arg(ignored.name(), replaced.name())));
+        // 而且标记必须看得见：底色不能等于编辑区自己的底色（等于白底 = 没标记）。
+        QVERIFY2(ignored != left->palette().base().color(),
+                 "被忽略行的底色与编辑区底色相同，等于没有提示");
+
+        // ② 上面只比过 Replace。把 Insert 与 Delete 的底色也采出来，
+        //    断言忽略色与**每一种**真实差异色都不同——否则「弱化」可能只是
+        //    恰好等于某个差异色，在别的语料里就看不出来了。
+        QSet<QRgb> realDifferenceColours;
+        const QVector<QPair<QString, QString>> fixtures{
+            {QStringLiteral("A\ntwo\nC\n"), QStringLiteral("A\nXXX\nC\nNEW\n")},  // Replace + Insert
+            {QStringLiteral("A\ntwo\nC\nZed\n"), QStringLiteral("A\nXXX\nC\n")},  // Replace + Delete
+        };
+        for (const auto &paths : fixtures) {
+            TextCompareSession other;
+            QVERIFY(other.open());
+            QVERIFY(other.setText(true, paths.first));
+            QVERIFY(other.setText(false, paths.second));
+            QScopedPointer<QWidget> holder(other.createWidget());
+            holder->resize(1280, 700);
+            holder->show();
+            for (const char *name : {"leftTextPane", "rightTextPane"}) {
+                auto *pane = holder->findChild<TextPane *>(QString::fromLatin1(name));
+                const auto colours = rowColours(pane);
+                for (auto it = colours.constBegin(); it != colours.constEnd(); ++it)
+                    realDifferenceColours.insert(it.value().rgb());
+            }
+        }
+        // Insert 与 Delete 必须真的被采到，否则上面那句「与每一种都不同」是空话。
+        QVERIFY2(realDifferenceColours.size() >= 3,
+                 qPrintable(QStringLiteral("夹具没有造齐三种真实差异色（只采到 %1 种）")
+                                .arg(realDifferenceColours.size())));
+        QVERIFY(!realDifferenceColours.contains(ignored.rgb()));
     }
 };
 QTEST_MAIN(TextViewTests)

@@ -1,5 +1,6 @@
 #include <QtTest>
 #include <QFile>
+#include <QLocale>
 #include <QTemporaryDir>
 #include <QElapsedTimer>
 #include "textdiff.h"
@@ -527,6 +528,277 @@ private slots:
         // 受限之后仍然必须是纯函数：预算的消耗顺序不能受任何不确定来源影响。
         const auto again = compare(left, right);
         QCOMPARE(fingerprint(again), fingerprint(result));
+    }
+
+    // =========================================================================
+    // TXT-008 忽略大小写差异（issue #63）
+    //
+    // 这一组守的是「Unicode 大小写**折叠**」而不是「小写化」。两者在 ASCII 上完全
+    // 一样，只在非 ASCII 上分家；而分家的那几处（希腊语词尾 sigma、德语 ß、
+    // Kelvin 符号、土耳其语 i/İ）恰好是用户真的会遇到、错了也看不出原因的输入。
+    //
+    // 为什么这一组不去新建一个套件：实现（规范化链）本来就住在 `textdiff.{h,cpp}`，
+    // 而 TXT-008 的完成标准里**没有一条**指向还不存在的模块——与 TXT-002/TXT-003
+    // 同一处置方式（见 handoff §1.25）。新套件只会把同一个 `compare()` 再包一层。
+    // =========================================================================
+
+    // 标准 1 前半句 + 标准 2 前半句：对齐固定的语料里，开关切换改变**每一行**的重要性。
+    //
+    // 为什么强调「对齐固定」：语料等长逐行对应，Myers 只会产出
+    // Replace / Equal / Ignored 三种块，不会有 Insert / Delete 把行错开，
+    // 于是「第 i 行」在两侧都有定义，断言才能落在**逐行**上。标准 2 后半句明确说了
+    // 「不要求差异块数等于大小写行数」——所以「数块个数」这件事本身说明不了问题，
+    // 逐行断言才是那条标准要的形状。
+    void caseOnlyChangesTurnRowsIntoIgnoredButKeepThemMarked()
+    {
+        auto left = decoded("Alpha\nBravo\nCharlie\nDelta\n");
+        // 右侧**故意**有一行写成全大写：两侧都含会被折叠改动的字符，
+        // 于是「只对一侧应用规范化」的实现会在这里红——若右侧全是已经折好的
+        // 小写，那种错误在数据上与正确实现完全重合，用例会静默放过它。
+        auto right = decoded("alpha\nBRAVO\ncharlie\ndelta\n");
+        CompareOptions options;
+
+        const auto before = compare(left.lines(), right.lines(), options);
+        QCOMPARE(before.blocks.size(), 1);
+        QCOMPARE(before.blocks.first().change, Change::Replace);
+        QCOMPARE(before.differences.size(), 1);
+        QCOMPARE(before.ignoredBlocks, 0);
+        QCOMPARE(before.rows.size(), 4);
+        for (const Row &row : before.rows) QCOMPARE(row.change, Change::Replace);
+
+        options.ignoreCase = true;
+        const auto after = compare(left.lines(), right.lines(), options);
+        // 行数与行本身都没变，变的是每一行的**语义**（真差异 → 被忽略）。
+        // 视图画弱化标记的依据就是这个语义，所以它必须留在 `Result` 里：
+        // 一个「把忽略行直接当成不存在」的实现会让这条红。
+        QCOMPARE(after.rows.size(), before.rows.size());
+        for (const Row &row : after.rows) QCOMPARE(row.change, Change::Ignored);
+        QCOMPARE(after.blocks.size(), 1);
+        QCOMPARE(after.blocks.first().change, Change::Ignored);
+        QVERIFY(after.differences.isEmpty());
+        QCOMPARE(after.ignoredBlocks, 1);
+        // 折叠只发生在判等用的键上，原文一个字都不许动。
+        QCOMPARE(left.lines().at(0).text, QStringLiteral("Alpha"));
+        QCOMPARE(right.lines().at(0).text, QStringLiteral("alpha"));
+    }
+
+    // 标准 1 + 标准 2：混合语料里**只有**「仅大小写不同」的行失去差异身份。
+    // 这一条防的是「开了忽略大小写就整体放行」——那种实现同样能让上一条全绿，
+    // 却会让真正不同的行也悄悄消失，是本模块最危险的一种错。
+    void onlyCaseOnlyRowsLoseDifferenceStatus()
+    {
+        auto left = decoded("Alpha\nkeep\nBravo\n");
+        // 与上一条同理：第 0 行的右侧写成全大写，让「只折一侧」的错误无处躲。
+        auto right = decoded("ALPHA\nkeep\nBravo2\n");
+        CompareOptions options;
+
+        const auto off = compare(left.lines(), right.lines(), options);
+        QCOMPARE(off.blocks.size(), 3);
+        QCOMPARE(off.blocks[0].change, Change::Replace);
+        QCOMPARE(off.blocks[1].change, Change::Equal);
+        QCOMPARE(off.blocks[2].change, Change::Replace);
+        QCOMPARE(off.rows.size(), 3);
+        QCOMPARE(off.rows[0].change, Change::Replace);
+        QCOMPARE(off.rows[1].change, Change::Equal);
+        QCOMPARE(off.rows[2].change, Change::Replace);
+        QCOMPARE(off.differences.size(), 2);
+        QCOMPARE(off.differences[0], 0);
+        QCOMPARE(off.differences[1], 2);
+        QCOMPARE(off.ignoredBlocks, 0);
+
+        options.ignoreCase = true;
+        const auto on = compare(left.lines(), right.lines(), options);
+        QCOMPARE(on.blocks.size(), 3);
+        QCOMPARE(on.blocks[0].change, Change::Ignored);
+        QCOMPARE(on.blocks[1].change, Change::Equal);
+        QCOMPARE(on.blocks[2].change, Change::Replace);
+        QCOMPARE(on.rows.size(), 3);
+        QCOMPARE(on.rows[0].change, Change::Ignored);
+        QCOMPARE(on.rows[1].change, Change::Equal);
+        QCOMPARE(on.rows[2].change, Change::Replace);
+        QCOMPARE(on.differences.size(), 1);
+        QCOMPARE(on.differences.first(), 2);
+        QCOMPARE(on.ignoredBlocks, 1);
+        // 被忽略的那一行必须**仍是一个块**，不许并进相邻的 Equal 块：
+        // 并进去等于「视图再没有任何理由把它画出来」，标准 1 那句
+        // 「仍在视图中有弱化提示」就落空了。
+        QCOMPARE(on.blocks[0].leftCount, 1);
+        QCOMPARE(on.blocks[0].rightCount, 1);
+        QCOMPARE(on.blocks[0].rowCount, 1);
+    }
+
+    // 标准 3：统一规范化链。
+    //
+    // 这一条必须造一个「少做任何一步都不相等」的输入，否则它测不出链里掉了哪一步
+    // ——那种实现下用例照样是绿的。语料于是刻意选成**同一行同时有大小写和空白变化**。
+    void normalizationChainAppliesEveryEnabledRuleToBothSides()
+    {
+        auto left = decoded("Foo  Bar\n");   // 首字母大写 + 两个空格
+        auto right = decoded("foo bar\n");   // 全小写 + 一个空格
+        QVERIFY(left.lines().first().text != right.lines().first().text);
+
+        CompareOptions options;
+        // 只开大小写：空白那一步没做 → 仍是差异。
+        options.ignoreCase = true;
+        QCOMPARE(compare(left.lines(), right.lines(), options).differences.size(), 1);
+        // 只开空白：大小写那一步没做 → 仍是差异。
+        options.ignoreCase = false;
+        options.whitespace = Whitespace::IgnoreChanges;
+        QCOMPARE(compare(left.lines(), right.lines(), options).differences.size(), 1);
+        // 两步都做 → 判等。
+        options.ignoreCase = true;
+        const auto both = compare(left.lines(), right.lines(), options);
+        QVERIFY(both.differences.isEmpty());
+        QCOMPARE(both.ignoredBlocks, 1);
+        // 而且**两侧都过了整条链**：左右对调，结论必须一致。
+        // 只对一侧应用规则的实现（例如只折叠右侧）会在这里露出来。
+        const auto swapped = compare(right.lines(), left.lines(), options);
+        QVERIFY(swapped.differences.isEmpty());
+        QCOMPARE(swapped.ignoredBlocks, both.ignoredBlocks);
+        QCOMPARE(swapped.rows.size(), both.rows.size());
+        QCOMPARE(swapped.blocks.size(), both.blocks.size());
+        // 链本身可以直接问：两步都生效时，规范化结果是「全小写 + 单空格」。
+        QCOMPARE(normalizedLine(QStringLiteral("Foo  Bar"), options), QStringLiteral("foo bar"));
+        // 规范化只是「判等用的键」，原文一个字都不动。
+        QCOMPARE(left.lines().first().text, QStringLiteral("Foo  Bar"));
+        QCOMPARE(right.lines().first().text, QStringLiteral("foo bar"));
+    }
+
+    // 标准 4 前半句：非 ASCII 按 Unicode 大小写规则处理。
+    //
+    // 表里每一行都点名一条规则；期望值是**按 Unicode simple case folding 的语义
+    // 手推**出来的，不是把实现跑一遍抄回来的。两处故意写成 `false` 的是已知限制
+    // 而不是 bug（Qt 5.15 只提供 simple folding，不做多字符展开），
+    // 取舍的完整理由写在 `textdiff.h` 的 `normalizedLine()` 注释里。
+    void nonAsciiFoldingFollowsUnicodeSimpleCaseFolding()
+    {
+        struct Sample { const char *left; const char *right; bool equal; const char *rule; };
+        const Sample samples[] = {
+            {"\xC3\x84\xC3\x96\xC3\x9C", "\xC3\xA4\xC3\xB6\xC3\xBC", true,
+             "Latin-1 的 ÄÖÜ/äöü"},
+            {"\xE1\xBA\x9E", "\xC3\x9F", true,
+             "U+1E9E ẞ 折成 U+00DF ß"},
+            // 注意 `\x9F` 后面紧跟着 `e` 会连成一个超范围的十六进制转义，
+            // 所以字符串必须在这里断开——不是排版，是 C++ 的取最长匹配规则。
+            {"STRASSE", "stra\xC3\x9F" "e", false,
+             "simple folding 不展开 ß→ss"},
+            {"\xEF\xAC\x81le", "FILE", false,
+             "simple folding 不展开连字 ﬁ→fi"},
+            {"\xCE\x9F\xCE\x94\xCE\x9F\xCE\xA3", "\xCE\xBF\xCE\xB4\xCE\xBF\xCF\x82", true,
+             "词尾 sigma：Σ 与 ς 都折成 σ（换成小写化，这一条会红）"},
+            {"\xCE\xA3\xCE\xA3\xCE\xA3", "\xCF\x82\xCF\x82\xCF\x82", true,
+             "三种 sigma 互相等价"},
+            {"\xE2\x84\xAA", "k", true,
+             "U+212A KELVIN SIGN 折成 k"},
+            {"\xC2\xB5", "\xCE\xBC", true,
+             "U+00B5 MICRO SIGN 折成 U+03BC"},
+            {"\xCE\x9C", "\xCE\xBC", true,
+             "U+039C 折成 U+03BC"},
+            {"\xD0\x9F\xD0\xA0\xD0\x98\xD0\x92\xD0\x95\xD0\xA2",
+             "\xD0\xBF\xD1\x80\xD0\xB8\xD0\xB2\xD0\xB5\xD1\x82", true,
+             "西里尔文"},
+            {"\xF0\x90\x90\x80", "\xF0\x90\x90\xA8", true,
+             "非 BMP：Deseret U+10400 折成 U+10428"},
+            {"\xE4\xB8\xAD\xE6\x96\x87", "\xE4\xB8\xAD\xE6\x96\x87", true,
+             "无大小写概念的文字，折叠必须是恒等"},
+        };
+        for (const Sample &sample : samples) {
+            const QString left = QString::fromUtf8(sample.left);
+            const QString right = QString::fromUtf8(sample.right);
+            CompareOptions options;
+            options.ignoreCase = true;
+            const bool equal = compare(QVector<Line>{{left, Eol::LF}},
+                                       QVector<Line>{{right, Eol::LF}},
+                                       options).differences.isEmpty();
+            QVERIFY2(equal == sample.equal,
+                     qPrintable(QStringLiteral("大小写折叠与 Unicode 规则不符（%1）：%2 / %3")
+                                    .arg(QString::fromUtf8(sample.rule), left, right)));
+            // 反向的一半：原文不同的那些对，**关掉**折叠时必须仍是差异。
+            // 少了这一半，一个「永远返回无差异」的实现能让上面全部通过。
+            if (left != right) {
+                options.ignoreCase = false;
+                QCOMPARE(compare(QVector<Line>{{left, Eol::LF}},
+                                 QVector<Line>{{right, Eol::LF}},
+                                 options).differences.size(), 1);
+            }
+        }
+    }
+
+    // 标准 4 后半句：土耳其语 i/İ 的取舍必须有明确结论并被记录。
+    //
+    // 这里钉的是 `textdiff.h` 里那张表：我们**不做**土耳其语折叠，于是
+    // `I`/`i` 相同，而 `İ`/`i` 与 `ı`/`I` 都不同——与土耳其语正字法**恰好相反**。
+    // 取舍是刻意的（理由：结论不许随机器 locale 变），把它写成用例是为了让
+    // 「哪天有人觉得这是个 bug、顺手改成 locale-aware」当场变红，
+    // 而不是在界面上表现为「同一对文件在两台机器上结果不同」。
+    //
+    // 第二段还顺带证明了一件事：结果与 `QLocale::setDefault()` 无关。
+    // 今天 `toCaseFolded()` 通过得很轻松，但这条不变量的作用不是区分某个已知实现，
+    // 而是把门关死——谁把 locale 引进判等，它就在这里红。
+    void turkicCasePairsFollowTheRecordedTradeoffAndStayLocaleIndependent()
+    {
+        const QString capitalI = QStringLiteral("I");
+        const QString lowerI = QStringLiteral("i");
+        const QString dotless = QString::fromUtf8("\xC4\xB1");  // U+0131 ı
+        const QString dotted = QString::fromUtf8("\xC4\xB0");   // U+0130 İ
+        CompareOptions options;
+        options.ignoreCase = true;
+        auto equal = [&options](const QString &a, const QString &b) {
+            return compare(QVector<Line>{{a, Eol::LF}}, QVector<Line>{{b, Eol::LF}}, options)
+                .differences.isEmpty();
+        };
+        QVERIFY(equal(capitalI, lowerI));    // 与 locale 无关的折叠：相同
+        QVERIFY(!equal(dotted, lowerI));     // 土耳其语里相同，本实现里不同
+        QVERIFY(!equal(dotless, capitalI));  // 土耳其语里相同，本实现里不同
+        QVERIFY(!equal(dotless, lowerI));    // 两边一致：不同
+
+        // 上面四条在土耳其语 locale 下必须**原样成立**。
+        // 守卫用 RAII：任何一条断言失败都会 `return`，析构仍然会跑，
+        // 不会把土耳其语 locale 留给后面的用例。
+        struct LocaleGuard {
+            QLocale saved;
+            ~LocaleGuard() { QLocale::setDefault(saved); }
+        } guard{QLocale()};
+        QLocale::setDefault(QLocale(QLocale::Turkish, QLocale::Turkey));
+        QVERIFY(equal(capitalI, lowerI));
+        QVERIFY(!equal(dotted, lowerI));
+        QVERIFY(!equal(dotless, capitalI));
+        QVERIFY(!equal(dotless, lowerI));
+        QCOMPARE(normalizedLine(dotted, options), dotted);   // İ 折成它自己（simple folding）
+        QCOMPARE(normalizedLine(dotless, options), dotless);
+    }
+
+    // 标准 4 的附带契约（记录在 `textdiff.h`）：折叠**长度守恒**。
+    //
+    // 抽成独立用例是因为它守的是另一件事：不是「折得对不对」，而是
+    // 「折叠后还能不能把规范化下标直接当原文下标用」——TXT-025 的行内字符级高亮
+    // 靠的就是这一点。哪天把 simple folding 换成 full folding（ß→ss、ﬁ→ffi），
+    // 这条会红，提醒对方先去把偏移映射补上，而不是只改链本身。
+    void normalizationPreservesLengthSoOffsetsStayAddressable()
+    {
+        CompareOptions options;
+        options.ignoreCase = true;
+        const QString samples[] = {
+            QStringLiteral("plain text 123"),
+            QString::fromUtf8("\xC3\x84\xC3\x96\xC3\x9C\xC3\xA4\xC3\xB6\xC3\xBC\xC3\x9F"),
+            QString::fromUtf8("\xCE\x9F\xCE\x94\xCE\x9F\xCE\xA3\xCF\x82\xCF\x83\xCE\xA3"),
+            QString::fromUtf8("\xC4\xB0\xC4\xB1I"),
+            QString::fromUtf8("\xF0\x90\x90\x80\xF0\x90\x90\xA8"),
+            QString::fromUtf8("\xE4\xB8\xAD\xE6\x96\x87\xE5\xAD\x97"),
+            QString::fromUtf8("\xE2\x84\xAA\xC2\xB5\xCE\x9C\xEF\xAC\x81"),
+        };
+        bool sawAFold = false;
+        for (const QString &sample : samples) {
+            const QString folded = normalizedLine(sample, options);
+            QCOMPARE(folded.size(), sample.size());
+            if (folded != sample) sawAFold = true;
+        }
+        // 保证上面那句不是在比「字符串等于它自己」：至少要有样本真的被折过。
+        QVERIFY2(sawAFold, "样本集里没有一个被折叠，长度断言等于恒真");
+        QVERIFY(normalizedLine(QString::fromUtf8("\xCE\x9F\xCE\x94\xCE\x9F\xCE\xA3"), options)
+                != QString::fromUtf8("\xCE\x9F\xCE\x94\xCE\x9F\xCE\xA3"));
+        QVERIFY(normalizedLine(QString::fromUtf8("\xF0\x90\x90\x80"), options)
+                != QString::fromUtf8("\xF0\x90\x90\x80"));
     }
 };
 QTEST_APPLESS_MAIN(TextTests)
