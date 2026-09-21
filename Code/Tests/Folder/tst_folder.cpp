@@ -54,14 +54,25 @@ public:
     QString unreadableFile;
     QString changingFile;
     QHash<QString, QString> aliases;
+    // DIR-008 第 1 条要造一个「申报尺寸相同、实际读起来更短」的右侧：
+    // physicalPaths 把逻辑路径指向另一个**真的**文件，frozenInfo 让申报的元数据
+    // 在整场比较里保持第一次读到的样子（否则「大小相等」这条前置当场就不成立，
+    // 循环压根进不去，那个 break 也就无从观察）。
+    QHash<QString, QString> physicalPaths;
+    QHash<QString, Files::FileInfo> frozenInfo;
     mutable int fileStats = 0;
     Qt::CaseSensitivity caseSensitivity() const override { return native->caseSensitivity(); }
     QChar separator() const override { return native->separator(); }
     QString pathNormalize(const QString &p, Files::ErrorCode *e) const override { return native->pathNormalize(p, e); }
     bool isAbsolutePath(const QString &p) const override { return native->isAbsolutePath(p); }
-    QString toNativePath(const QString &p) const override { return native->toNativePath(p); }
+    QString toNativePath(const QString &p) const override
+    {
+        return native->toNativePath(physicalPaths.value(p, p));
+    }
     Files::FileInfo stat(const QString &p, Files::ErrorCode *e) const override
     {
+        if (frozenInfo.contains(p))
+            return frozenInfo.value(p);
         if (p == unreadableFile) {
             if (e) *e = Files::FileSystemError::PermissionDenied;
             return {};
@@ -348,6 +359,42 @@ private slots:
         QVERIFY(!session.setComparisonOptions(negative, &reason));
         QVERIFY(reason.contains(QStringLiteral("只比较前")));
         QCOMPARE(session.comparisonOptions().compareFirstBytes, qint64(2));
+    }
+
+    // DIR-008 第 1 条的核心词是「**提前**」：遇首个不同字节就判定不同，
+    // 而不是「读完之后再去找第一个差异」。这一条此前**没有任何用例守着**：
+    // 把 compareFile() 里的 break 删掉，全部用例（3687 条）一条都不会红——
+    // 因为既有的夹具都是「大小相同、只有一处差异」，命中那一处之后剩下的块两侧全同，
+    // 循环就算不停也改写不了 firstDifference。
+    //
+    // 造法：申报尺寸取自注入层**冻结**的快照（两侧都报 600000），而右侧真正被打开的
+    // 那个文件只有 100 字节。于是「大小相等」这条前置成立、循环进得去，第一个块就不同；
+    // 而**如果循环不在命中处停下**，它会接着读第二个块，那一块（左 262144 / 右 0）
+    // 同样「不同」，firstDifference 会被改写成 262144、再改成 524288。
+    // 所以「断言 100」就是「有没有真的提前停下」的判据。
+    void comparisonStopsAtTheFirstDifferingByte()
+    {
+        Pair pair;
+        const QByteArray declared(600000, 'a');
+        QVERIFY(writeFile(pair.left + "/trunc.bin", declared));
+        QVERIFY(writeFile(pair.right + "/trunc.bin", declared));
+        // 真正被读的那一份只有 100 字节，且刻意放在两个根之外（不会被枚举到）。
+        const QString physicallyShort = pair.temp.path() + QStringLiteral("/outside.bin");
+        QVERIFY(writeFile(physicallyShort, QByteArray(100, 'a')));
+
+        FaultFileSystem fs;
+        Files::ErrorCode error;
+        fs.frozenInfo.insert(pair.left + "/trunc.bin", fs.native->stat(pair.left + "/trunc.bin", &error));
+        fs.frozenInfo.insert(pair.right + "/trunc.bin", fs.native->stat(pair.right + "/trunc.bin", &error));
+        fs.physicalPaths.insert(pair.right + "/trunc.bin", physicallyShort);
+
+        const auto result = Folder::compare(pair.left, pair.right, {}, nullptr, {}, &fs);
+        QCOMPARE(result.entries.size(), 1);
+        const auto &entry = result.entries.first();
+        QCOMPARE(entry.status, Folder::Status::Different);
+        QCOMPARE(entry.firstDifference, qint64(100));
+        QVERIFY2(entry.explanation.contains(QStringLiteral("100")), qPrintable(entry.explanation));
+        QVERIFY(!entry.partialComparison);
     }
 
     void emptyDirectoriesAndEmptyFiles()
