@@ -313,7 +313,10 @@ bool hasImplementedDescriptor(const QVector<AlignmentDescriptor> &table, Alignme
 // 真正是契约的是「两步都做、两侧都做、做完才判等」，那三条各有用例守着。
 QString normalizedLine(const QString &text, const CompareOptions &options)
 {
-    QString result = text;
+    // 替换规则（TXT-012）排在链的**最前面**，先于大小写折叠与空白模式。
+    // 理由见 `CompareOptions::replacements`：规则的正则是对原文写的。
+    // 空集合时 `apply()` 是一次短路，所以「没开规则」与「没有这一层」等价。
+    QString result = options.replacements.apply(text);
     if (options.ignoreCase) result = result.toCaseFolded();
     if (options.whitespace == Whitespace::IgnoreChanges) return result.simplified();
     if (options.whitespace == Whitespace::IgnoreAll) {

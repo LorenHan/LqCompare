@@ -1,6 +1,7 @@
 #ifndef LQCOMPARE_TEXTDIFF_H
 #define LQCOMPARE_TEXTDIFF_H
 
+#include "linereplacements.h"
 #include "textdocument.h"
 
 #include <QString>
@@ -62,6 +63,19 @@ struct CompareOptions {
     /// 调高到 100 则连只差一个字符的行也会被拆成一删一增。
     ///
     int similarityThreshold = 50;
+    ///
+    /// \brief 替换规则链（TXT-012）：比对前先改写行内容的那一层。
+    ///
+    /// 默认是**空集**（见 `defaultReplacementRules()` 的说明）——不启用任何规则时
+    /// `normalizedLine()` 的行为与引入本条之前**逐字节相同**，因此这个字段的存在
+    /// 不会让任何既有语料的结论发生变化。
+    ///
+    /// 它作用在链的**最前面**，理由不是「先来后到」：规则的正则是对**原文**写的
+    /// （用户看着原文写正则，也在界面上看原文），若把它放到大小写折叠之后，
+    /// 一条照原文写的大小写敏感正则会出现「界面上的文本明明匹配、引擎却匹配不上」
+    /// 的错位。空白模式更在后面——它管的是「怎么比」，替换管的是「拿什么比」。
+    ///
+    ReplacementSet replacements;
 };
 struct Block {
     Change change = Change::Equal;
