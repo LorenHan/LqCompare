@@ -15,6 +15,18 @@
 
 #include "trash.h"
 
+// 为什么必须显式 include pathutils.h
+// ----------------------------------
+// 本文件用了 PathUtils::Style::posix() 与 PathUtils::parentPath()（见下面的 kPosix），
+// 但没有任何头文件会替我们把它带进来。这个文件**只在 Linux 上编译**，而开发机是
+// macOS，于是这个缺失一直没被发现，直到 2026-09-21 第一次真的在 Linux 上构建
+// （CI 的 ubuntu 腿）——它一个文件造成了 **17 个测试套件的构建失败**：
+//     error: 'PathUtils' does not name a type   （改动前第 35 行）
+//     error: 'PathUtils' has not been declared  （改动前第 69、78 行）
+// 教训：平台实现文件用到的跨平台工具函数，include 要自己写全，不要指望别的头文件捎带；
+// 「本机编得过」对只在别的平台上编译的文件没有任何意义。
+#include "pathutils.h"
+
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
