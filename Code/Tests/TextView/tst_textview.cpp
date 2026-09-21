@@ -493,6 +493,91 @@ private slots:
                                 .arg(realDifferenceColours.size())));
         QVERIFY(!realDifferenceColours.contains(ignored.rgb()));
     }
+    // TXT-009 第 3、4 条在**视图这一侧**能验的那一半。
+    //
+    // 第 3 条原本的隐患不是「枚举不互斥」——枚举天生互斥——而是界面与枚举之间
+    // 靠**序号**对应：下拉里写死三行文案，读回时 `static_cast<Whitespace>(currentIndex())`。
+    // 那种写法下调换两条文案、或在枚举中间插一个取值，「忽略全部空白」会静默
+    // 变成另一个模式，而构建、运行、既有用例**全都不红**。下面这组断言把
+    // 界面上的第 i 行钉死在模式表的第 i 项上。
+    //
+    // 第 4 条只验「可视标记」那一半：视图里没有 View 页设置界面
+    // （那属于 OPT-007 文本编辑与视图选项，尚未落地），所以「标记可被开关关闭」
+    // 无从实现，issue #64 里已按「部分完成」记下这一半的依赖。
+    void whitespaceComboFollowsTheModeTableAndMarksIgnoredRows()
+    {
+        TextCompareSession session;
+        QVERIFY(session.open());
+        // 语料按「两级开关的分水岭」挑：
+        //   第 0 行 两侧只差**空白的数量**（一个空格 vs 两个）→ 第 1 级就判等；
+        //   第 2 行 两侧差**空白的有无**（`gamma delta` vs `gammadelta`）→ 只有第 2 级判等。
+        // 两行合起来，三个模式各自给出不同的结论，序号错位无处可藏。
+        // 中间那行**必须**逐字符相同：`differences` 数的是**变更块**而不是行，
+        // 相邻的两处替换会被并成一个块，那样三个模式的块数就分不出来了（本轮踩过）。
+        QVERIFY(session.setText(true, "alpha beta\nkeep\ngamma delta\n"));
+        QVERIFY(session.setText(false, "alpha  beta\nkeep\ngammadelta\n"));
+        QScopedPointer<QWidget> widget(session.createWidget());
+        widget->resize(1280, 700);
+        widget->show();
+        auto *combo = widget->findChild<QComboBox *>("whitespace");
+        QVERIFY2(combo, "空白模式下拉必须能被找到，否则这一条无从验起");
+
+        const QVector<Text::Whitespace> modes = Text::availableWhitespaces();
+        QCOMPARE(combo->count(), modes.size());
+        // 先钉「界面第 i 行**显示的字**」↔「模式表第 i 项」。
+        //
+        // 这一条与下面那条（选了第 i 行、引擎用的就是表第 i 项）是一对，缺一不可：
+        // 只钉值那一半的话，把下拉的铺法改成倒序（文案与序号脱钩）**不会让任何用例变红**
+        // ——用户选「忽略全部空白」却得到「比较空白」的行为，而测试全绿。本轮实测漏检过。
+        // 期望文案从视图自己的标签函数取，这样不复制任何界面字符串（同一件事两份文案
+        // 是本仓记过的坑），同时顺序仍然由模式表决定，所以不是同义反复。
+        for (int index = 0; index < modes.size(); ++index)
+            QCOMPARE(combo->itemText(index),
+                     TextCompareView::whitespaceLabel(modes.at(index)));
+        // 三个文案还必须彼此不同，否则「用户选的是哪一行」在界面上根本分辨不出来
+        // （三条一样的文案照样能通过上面那条逐项比对）。
+        QCOMPARE(QSet<QString>({combo->itemText(0), combo->itemText(1), combo->itemText(2)}).size(), 3);
+        // 逐行核对「界面第 i 行」↔「表第 i 项」↔「会话选项」↔「落盘的设置值」。
+        // 最后那段是**故意**钉住「落盘存的整数就是枚举序号」这件事：
+        // 表一旦重排，旧的会话设置会被解释成另一个模式，这是必须配迁移的破坏性改动，
+        // 让它在这里红，比让用户在半年后发现「我的会话选项自己变了」要好。
+        for (int index = 0; index < modes.size(); ++index) {
+            combo->setCurrentIndex(index);
+            QCOMPARE(session.comparisonOptions().whitespace, modes.at(index));
+            QCOMPARE(session.sessionSettings()->value(QStringLiteral("text.whitespace")).toInt(),
+                     static_cast<int>(modes.at(index)));
+        }
+
+        combo->setCurrentIndex(modes.indexOf(Text::Whitespace::Exact));
+        QCOMPARE(session.comparison().differences.size(), 2);
+        QCOMPARE(session.comparison().ignoredBlocks, 0);
+        // 第 1 级：只有「数量不同」的那行被判等，且是**忽略**而不是相等。
+        combo->setCurrentIndex(modes.indexOf(Text::Whitespace::IgnoreChanges));
+        QCOMPARE(session.comparison().differences.size(), 1);
+        QCOMPARE(session.comparison().ignoredBlocks, 1);
+        // 第 2 级：空白的「有无」也不再算差异，两行都判等。
+        combo->setCurrentIndex(modes.indexOf(Text::Whitespace::IgnoreAll));
+        QVERIFY(session.comparison().differences.isEmpty());
+        QCOMPARE(session.comparison().ignoredBlocks, 2);
+
+        // 第 4 条那一半：被忽略的**空白**差异在两侧都必须留下看得见的标记。
+        auto *left = widget->findChild<TextPane *>("leftTextPane");
+        auto *right = widget->findChild<TextPane *>("rightTextPane");
+        const auto leftColours = rowColours(left);
+        const auto rightColours = rowColours(right);
+        for (int row : {0, 2}) {
+            QVERIFY2(leftColours.contains(row),
+                     qPrintable(QStringLiteral("左侧第 %1 行被忽略却没有留下标记").arg(row)));
+            QVERIFY2(rightColours.contains(row),
+                     qPrintable(QStringLiteral("右侧第 %1 行被忽略却没有留下标记").arg(row)));
+        }
+        // 第 1 行真的相同，不该有标记——否则「有标记」这件事不传递任何信息。
+        QVERIFY(!leftColours.contains(1));
+        QVERIFY(!rightColours.contains(1));
+        // 而且必须看得见：底色等于编辑区底色就等于没标记。
+        QVERIFY2(leftColours.value(0) != left->palette().base().color(),
+                 "被忽略空白差异的底色与编辑区底色相同，等于没有提示");
+    }
 };
 QTEST_MAIN(TextViewTests)
 #include "tst_textview.moc"

@@ -800,6 +800,203 @@ private slots:
         QVERIFY(normalizedLine(QString::fromUtf8("\xF0\x90\x90\x80"), options)
                 != QString::fromUtf8("\xF0\x90\x90\x80"));
     }
+
+    // =========================================================================
+    // TXT-009 忽略空白变化（issue #64）
+    // =========================================================================
+
+    // 标准 1 + 标准 2：两级语义必须在**同一份固定语料**上被严格区分开。
+    //
+    // 为什么非得有这张表：两个模式的实现都只有一行（`simplified()` 与「删掉全部空白」），
+    // 而它们在**大多数**输入上给出同样的结论——随便抓几行语料测「开了就不算差异」，
+    // 把两级写成一个也会全绿。真正分家的是「空白**有没有**」这一类（表里第 5~7 行）：
+    // `IgnoreChanges` 判**不同**，`IgnoreAll` 才判相同。这张表就是按这条边界搭的。
+    //
+    // 表里的期望值是手推的（按规格的定义逐行算），不是跑一遍抄回来的。
+    void whitespaceLevelsAreStrictlyDistinctOnAFixedCorpus()
+    {
+        struct Row {
+            const char *left;
+            const char *right;
+            bool exact;
+            bool changes;
+            bool all;
+            const char *rule;
+        };
+        const Row rows[] = {
+            {"a b", "a b", true, true, true, "逐字符相同：三个模式都必须判等"},
+            {"a  b", "a b", false, true, true, "内部连续空白数量不同"},
+            {"a b c", "a  b   c", false, true, true, "多处连续空白数量不同"},
+            {"  a b", "a b", false, true, true, "仅前导空白不同"},
+            {"a b  ", "a b", false, true, true, "仅尾随空白不同"},
+            {"  a b  ", "a b", false, true, true, "首尾都不同"},
+            {"ab", "a b", false, false, true, "空白的**有无**不同：两级的分水岭"},
+            {"a b", "ab", false, false, true, "同上，方向相反"},
+            {"abc", "a b c", false, false, true, "空白有无不同（三处）"},
+        };
+        for (const Row &row : rows) {
+            const QVector<Line> left{{QString::fromUtf8(row.left), Eol::LF}};
+            const QVector<Line> right{{QString::fromUtf8(row.right), Eol::LF}};
+            // 只有原文真的不同时，「判等」这件事才说明问题；相同时单独验一次三个模式。
+            const bool rawEqual = left.first().text == right.first().text;
+            const auto check = [&](Whitespace mode, bool expected) {
+                CompareOptions options;
+                options.whitespace = mode;
+                const bool equal = compare(left, right, options).differences.isEmpty();
+                QVERIFY2(equal == expected,
+                         qPrintable(QStringLiteral("空白模式 %1 与规格定义不符（%2）：[%3] / [%4]")
+                                        .arg(QString::fromLatin1(whitespaceIdentifier(mode)),
+                                             QString::fromUtf8(row.rule),
+                                             QString::fromUtf8(row.left),
+                                             QString::fromUtf8(row.right))));
+            };
+            check(Whitespace::Exact, row.exact);
+            check(Whitespace::IgnoreChanges, row.changes);
+            check(Whitespace::IgnoreAll, row.all);
+            // 结构不变量：三个模式是**层层放宽**的，判等关系必须嵌套
+            // （Exact ⊆ IgnoreChanges ⊆ IgnoreAll）。加第四个模式时也要满足它。
+            QVERIFY2(!(row.exact && !row.changes) && !(row.changes && !row.all),
+                     qPrintable(QStringLiteral("三个模式的宽松程度没有嵌套：%1").arg(
+                         QString::fromUtf8(row.rule))));
+            if (rawEqual) QVERIFY(row.exact);
+        }
+    }
+
+    // 标准 5：Tab 与空格混排的行也必须走同一套定义（有固定语料）。
+    //
+    // 单独成一条而不是并进上一张表，是因为这里除了 Tab/空格还钉住了
+    // **「哪些字符算空白」**这个更基础的问题：`QChar::isSpace()` 的判定范围
+    // 比「空格和 Tab」宽得多（实测 NBSP、表意空格、窄 NBSP、U+2028/2029 都算，
+    // 零宽空格 U+200B 不算）。这些字符在从别的编辑器粘贴过来的行里真的会出现，
+    // 而它们看不见——搞错了只表现为「某些行怎么也不算相同」，很难归因。
+    void tabAndSpaceMixturesFollowTheSameTwoLevelDefinitions()
+    {
+        struct Row {
+            const char *left;
+            const char *right;
+            bool changes;
+            bool all;
+            const char *rule;
+        };
+        const Row rows[] = {
+            {"a\tb", "a b", true, true, "Tab 与空格：数量相同"},
+            {"a\tb", "a  b", true, true, "Tab 与两个空格"},
+            {"a\t\tb", "a  b", true, true, "两个 Tab 与两个空格"},
+            {"a \t b", "a b", true, true, "空格与 Tab 交替出现"},
+            {"\ttrimmed\t", " trimmed ", true, true, "用 Tab 做首尾空白"},
+            {"a\tb", "ab", false, true, "Tab 的**有无**不同：只有 IgnoreAll 判等"},
+            // 下限那一侧：非空白字符本身就不同，两个级别都不能判等。
+            // 这一行是「忽略空白」的护栏——忽略空白**不能**凭空造出少掉的字符，
+            // 否则一个把所有空白都删完再比前缀的实现也能骗过上面几行。
+            {"a\tb", "a b c", false, false, "非空白字符本身不同：两级都不判等"},
+            {"a\xC2\xA0" "b", "a b", true, true, "NBSP(U+00A0) 算空白（实测 isSpace 为真）"},
+            {"a\xE3\x80\x80" "b", "a b", true, true, "表意空格 U+3000 算空白"},
+            {"a\xE2\x80\x8B" "b", "a b", false, false, "零宽空格 U+200B **不算**空白"},
+        };
+        for (const Row &row : rows) {
+            const QVector<Line> left{{QString::fromUtf8(row.left), Eol::LF}};
+            const QVector<Line> right{{QString::fromUtf8(row.right), Eol::LF}};
+            const auto check = [&](Whitespace mode, bool expected) {
+                CompareOptions options;
+                options.whitespace = mode;
+                QVERIFY2(compare(left, right, options).differences.isEmpty() == expected,
+                         qPrintable(QStringLiteral("空白模式 %1 在 Tab/空格混排语料上不符（%2）")
+                                        .arg(QString::fromLatin1(whitespaceIdentifier(mode)),
+                                             QString::fromUtf8(row.rule))));
+            };
+            check(Whitespace::IgnoreChanges, row.changes);
+            check(Whitespace::IgnoreAll, row.all);
+            // 这一组用的语料原文都不相同，所以关掉两级开关时**必须**是差异：
+            // 少了这半边，一个「什么都不做就返回相等」的实现能让上面全部通过。
+            CompareOptions exact;
+            QCOMPARE(compare(left, right, exact).differences.size(), 1);
+        }
+    }
+
+    // 标准 3：三个模式以**单一枚举**呈现、互斥，且枚举与「可选清单」只有一个来源。
+    //
+    // 这一条服务的其实是界面：下拉铺什么、读回什么，都必须从模式表推导。
+    // 原来的写法是界面写死三行文案 + `static_cast<Whitespace>(currentIndex())`，
+    // 也就是**按序号**对应——往枚举中间插一个取值、或调换两条文案，
+    // 「忽略全部空白」会静默变成别的模式，没有任何东西会红。
+    void whitespaceModesAreASingleExclusiveEnumBackedByOneTable()
+    {
+        // 出厂值必须就是表里的默认项，否则「比较空白」这个名字与它实际的行为会分家。
+        CompareOptions defaults;
+        QCOMPARE(defaults.whitespace, defaultWhitespace());
+        QCOMPARE(defaultWhitespace(), Whitespace::Exact);
+
+        const QVector<Whitespace> modes = availableWhitespaces();
+        QCOMPARE(modes.size(), 3);
+        QCOMPARE(modes[0], Whitespace::Exact);
+        QCOMPARE(modes[1], Whitespace::IgnoreChanges);
+        QCOMPARE(modes[2], Whitespace::IgnoreAll);
+        // 互斥：同一条目不能出现两次（枚举值唯一），标识符也不能重名。
+        QCOMPARE(QSet<int>({static_cast<int>(modes[0]), static_cast<int>(modes[1]),
+                            static_cast<int>(modes[2])}).size(), 3);
+        for (Whitespace mode : modes) {
+            const char *identity = whitespaceIdentifier(mode);
+            QVERIFY(identity != nullptr);
+            QVERIFY(*identity != '\0');
+        }
+        QCOMPARE(QString::fromLatin1(whitespaceIdentifier(Whitespace::Exact)), QStringLiteral("exact"));
+        QCOMPARE(QString::fromLatin1(whitespaceIdentifier(Whitespace::IgnoreChanges)), QStringLiteral("changes"));
+        QCOMPARE(QString::fromLatin1(whitespaceIdentifier(Whitespace::IgnoreAll)), QStringLiteral("all"));
+        // 表外的取值不编名字——编出来的标识符会让人去搜一个不存在的符号。
+        QVERIFY(whitespaceIdentifier(static_cast<Whitespace>(99)) == nullptr);
+        QVERIFY(validateWhitespaceTable(whitespaceTable()).isEmpty());
+
+        // 自检必须能自证会报错：拿四份**故意写坏**的表跑同一个判定。
+        // 只断言「长度大于 0」不够——一个把所有输入都判成有问题的实现同样能过，
+        // 所以每处都断言**问题的内容**。
+        const auto problemsOf = [](const QVector<WhitespaceDescriptor> &broken) {
+            return validateWhitespaceTable(broken).join(QLatin1Char('\n'));
+        };
+        // 少一个模式：只有「规格点名了但表里没有」这条规则会响，所以它必须响。
+        QVERIFY(problemsOf({{Whitespace::Exact, "exact", true},
+                            {Whitespace::IgnoreChanges, "changes", true}})
+                    .contains(QStringLiteral("规格点名的空白模式")));
+        // 同一个模式登记两次：界面会多出一行同义项，而读回时只有一个能生效。
+        QVERIFY(problemsOf({{Whitespace::Exact, "exact", true},
+                            {Whitespace::Exact, "exact2", true},
+                            {Whitespace::IgnoreChanges, "changes", true},
+                            {Whitespace::IgnoreAll, "all", true}})
+                    .contains(QStringLiteral("出现了不止一次")));
+        // 标识符为空 / 重复：日志里分不出是哪一个。
+        QVERIFY(problemsOf({{Whitespace::Exact, "", true},
+                            {Whitespace::IgnoreChanges, "changes", true},
+                            {Whitespace::IgnoreAll, "all", true}})
+                    .contains(QStringLiteral("没有标识符")));
+        QVERIFY(problemsOf({{Whitespace::Exact, "same", true},
+                            {Whitespace::IgnoreChanges, "same", true},
+                            {Whitespace::IgnoreAll, "all", true}})
+                    .contains(QStringLiteral("重复")));
+        // 规格点名的模式被标成「未实现」：这是把一次缺失变成一次静默的降级。
+        QVERIFY(problemsOf({{Whitespace::Exact, "exact", true},
+                            {Whitespace::IgnoreChanges, "changes", true},
+                            {Whitespace::IgnoreAll, "all", false}})
+                    .contains(QStringLiteral("规格被静默降级")));
+        // 空表：一条可选模式都没有。
+        QVERIFY(problemsOf({}).contains(QStringLiteral("表为空")));
+
+        // 枚举取到表外时的行为：**退化成 Exact，不做兜底、不改写成默认模式**。
+        // 方向是刻意选的（理由写在 `normalizedLine()` 的注释里）：Exact 只会多报差异，
+        // 不会把差异藏掉；而 Alignment 那处必须兜底，因为「什么都不跑」会返回
+        // 零个块、也就是「两份文件完全一样」。
+        CompareOptions outOfRange;
+        outOfRange.whitespace = static_cast<Whitespace>(99);
+        CompareOptions exact;
+        CompareOptions changes;
+        changes.whitespace = Whitespace::IgnoreChanges;
+        changes.ignoreCase = outOfRange.ignoreCase = exact.ignoreCase = false;
+        auto left = decoded("a  b\n");
+        auto right = decoded("a b\n");
+        const int outOfRangeDifferences = compare(left.lines(), right.lines(), outOfRange).differences.size();
+        QCOMPARE(outOfRangeDifferences, compare(left.lines(), right.lines(), exact).differences.size());
+        // 而且它**不是**「退化成两级忽略」——那样会把这个差异藏掉。
+        QCOMPARE(compare(left.lines(), right.lines(), changes).differences.size(), 0);
+        QCOMPARE(outOfRangeDifferences, 1);
+    }
 };
 QTEST_APPLESS_MAIN(TextTests)
 #include "tst_text.moc"

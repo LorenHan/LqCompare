@@ -49,6 +49,36 @@ QString displayLine(QString text)
     text.replace(QChar(0x2029), QChar(0x00b6));
     return text;
 }
+// 下拉里第 index 行对应哪一个模式。查到表外（下拉与表脱节）时退到默认模式，
+// 并让调用方拿到它——界面不允许产生一个引擎不认识的空白模式。
+Text::Whitespace whitespaceAt(int index)
+{
+    const QVector<Text::Whitespace> modes = Text::availableWhitespaces();
+    if (index < 0 || index >= modes.size()) return Text::defaultWhitespace();
+    return modes.at(index);
+}
+int whitespaceIndexOf(Text::Whitespace mode)
+{
+    const int index = Text::availableWhitespaces().indexOf(mode);
+    return index < 0 ? 0 : index;
+}
+}
+
+// 单个空白模式的界面文案。
+//
+// 写成 `switch` 而不是一张与枚举平行的字符串数组，是为了让「枚举与文案错位」变成
+// 构建期问题：加第四个模式时 `-Wswitch` 会在这里报警，而并行数组只会静默错位
+// ——那正是这一整块（下拉的铺法 + 读回）从原来「按序号」改成「按表」要防的事。
+//
+// `tr` 要写限定名：这里是类外定义，类内那个静态 `tr` 不在作用域里。
+QString TextCompareView::whitespaceLabel(Text::Whitespace mode)
+{
+    switch (mode) {
+    case Text::Whitespace::Exact: return TextCompareView::tr("Exact whitespace");
+    case Text::Whitespace::IgnoreChanges: return TextCompareView::tr("Ignore whitespace changes");
+    case Text::Whitespace::IgnoreAll: return TextCompareView::tr("Ignore all whitespace");
+    }
+    return TextCompareView::tr("Exact whitespace");
 }
 
 TextPane::TextPane(QWidget *parent) : QPlainTextEdit(parent), m_gutter(new Gutter(this))
@@ -136,7 +166,11 @@ TextCompareView::TextCompareView(TextCompareSession *session, QWidget *parent)
     m_ignoreEol = new QCheckBox(tr("Ignore line endings"), this);
     m_ignoreFinal = new QCheckBox(tr("Ignore final newline"), this);
     m_whitespace = new QComboBox(this);
-    m_whitespace->addItems({tr("Exact whitespace"), tr("Ignore whitespace changes"), tr("Ignore all whitespace")});
+    m_whitespace->setObjectName(QStringLiteral("whitespace"));
+    // 下拉的内容来自模式表，不在这里写死三行文案：文案与枚举的对应关系写死过一次
+    // 就是一份隐式的第二事实来源（见 `textdiff.h` 里 `WhitespaceDescriptor` 的说明）。
+    for (Text::Whitespace mode : Text::availableWhitespaces())
+        m_whitespace->addItem(whitespaceLabel(mode));
     rules->addWidget(m_ignoreCase);
     rules->addWidget(m_whitespace);
     rules->addWidget(m_ignoreEol);
@@ -148,7 +182,7 @@ TextCompareView::TextCompareView(TextCompareSession *session, QWidget *parent)
         options.ignoreCase = m_ignoreCase->isChecked();
         options.ignoreEol = m_ignoreEol->isChecked();
         options.ignoreFinalNewline = m_ignoreFinal->isChecked();
-        options.whitespace = static_cast<Text::Whitespace>(m_whitespace->currentIndex());
+        options.whitespace = whitespaceAt(m_whitespace->currentIndex());
         m_session->setComparisonOptions(options);
     };
     connect(m_ignoreCase, &QCheckBox::toggled, this, optionsChanged);
@@ -293,7 +327,7 @@ void TextCompareView::refresh()
     m_ignoreCase->setChecked(options.ignoreCase);
     m_ignoreEol->setChecked(options.ignoreEol);
     m_ignoreFinal->setChecked(options.ignoreFinalNewline);
-    m_whitespace->setCurrentIndex(static_cast<int>(options.whitespace));
+    m_whitespace->setCurrentIndex(whitespaceIndexOf(options.whitespace));
     m_paths[0]->setText(m_session->leftPath());
     m_paths[1]->setText(m_session->rightPath());
     for (int side = 0; side < 2; ++side) {

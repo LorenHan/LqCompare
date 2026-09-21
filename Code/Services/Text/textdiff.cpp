@@ -376,6 +376,88 @@ Result compare(const QVector<Line> &left, const QVector<Line> &right, const Comp
 }
 
 // -----------------------------------------------------------------------------
+// 空白模式表
+// -----------------------------------------------------------------------------
+
+const QVector<WhitespaceDescriptor> &whitespaceTable()
+{
+    // 顺序即 `availableWhitespaces()` 的顺序，也就是界面下拉里的顺序。
+    // `Exact` 排第一位不是因为它更好，而是因为它是 `CompareOptions::whitespace`
+    // 的出厂值、也是「不比、就看原文」这条最保守的行为——
+    // 默认值取「第一条已实现的条目」，把保守的那条排在后面会让默认值随表顺序漂移。
+    static const QVector<WhitespaceDescriptor> table{
+        {Whitespace::Exact, "exact", true},
+        {Whitespace::IgnoreChanges, "changes", true},
+        {Whitespace::IgnoreAll, "all", true},
+    };
+    return table;
+}
+
+const char *whitespaceIdentifier(Whitespace whitespace)
+{
+    for (const WhitespaceDescriptor &descriptor : whitespaceTable())
+        if (descriptor.whitespace == whitespace) return descriptor.identifier;
+    return nullptr;
+}
+
+Whitespace defaultWhitespace(const QVector<WhitespaceDescriptor> &table)
+{
+    for (const WhitespaceDescriptor &descriptor : table)
+        if (descriptor.implemented) return descriptor.whitespace;
+    return Whitespace::Exact;
+}
+
+QVector<Whitespace> availableWhitespaces(const QVector<WhitespaceDescriptor> &table)
+{
+    QVector<Whitespace> result;
+    result.reserve(table.size());
+    for (const WhitespaceDescriptor &descriptor : table)
+        if (descriptor.implemented) result.append(descriptor.whitespace);
+    return result;
+}
+
+QStringList validateWhitespaceTable(const QVector<WhitespaceDescriptor> &table,
+                                    const QVector<Whitespace> &expected)
+{
+    QStringList problems;
+    if (table.isEmpty()) problems << QStringLiteral("空白模式表为空：一个可选模式都没有");
+    QSet<QString> seenIdentifiers;
+    QSet<int> seenModes;
+    for (const WhitespaceDescriptor &descriptor : table) {
+        // 枚举取值重复：界面会出现两行同义项，而读回时只有一个能生效。
+        const int key = static_cast<int>(descriptor.whitespace);
+        if (seenModes.contains(key))
+            problems << QStringLiteral("空白模式（枚举值 %1）在表里出现了不止一次").arg(key);
+        seenModes.insert(key);
+        const QString identity = QString::fromLatin1(descriptor.identifier);
+        if (identity.isEmpty()) {
+            problems << QStringLiteral("空白模式（枚举值 %1）没有标识符，日志里无法区分").arg(key);
+        } else if (seenIdentifiers.contains(identity)) {
+            problems << QStringLiteral("空白模式的标识符「%1」重复，日志里分不出是哪一个").arg(identity);
+        }
+        seenIdentifiers.insert(identity);
+    }
+    // 规格点名的模式一个都不能少，而且**不能是「标了未实现」**——
+    // 后者会把「少一个模式」从一次缺失变成一次静默的降级。
+    for (Whitespace wanted : expected) {
+        bool found = false, implemented = false;
+        QString name = QStringLiteral("?");
+        for (const WhitespaceDescriptor &descriptor : table) {
+            if (descriptor.whitespace != wanted) continue;
+            found = true;
+            implemented = implemented || descriptor.implemented;
+            // 名字从**传进来的这张表**里取，不是从生产表里取：
+            // 报告要描述的是手上这张表，查生产表会把测试里故意写坏的那份说成别的样子。
+            if (name == QStringLiteral("?")) name = QString::fromLatin1(descriptor.identifier);
+        }
+        if (!found) problems << QStringLiteral("规格点名的空白模式「%1」没有登记在表里").arg(name);
+        else if (!implemented)
+            problems << QStringLiteral("规格点名的空白模式「%1」被登记成未实现，规格被静默降级").arg(name);
+    }
+    return problems;
+}
+
+// -----------------------------------------------------------------------------
 // 已实现的对齐算法清单
 // -----------------------------------------------------------------------------
 

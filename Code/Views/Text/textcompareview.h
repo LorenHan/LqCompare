@@ -4,6 +4,7 @@
 #include <QPlainTextEdit>
 #include <QWidget>
 #include <QVector>
+#include "textdiff.h"
 
 class QLabel;
 class QLineEdit;
@@ -43,6 +44,15 @@ public:
     void promptGoToLine();
     void edit(bool left);
     void setUseLocalShortcuts(bool enabled);
+    /// 单个空白模式的界面文案。
+    ///
+    /// 之所以放在公开接口上而不是留在 .cpp 的匿名命名空间里：**下拉里第 i 行显示的
+    /// 文案必须就是模式表第 i 项的文案**，而这件事只有从外面才验得到。原本的
+    /// 「写死三行文案 + `static_cast<Whitespace>(currentIndex())`」烂掉的方式，
+    /// 正是文案与序号脱钩——把下拉的铺法改成倒序，值那条路照样对得上，
+    /// 只有用户看到的字变了，任何用例都不会红（TXT-009 第一版实测漏检过）。
+    /// 断言要靠这个函数取「期望文案」，所以它必须是可见的。
+    static QString whitespaceLabel(Text::Whitespace mode);
 private:
     void refresh();
     void refreshActions();

@@ -134,7 +134,83 @@ Result compare(const QVector<Line> &left, const QVector<Line> &right,
 /// TXT-025 的行内字符级高亮正依赖这一点。**若哪天改成 full folding，
 /// 字符级高亮必须先做偏移映射，否则整段高亮会错位**，不要只改这一处就收工。
 ///
+/// **空白侧的三个模式（TXT-009）**，语义必须严格区分——这是规格的边界条款：
+///
+/// | 模式 | 判据 | `a  b` vs `a b` | `ab` vs `a b` | `a\tb` vs `a b` |
+/// | --- | --- | --- | --- | --- |
+/// | `Exact` | 逐字符比 | 不同 | 不同 | 不同 |
+/// | `IgnoreChanges` | 内部连续空白折叠成一个空格、首尾去掉 | **相同** | 不同 | **相同** |
+/// | `IgnoreAll` | 删掉全部空白字符 | **相同** | **相同** | **相同** |
+///
+/// 一句话记住区别：**`IgnoreChanges` 只管白空的「数量」，`IgnoreAll` 连「有没有」也不管**。
+/// 两者有一处容易搞反：`IgnoreChanges` 下 `ab` 与 `a b` **仍然不同**
+/// （因为折叠后的 `a b` 里那个空格还在），这正是第 1 条与第 2 条的分界。
+///
+/// 「空白」按 `QChar::isSpace()` 判定，因此**不止 ASCII 空格与 Tab**：实测
+/// U+00A0（NBSP）、U+3000（表意空格）、U+202F（窄 NBSP）、U+2028、U+2029 都算，
+/// 而 U+200B（零宽空格）**不算**。U+00A0 被当成可忽略的空白是刻意的取舍：
+/// 它在排版上确实是空白，把它排除掉会让「从别的编辑器粘贴来的行」比出一堆
+/// 看不见的差异。要保留 NBSP 的区分度得靠替换规则（TXT-012），不在这一层做。
+///
+/// **枚举取值落在表外时按 `Exact` 处理**（不做兜底、不改写成默认模式）。
+/// 这与 `Alignment` 那处的兜底方向**刻意相反**，理由也对得上：那里的兜底是必须的，
+/// 因为一个「什么都不跑」的对齐算法会返回零个块、也就是「两份文件完全一样」；
+/// 而这里的退化只会**多**报差异，绝不会把差异藏掉——同样是坏输入，
+/// 一边会静默地骗人，另一边只是啰嗦。**不要**为了「对称」把它改成兜底到默认模式。
+///
 QString normalizedLine(const QString &text, const CompareOptions &options);
+
+// -----------------------------------------------------------------------------
+// 空白模式表（TXT-009 第 3 条）
+// -----------------------------------------------------------------------------
+
+///
+/// \brief 空白模式表的一行。
+///
+/// 完成标准第 3 条要的是「以**单一**枚举呈现三个模式、三模式互斥」。枚举本身
+/// （`Whitespace`）已经满足「单一」，但「界面拿到的模式」与「枚举」之间原本靠
+/// **序号**对应：界面写死三行文案，读回时 `static_cast<Whitespace>(currentIndex())`。
+/// 序号对应是一份隐式的第二事实来源——往枚举中间插一个取值、或者调换两条文案，
+/// 界面上的「忽略全部空白」会静默变成别的模式，而**没有任何东西会红**。
+///
+/// 这张表和 `AlignmentDescriptor` 一样是**唯一的事实来源**：界面按它铺下拉、按它读回，
+/// 标识符用于日志与（将来的）设置键。缺一个模式、多一个模式、两个模式共用一个标识符，
+/// `validateWhitespaceTable()` 都会报出来。
+///
+struct WhitespaceDescriptor
+{
+    Whitespace whitespace = Whitespace::Exact;
+    /// 机器可读标识（日志、快照、将来的设置键都用它，不靠枚举序号）。
+    const char *identifier = "";
+    /// 引擎是否真的会算它。`false` 的条目不会出现在 `availableWhitespaces()` 里。
+    bool implemented = false;
+};
+
+/// 空白模式表本身（顺序即 `availableWhitespaces()` 的返回顺序，也是界面上拉的顺序）。
+const QVector<WhitespaceDescriptor> &whitespaceTable();
+
+/// 机器可读标识。表里查不到时返回空指针，**不编一个假名字**。
+const char *whitespaceIdentifier(Whitespace whitespace);
+
+/// 默认模式：表里**第一条已实现**的条目；一条都没有时退回 `Whitespace::Exact`。
+Whitespace defaultWhitespace(const QVector<WhitespaceDescriptor> &table = whitespaceTable());
+
+/// 可选模式：只含 `implemented == true` 的条目，顺序与表一致。
+QVector<Whitespace> availableWhitespaces(const QVector<WhitespaceDescriptor> &table = whitespaceTable());
+
+///
+/// \brief 空白模式表的自检。
+///
+/// 与 `validateAlignmentTable()` 同一个定位：查「手写那张表时容易写错、写错了也不影响
+/// 别的」的几件事。返回可直接写进日志的问题清单，空列表表示干净。
+///
+/// `expected` 是规格点名的三个模式，也是唯一**不依赖这张表自身**的期望值——
+/// 表里漏登记一个模式时，别的规则一条都不会响。
+///
+QStringList validateWhitespaceTable(const QVector<WhitespaceDescriptor> &table,
+                                    const QVector<Whitespace> &expected = {Whitespace::Exact,
+                                                                           Whitespace::IgnoreChanges,
+                                                                           Whitespace::IgnoreAll});
 
 // -----------------------------------------------------------------------------
 // 已实现的对齐算法清单（TXT-003 第 3 条）
