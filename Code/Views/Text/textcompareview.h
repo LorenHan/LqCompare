@@ -22,6 +22,20 @@ class TextPane : public QPlainTextEdit {
 public:
     explicit TextPane(QWidget *parent = nullptr);
     void setLineNumbers(const QVector<int> &numbers);
+    ///
+    /// \brief 号码槽里当前铺的原文行号（0 起；-1 = 这一行在这一侧不存在）。
+    ///
+    /// 为什么要把这份数据变成公开接口：**正文与号码是两条链**——正文由
+    /// `setPlainText()` 铺，号码由 `setLineNumbers()` 铺，两者取自同一个数组却
+    /// 各走各的路。只断言正文的话，「号码传成了另一侧那份数组」（号码与正文整体
+    /// 错位一格）或「号码根本没传下去」（号码槽全空）都不会让任何用例变红，
+    /// 而这两件事恰恰是「行号与行高严格对齐」要防的东西——用户按行号读出来的
+    /// 结论会与屏幕上真正显示的内容对不上。
+    ///
+    /// 这与 TXT-009 那条纪律是同一个来源：**UI 值与 UI 文案同源不同路时，
+    /// 两条链都要有断言**（见 handoff §6）。
+    ///
+    QVector<int> lineNumbers() const { return m_numbers; }
     void paintGutter(QPaintEvent *event);
 signals:
     void activated();

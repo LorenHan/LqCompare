@@ -11,6 +11,10 @@
 #include <QComboBox>
 #include <QShortcut>
 #include <QTextEdit>
+#include <QSplitter>
+#include <QElapsedTimer>
+#include <QAbstractTextDocumentLayout>
+#include <QTextBlock>
 #include "textcomparesession.h"
 #include "textcompareview.h"
 
@@ -46,6 +50,16 @@ int chromaOf(const QColor &colour)
 {
     return qMax(qMax(colour.red(), colour.green()), colour.blue())
          - qMin(qMin(colour.red(), colour.green()), colour.blue());
+}
+// 单个文档行在窗格里占的像素高度。
+//
+// `QPlainTextEdit::blockBoundingGeometry()` 是 protected 的——`TextPane` 自己在
+// `paintGutter()` 里能用，从外面不行——所以走文档布局层取同一个量（行高由字体决定，
+// 两处问的是同一件事）。TXT-001 标准 2 的「行高严格对齐」要靠它比出来。
+int rowHeightOf(const QPlainTextEdit *pane, int blockNumber)
+{
+    const QTextBlock block = pane->document()->findBlockByNumber(blockNumber);
+    return qRound(pane->document()->documentLayout()->blockBoundingRect(block).height());
 }
 }
 class TextViewTests : public QObject {
@@ -582,6 +596,326 @@ private slots:
         // 而且必须看得见：底色等于编辑区底色就等于没标记。
         QVERIFY2(leftColours.value(0) != left->palette().base().color(),
                  "被忽略空白差异的底色与编辑区底色相同，等于没有提示");
+    }
+
+    // =========================================================================
+    // TXT-001 文本比对会话与双窗格视图骨架（issue #56）
+    //
+    // 这一条与 TXT-002 / TXT-008 属同一类：**实现早就在**——`TextCompareSession`
+    // 与 `TextCompareView` 从会话框架落地那天起就是这套形状，issue 上却一直是「待实现」。
+    // 因此本轮不新增模块，只把四条完成标准逐条变成**会真的红的断言**。
+    //
+    // 骨架最容易烂掉的方式不是「功能消失」，而是「两侧各自显示自己的文件」——
+    // 那种状态看起来完全正常，既有用例也一条都不会红，却让所有对齐工作白做。
+    // 所以下面每一条都尽量落到「两个窗格是同一个模型的两半」这件事上。
+    // =========================================================================
+
+    // 标准 1：可打开两个本地文本文件并显示并排双栏视图。
+    //
+    // 「并排」是这一条真正的要求，也最容易被满足成「都在界面上」——两块窗格上下
+    // 堆叠同样能让「两个 TextPane 都找得到」的检查通过。因此这里断言的是**几何关系**
+    // （水平排列、不重叠、纵向齐平），而不是存在性。
+    void twoLocalFilesOpenSideBySide()
+    {
+        QTemporaryDir directory;
+        const QString left = directory.filePath("left.txt"), right = directory.filePath("right.txt");
+        writeFile(left, "alpha\nbravo\ncharlie\n");
+        writeFile(right, "alpha\nBRAVO\ncharlie\ndelta\n");
+        // 走「构造期就带上两个路径」这条路：规格的入口是「打开两个文本文件」，
+        // 用户按的是这个。已有的 `emptySessionAndRealFiles` 覆盖的是另一条
+        // （先开空会话、再在界面里选文件），两条都要有人在。
+        TextCompareSession session(left, right);
+        QVERIFY(session.open());
+        QScopedPointer<QWidget> widget(session.createWidget());
+        widget->resize(1280, 700);
+        widget->show();
+        QTest::qWait(30);
+        auto *a = widget->findChild<TextPane *>("leftTextPane");
+        auto *b = widget->findChild<TextPane *>("rightTextPane");
+        QVERIFY2(a && b, "双栏视图必须真的有两块编辑区");
+        auto *splitter = widget->findChild<QSplitter *>("textSplitter");
+        QVERIFY2(splitter, "双栏必须是可拖动的分栏，否则「并排」只写在文档里");
+        QVERIFY2(splitter->orientation() == Qt::Horizontal, "两块窗格没有按水平方向排列");
+        const QPoint aOrigin = a->mapTo(widget.data(), QPoint(0, 0));
+        const QPoint bOrigin = b->mapTo(widget.data(), QPoint(0, 0));
+        QVERIFY2(aOrigin.x() < bOrigin.x(), "左侧窗格不在右侧窗格左边（可能被上下堆叠了）");
+        QCOMPARE(aOrigin.y(), bOrigin.y()); // 纵向齐平：不齐平的话翻到同一行也会错开
+        QVERIFY2(a->width() > 100 && b->width() > 100, "两块窗格都必须有可见宽度");
+        // 两侧读到的必须**是各自那个文件**，不是把同一个文件显示了两遍。
+        QCOMPARE(session.leftDocument().normalizedText(), QStringLiteral("alpha\nbravo\ncharlie\n"));
+        QCOMPARE(session.rightDocument().normalizedText(), QStringLiteral("alpha\nBRAVO\ncharlie\ndelta\n"));
+        QVERIFY(a->toPlainText().contains(QStringLiteral("bravo")));
+        QVERIFY(b->toPlainText().contains(QStringLiteral("BRAVO")));
+    }
+
+    // 标准 2：两个窗格共享同一个比对结果模型，行号与行高严格对齐。
+    //
+    // 语料里**必须**有填充行（下面右第 1 行是插入）：没有填充行时，
+    // 「两侧各显示自己的文件」与「两侧共用模型」给出完全一样的结果，这一条就白验了。
+    // 填充行让两者分家——共用模型时左窗格那一行只能是空行。
+    void panesShareOneModelAndKeepRowGeometryAligned()
+    {
+        TextCompareSession session;
+        QVERIFY(session.open());
+        QVERIFY(session.setText(true, "one\ntwo\nfour\nfive\n"));
+        QVERIFY(session.setText(false, "one\ninserted\ntwo\nFOUR\nfive\n"));
+        QScopedPointer<QWidget> widget(session.createWidget());
+        widget->resize(1280, 700);
+        widget->show();
+        QTest::qWait(30);
+        auto *a = widget->findChild<TextPane *>("leftTextPane");
+        auto *b = widget->findChild<TextPane *>("rightTextPane");
+        const auto &result = session.comparison();
+        QVERIFY(!result.rows.isEmpty());
+        // 「共享同一个结果模型」的可观测形式：两侧的**视觉行数**都等于模型的行数。
+        // 于是第 i 行在两个窗格里是同一个 `Row` 的两半，「行号对齐」才有意义。
+        QCOMPARE(a->blockCount(), result.rows.size());
+        QCOMPARE(b->blockCount(), result.rows.size());
+        const QStringList leftRows = a->toPlainText().split(QLatin1Char('\n'));
+        const QStringList rightRows = b->toPlainText().split(QLatin1Char('\n'));
+        QCOMPARE(leftRows.size(), result.rows.size());
+        QCOMPARE(rightRows.size(), result.rows.size());
+        // 号码槽与正文是**两条链**，必须各钉一遍。只钉正文的话，「号码根本没传下去」
+        // 或「号码传成了另一侧那份」都不会红，而用户看到的行号就会与真正显示的内容
+        // 对不上——那正是「行号与行高严格对齐」这一条要防的东西。
+        QCOMPARE(a->lineNumbers().size(), result.rows.size());
+        QCOMPARE(b->lineNumbers().size(), result.rows.size());
+        int paddingRows = 0;
+        int lastLeftLine = -1, lastRightLine = -1;
+        for (int row = 0; row < result.rows.size(); ++row) {
+            const Text::Row &entry = result.rows.at(row);
+            // 逐行核对「模型 → 两侧显示的文字」。行号那一半也在这里：
+            // 窗格左侧的号码槽画的就是 `leftLine + 1` / `rightLine + 1`，
+            // 所以「第几行显示的是第几行原文」被钉住，号码就不可能错位。
+            QCOMPARE(leftRows.at(row), entry.leftLine >= 0
+                         ? session.leftDocument().lines().at(entry.leftLine).text : QString());
+            QCOMPARE(rightRows.at(row), entry.rightLine >= 0
+                         ? session.rightDocument().lines().at(entry.rightLine).text : QString());
+            QCOMPARE(a->lineNumbers().at(row), entry.leftLine);
+            QCOMPARE(b->lineNumbers().at(row), entry.rightLine);
+            // 顺序不变量：**有内容的**行下标只增不减（填充行的 -1 不参与）。
+            // 两侧行数相同但整体错开一格时，上面两条逐行比对会红；这一条防的是
+            // 更隐蔽的「同一个原文行在一列里出现两次」——那会让行号槽指着两行。
+            if (entry.leftLine >= 0) {
+                QVERIFY2(entry.leftLine > lastLeftLine, "左侧行下标没有严格递增");
+                lastLeftLine = entry.leftLine;
+            } else {
+                ++paddingRows;
+            }
+            if (entry.rightLine >= 0) {
+                QVERIFY2(entry.rightLine > lastRightLine, "右侧行下标没有严格递增");
+                lastRightLine = entry.rightLine;
+            }
+        }
+        QVERIFY2(paddingRows > 0, "夹具没有造出填充行，这一条验不到「共用模型」");
+        // 行高的那一半：同一个 `Row` 在两侧必须占同一个高度。字体不同、或某一侧
+        // 开了自动换行，行高就会分家，表现是「滚到下面越来越错位」。
+        QCOMPARE(a->font(), b->font());
+        QCOMPARE(a->fontMetrics().height(), b->fontMetrics().height());
+        QCOMPARE(a->lineWrapMode(), b->lineWrapMode());
+        QVERIFY2(a->lineWrapMode() == QPlainTextEdit::NoWrap,
+                 "窗格一旦开了自动换行，一个模型行会占多行，「行高严格对齐」就不再成立");
+        QCOMPARE(rowHeightOf(a, 0), rowHeightOf(b, 0));
+        // 末尾那行的行高也要比：只比第一行的话，「某一侧最后一行被撑高」
+        // （例如末尾多了一个换行）不会被发现，而它同样会让滚动同步错位。
+        QCOMPARE(rowHeightOf(a, a->blockCount() - 1), rowHeightOf(b, b->blockCount() - 1));
+    }
+
+    // 标准 3：单侧为空（新文件）时另一侧全部行标记为新增/删除而不是报错。
+    //
+    // 「新文件」有两条来源：磁盘上真实存在的 0 字节文件，以及根本没有文件的那一侧。
+    // 下面走前者（走真实文件路径才对得上规格里的入口），后者由既有的
+    // `editorAppliesWithoutWritingPadding` 覆盖（那里左路径是空串）。
+    void emptySideMarksEveryOtherRowAsInsertOrDeleteWithoutError()
+    {
+        QTemporaryDir directory;
+        const QString blank = directory.filePath("new.txt"), filled = directory.filePath("filled.txt");
+        writeFile(blank, QByteArray());
+        writeFile(filled, "alpha\nbravo\ncharlie\n");
+        {
+            TextCompareSession session(blank, filled);
+            QString error;
+            QVERIFY2(session.open(&error), qPrintable(error));
+            QVERIFY2(error.isEmpty(), qPrintable(error));
+            // 空侧是「新文件」而不是「读不出来的文件」：0 行、可编辑。
+            QVERIFY(session.leftDocument().lines().isEmpty());
+            QVERIFY(session.leftDocument().canEdit());
+            const auto &result = session.comparison();
+            QCOMPARE(result.rows.size(), 3);
+            for (int row = 0; row < result.rows.size(); ++row) {
+                QCOMPARE(result.rows.at(row).leftLine, -1);
+                QCOMPARE(result.rows.at(row).rightLine, row);
+                QCOMPARE(result.rows.at(row).change, Text::Change::Insert);
+            }
+            // 整段是**一个**新增块，不是「替换成空」：`leftCount` 为 0 是这一条的分水岭，
+            // 若实现走成 Replace，界面上会显示成「左边原来有内容被删掉了」。
+            QCOMPARE(result.blocks.size(), 1);
+            QCOMPARE(result.blocks.first().change, Text::Change::Insert);
+            QCOMPARE(result.blocks.first().leftCount, 0);
+            QCOMPARE(result.blocks.first().rightCount, 3);
+            // 视图里两侧行数一致，且**两侧每一行**都被标记（左侧是填充行，
+            // 它记的是「这一行在左边不存在」），一行都不许漏。
+            QScopedPointer<QWidget> widget(session.createWidget());
+            widget->resize(1280, 700);
+            widget->show();
+            QTest::qWait(30);
+            auto *left = widget->findChild<TextPane *>("leftTextPane");
+            auto *right = widget->findChild<TextPane *>("rightTextPane");
+            QCOMPARE(left->blockCount(), 3);
+            QCOMPARE(right->blockCount(), 3);
+            QCOMPARE(left->toPlainText(), QStringLiteral("\n\n"));
+            QCOMPARE(rowColours(left).size(), 3);
+            QCOMPARE(rowColours(right).size(), 3);
+        }
+        {
+            // 反向：右侧为空时全部是删除。两个方向都要验——只验一侧的话，
+            // 把插入与删除写反（界面上表现为「新增的文件显示成被删除」）不会有人发现。
+            TextCompareSession session(filled, blank);
+            QString error;
+            QVERIFY2(session.open(&error), qPrintable(error));
+            const auto &result = session.comparison();
+            QCOMPARE(result.rows.size(), 3);
+            for (int row = 0; row < result.rows.size(); ++row) {
+                QCOMPARE(result.rows.at(row).leftLine, row);
+                QCOMPARE(result.rows.at(row).rightLine, -1);
+                QCOMPARE(result.rows.at(row).change, Text::Change::Delete);
+            }
+            QCOMPARE(result.blocks.size(), 1);
+            QCOMPARE(result.blocks.first().change, Text::Change::Delete);
+            QCOMPARE(result.blocks.first().leftCount, 3);
+            QCOMPARE(result.blocks.first().rightCount, 0);
+        }
+    }
+
+    // 标准 4：两侧完全不相关时不发生算法退化（无超长耗时、无栈溢出）。
+    //
+    // 这一条在引擎层已经有人守着了（`Tests/Text` 的 `tenThousandUnrelatedLines`
+    // 与 `boundedAdversarialInputIsReportedAsLimited`），这里补的是**会话层**：
+    // 服务层的 `alignmentLimited` 必须一路走到用户看得见的状态栏文字上，
+    // 否则「文件太大只做了粗略对齐」这件事只存在于一个没人读的字段里。
+    void unrelatedFilesStayBoundedWithoutDegrading()
+    {
+        QTemporaryDir directory;
+        const QString left = directory.filePath("left.txt"), right = directory.filePath("right.txt");
+        // ① 两侧毫无公共行：必须走精确的快速路径，既不受限也不出错。
+        {
+            QString a, b;
+            for (int i = 0; i < 4000; ++i) {
+                a += QStringLiteral("left %1\n").arg(i);
+                b += QStringLiteral("right %1\n").arg(i);
+            }
+            writeFile(left, a.toUtf8());
+            writeFile(right, b.toUtf8());
+        }
+        {
+            TextCompareSession session(left, right);
+            QElapsedTimer timer;
+            timer.start();
+            // 「不相关」不是错误：打开必须成功，而不是拿「文件差异过大」把用户挡回去。
+            QVERIFY2(session.open(), "两侧完全不相关时打开失败了");
+            QVERIFY2(timer.elapsed() < 5000, "4000 行完全不相关的文件超过了 5s");
+            const auto &result = session.comparison();
+            QCOMPARE(result.blocks.size(), 1);
+            QCOMPARE(result.blocks.first().change, Text::Change::Replace);
+            QCOMPARE(result.blocks.first().leftCount, 4000);
+            QCOMPARE(result.blocks.first().rightCount, 4000);
+            QVERIFY2(!result.alignmentLimited, "无公共行是不消耗预算的精确路径，不该报告受限");
+            QCOMPARE(result.rows.size(), 4000); // 一行都不许丢
+            // 视图也要能起来，并且两侧行数一致——退化到栈溢出时这里根本走不到。
+            QScopedPointer<QWidget> widget(session.createWidget());
+            widget->resize(1280, 700);
+            widget->show();
+            QTest::qWait(30);
+            auto *a = widget->findChild<TextPane *>("leftTextPane");
+            auto *b = widget->findChild<TextPane *>("rightTextPane");
+            QCOMPARE(a->blockCount(), 4000);
+            QCOMPARE(b->blockCount(), 4000);
+        }
+        // ② 每隔一行共有一行：相邻相同段只有 1 行，是最容易把递归深度或工作量
+        //    放大的形状。同样必须跑完、且结果结构完整。
+        {
+            QString a, b;
+            for (int i = 0; i < 4000; ++i) {
+                if (i % 2) { a += QStringLiteral("left %1\n").arg(i); b += QStringLiteral("right %1\n").arg(i); }
+                else       { a += QStringLiteral("shared %1\n").arg(i); b += QStringLiteral("shared %1\n").arg(i); }
+            }
+            writeFile(left, a.toUtf8());
+            writeFile(right, b.toUtf8());
+        }
+        {
+            TextCompareSession session(left, right);
+            QElapsedTimer timer;
+            timer.start();
+            QVERIFY(session.open());
+            QVERIFY2(timer.elapsed() < 5000, "交错共享行的 4000 行输入超过了 5s");
+            const auto &result = session.comparison();
+            // 共享行必须被认出来。期望值 2000 **是可以推出来的**，不是照抄观测值：
+            // 两侧的公共行只有那 2000 行 `shared i`（`left i` 与 `right i` 互不相同），
+            // 因此最长公共子序列的长度就是 2000，任何正确的对齐都必须把这 2000 行
+            // 报成 `Equal`。若哪天预算被调小、这一段退化成显式替换，这个数会变小——
+            // 那时先确认是不是预算/算法真被改好了（那是好事），再改这里的期望值，
+            // 而不要把这条删掉：它守的是「锚点要被找到」。
+            int equalRows = 0;
+            for (const Text::Row &row : result.rows) {
+                if (row.change != Text::Change::Equal) continue;
+                ++equalRows;
+                // 顺带守一件事：`Equal` 必须是**真的**相同。把没比过的两行说成
+                // 「一样」是最坏的一种错——它会让用户在界面上直接漏掉一处差异。
+                QVERIFY(session.leftDocument().lines().at(row.leftLine).text
+                        == session.rightDocument().lines().at(row.rightLine).text);
+            }
+            QCOMPARE(equalRows, 2000);
+            int leftCursor = 0, rightCursor = 0;
+            for (const Text::Block &block : result.blocks) {
+                QCOMPARE(block.leftStart, leftCursor);
+                QCOMPARE(block.rightStart, rightCursor);
+                leftCursor += block.leftCount;
+                rightCursor += block.rightCount;
+            }
+            QCOMPARE(leftCursor, 4000);
+            QCOMPARE(rightCursor, 4000);
+        }
+        // ③ 预算真的用尽时：必须是**被报告**的受限，而不是一次静默的粗略对齐。
+        //    构造与 `Tests/Text` 的同名用例一致（两侧各 2000 行互不相同、
+        //    正中间共享一行）——没有那一行公共行时 `run()` 会走不耗预算的快速路径。
+        {
+            QString a, b;
+            for (int i = 0; i < 2000; ++i) {
+                a += QStringLiteral("L%1\n").arg(i);
+                b += QStringLiteral("R%1\n").arg(i);
+            }
+            a += QStringLiteral("shared\n");
+            b += QStringLiteral("shared\n");
+            for (int i = 2000; i < 4000; ++i) {
+                a += QStringLiteral("L%1\n").arg(i);
+                b += QStringLiteral("R%1\n").arg(i);
+            }
+            writeFile(left, a.toUtf8());
+            writeFile(right, b.toUtf8());
+        }
+        {
+            TextCompareSession session(left, right);
+            QVERIFY(session.open());
+            const auto &result = session.comparison();
+            QVERIFY2(result.alignmentLimited, "预算用尽的输入必须报告 alignmentLimited");
+            // 会话层要把它说到用户看得见的地方：状态栏文字里必须有那句提示。
+            // 只断言字段而不断言文字的话，把 `updateStatus()` 里那一行删掉不会有人发现，
+            // 而用户看到的就是「两份大文件莫名显示成全都不一样」。
+            QVERIFY2(session.statusText().contains(QStringLiteral("work limit")),
+                     qPrintable(session.statusText()));
+            // 受限不等于「放弃」：两侧的每一行仍然必须被某个块覆盖到，
+            // 一行都不许在粗略对齐里凭空消失。夹具是 2000 + 1 + 2000 = 4001 行。
+            int leftCursor = 0, rightCursor = 0;
+            for (const Text::Block &block : result.blocks) {
+                QCOMPARE(block.leftStart, leftCursor);
+                QCOMPARE(block.rightStart, rightCursor);
+                leftCursor += block.leftCount;
+                rightCursor += block.rightCount;
+            }
+            QCOMPARE(leftCursor, 4001);
+            QCOMPARE(rightCursor, 4001);
+            QVERIFY(!result.rows.isEmpty());
+        }
     }
 };
 QTEST_MAIN(TextViewTests)
