@@ -5,6 +5,10 @@
 #include <QTabWidget>
 #include <functional>
 
+// 信号里用了 `CompareSession::StatusSeverity` 这个嵌套枚举，只有前置声明是不够的
+// ——moc 需要看到完整定义才能把参数类型写进元对象。（同层 Views -> Views，合规。）
+#include "comparesession.h"
+
 namespace LqCompare {
 class HomePage;
 class CompareSession;
@@ -37,6 +41,7 @@ signals:
     void activeSessionChanged(LqCompare::CompareSession *session);
     void activeSessionStateChanged();
     void statusTextChanged(const QString &text);
+    void statusSeverityChanged(LqCompare::CompareSession::StatusSeverity severity);
     void errorReported(const QString &message, const QString &detail);
 
 private:

@@ -264,15 +264,25 @@ void CompareSession::setDirty(bool dirty)
     emit dirtyChanged(m_dirty);
 }
 
-void CompareSession::setStatusText(const QString &text)
+void CompareSession::setStatusText(const QString &text, StatusSeverity severity)
 {
-    // 文本没变就不发信号：状态栏刷新是「按当前文件重写一遍文字」的常见写法，
-    // 每次都发会让状态栏在批量过程中反复重排，界面看起来在抖。
-    if (m_statusText == text) {
+    const bool textChanged = m_statusText != text;
+    const bool severityChanged = m_statusSeverity != severity;
+    // 两条通道**分别**去重。文本没变就不发 `statusTextChanged`——状态栏刷新是
+    // 「按当前文件重写一遍文字」的常见写法，每次都发会让状态栏在批量过程中反复
+    // 重排，界面看起来在抖。
+    //
+    // 但严重度**不能**被文本的那次去重一起吞掉。文本与严重度是两条独立的通道，
+    // 「同一句话、不同严重度」在契约上完全合法（`Tests/Session` 里钉着这一条）。
+    // 若在这里按文本 early-return，那类上报会**静默丢掉图标的变化**——
+    // 文本那条断言照旧通过，没有任何东西会红。
+    if (!textChanged && !severityChanged) {
         return;
     }
     m_statusText = text;
-    emit statusTextChanged(m_statusText);
+    m_statusSeverity = severity;
+    if (textChanged) emit statusTextChanged(m_statusText);
+    if (severityChanged) emit statusSeverityChanged(m_statusSeverity);
 }
 
 void CompareSession::reportError(const QString &message, const QString &detail)

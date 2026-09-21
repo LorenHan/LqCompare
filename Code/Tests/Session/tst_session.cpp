@@ -627,6 +627,64 @@ void TstSession::statusTextIsReadableBeforeAnySignal()
     QCOMPARE(probe.statusText(), QStringLiteral("Ready."));
 }
 
+void TstSession::statusSeverityDefaultsToNormalWhenOnlyTextIsSet()
+{
+    ProbeSession probe;
+    QCOMPARE(probe.statusSeverity(), CompareSession::StatusSeverity::Normal);
+
+    // 老写法（只传一句文本）必须继续把严重度压回 `Normal`，而不是保留上一次的
+    // `Warning`。否则「上一次是行尾混合、这一次只是一句普通提示」时警告图标会一直亮着
+    // ——图标与它旁边那句话对不上，用户只能学会忽略图标。
+    probe.setStatusText(QStringLiteral("Mixed endings."), CompareSession::StatusSeverity::Warning);
+    QCOMPARE(probe.statusSeverity(), CompareSession::StatusSeverity::Warning);
+    probe.setStatusText(QStringLiteral("All good."));
+    QCOMPARE(probe.statusSeverity(), CompareSession::StatusSeverity::Normal);
+}
+
+void TstSession::statusSeverityIsASeparateChannelFromTheText()
+{
+    ProbeSession probe;
+    QVector<QString> texts;
+    QVector<CompareSession::StatusSeverity> severities;
+    connect(&probe, &CompareSession::statusTextChanged, this,
+            [&texts](const QString &text) { texts << text; });
+    connect(&probe, &CompareSession::statusSeverityChanged, this,
+            [&severities](CompareSession::StatusSeverity severity) { severities << severity; });
+
+    const QString text = QStringLiteral("1 difference block(s) • Left: UTF-8, Mixed (LF 1 / CRLF 1)");
+    probe.setStatusText(text, CompareSession::StatusSeverity::Warning);
+    QCOMPARE(texts.size(), 1);
+    QCOMPARE(severities.size(), 1);
+
+    // 同一句话、同一档严重度：两条通道都不该发（状态栏刷新是高频路径）。
+    probe.setStatusText(text, CompareSession::StatusSeverity::Warning);
+    QCOMPARE(texts.size(), 1);
+    QCOMPARE(severities.size(), 1);
+
+    // **本轮的关键一条**：文本一字不差、只有严重度变。
+    //
+    // 这条为什么非有不可——`setStatusText()` 原本是「文本没变就 return」，
+    // 而严重度是写在同一句里的（行尾是 `LF` 还是 `Mixed`），于是一个看起来
+    // 完全合理的早退会把严重度的变化一起吞掉：状态栏的警告图标会卡在上一次的值上，
+    // 而且**没有任何东西会红**——文本那条断言照旧通过。
+    probe.setStatusText(text, CompareSession::StatusSeverity::Normal);
+    QCOMPARE(texts.size(), 1);
+    QCOMPARE(severities.size(), 2);
+    QCOMPARE(severities.last(), CompareSession::StatusSeverity::Normal);
+    QCOMPARE(probe.statusText(), text);
+
+    // 反过来：只换文本、严重度不动，则只发文本那条。
+    probe.setStatusText(QStringLiteral("0 difference block(s)"), CompareSession::StatusSeverity::Normal);
+    QCOMPARE(texts.size(), 2);
+    QCOMPARE(severities.size(), 2);
+
+    // 读回的值也必须跟着走——只在切标签时读一次 `statusSeverity()` 的容器
+    // （`SessionArea` 就是这么用的）拿到的应当是当前这一档。
+    QCOMPARE(probe.statusSeverity(), CompareSession::StatusSeverity::Normal);
+    probe.setStatusText(QStringLiteral("Mixed again."), CompareSession::StatusSeverity::Warning);
+    QCOMPARE(probe.statusSeverity(), CompareSession::StatusSeverity::Warning);
+}
+
 void TstSession::errorReportCarriesMessageAndDetail()
 {
     ProbeSession probe;

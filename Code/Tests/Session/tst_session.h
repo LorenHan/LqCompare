@@ -61,6 +61,8 @@ private slots:
     // ---------- C 三个公共出口（标准第 3 条） ----------
     void statusTextIsReportedOnlyWhenItChanges();
     void statusTextIsReadableBeforeAnySignal();
+    void statusSeverityIsASeparateChannelFromTheText();
+    void statusSeverityDefaultsToNormalWhenOnlyTextIsSet();
     void errorReportCarriesMessageAndDetail();
     void repeatedErrorsAreNotDeduplicated();
     void progressIsReportedOnlyWhenItChanges();

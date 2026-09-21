@@ -70,6 +70,8 @@ private:
     void openRecent(int index);
     void showError(const QString &message, const QString &detail = QString());
     void refreshStatusBar();
+    /// 按当前会话的 `CompareSession::StatusSeverity` 开关状态栏警告图标（TXT-010）。
+    void updateStatusWarning(CompareSession *session);
     void updateCommandState();
     void appendOutput(const QString &line);
 
@@ -81,6 +83,7 @@ private:
     QPlainTextEdit *m_output = nullptr;
     QLabel *m_statusSession = nullptr;
     QLabel *m_statusSpec = nullptr;
+    QLabel *m_statusWarning = nullptr;
     int m_untitledCounter = 0;
     int m_logSink = 0;
     QHash<CompareSession *, SessionDocument> m_documents;

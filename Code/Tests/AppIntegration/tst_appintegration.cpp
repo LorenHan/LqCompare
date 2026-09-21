@@ -16,6 +16,7 @@
 #include <QDir>
 #include <QFile>
 #include <QJsonDocument>
+#include <QLabel>
 #include <QMessageBox>
 #include <QPointer>
 #include <QPushButton>
@@ -380,6 +381,76 @@ private slots:
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         QCoreApplication::processEvents();
         QVERIFY(tracked.isNull());
+    }
+
+    // TXT-010 第 4 条的后半句：「（行尾）混合时给出警告图标」。
+    // 图标住在状态栏里、由 `CompareSession::StatusSeverity` 驱动，所以这一条
+    // 必须从**真窗口**上验：会话那一层的严重度在 `Tests/TextView` 已经钉住，
+    // 但「严重度变了，图标到底亮没亮」只在这条链上（会话 -> SessionArea -> MainWindow）。
+    void statusBarWarningIconFollowsMixedLineEndings()
+    {
+        QTemporaryDir directory;
+        const auto left = directory.filePath("left.txt"), right = directory.filePath("right.txt");
+        const auto mixed = directory.filePath("mixed.txt");
+        writeFile(left, "one\ntwo\n");
+        writeFile(right, "one\ntwo\n");
+        writeFile(mixed, "one\r\ntwo\n"); // LF + CRLF → 混合
+
+        MainWindow window;
+        window.resize(1280, 800);
+        window.show();
+        auto *icon = window.findChild<QLabel *>(QStringLiteral("statusWarningIcon"));
+        QVERIFY(icon);
+        // 图标在装配时就设好了，之后切换的只是可见性。若改成「亮的时候才设 pixmap」，
+        // 这里会红——而那个写法的代价是状态栏右侧每次刷新都重建一遍 pixmap。
+        const QPixmap *pixmap = icon->pixmap();
+        QVERIFY(pixmap && !pixmap->isNull());
+
+        auto *text = qobject_cast<TextCompareSession *>(window.openComparison("text", left, right));
+        QVERIFY(text);
+        QCoreApplication::processEvents();
+        // 两侧都是纯 LF → 不警告、图标不出现。
+        QCOMPARE(text->statusSeverity(), CompareSession::StatusSeverity::Normal);
+        QVERIFY(!icon->isVisible());
+
+        // 把左侧换成混合行尾的文件 → 图标出现。
+        QVERIFY(text->setPaths(mixed, right));
+        QCOMPARE(text->statusSeverity(), CompareSession::StatusSeverity::Warning);
+        QVERIFY(icon->isVisible());
+
+        // 换回去 → 图标灭。只验「亮」不验「灭」，一个「一旦警告就回不去」的
+        // 实现照样全绿，而用户看到的是一个永远亮着的警告。
+        QVERIFY(text->setPaths(left, right));
+        QCOMPARE(text->statusSeverity(), CompareSession::StatusSeverity::Normal);
+        QVERIFY(!icon->isVisible());
+
+        // **切标签**这条链单独走一遍：严重度是**当前**会话的属性，两个会话
+        // 一混合一干净，来回切必须跟着变。`MainWindow::refreshStatusBar()` 与
+        // `SessionArea` 的 `currentChanged` 转发各自都只负责一半，
+        // 少任何一半，现象都是「切过去图标还留着上一个会话的状态」。
+        auto *clean = qobject_cast<TextCompareSession *>(window.openComparison("text", left, right));
+        QVERIFY(clean); // 新标签自动成为当前会话（两侧都干净 → 图标不该亮）
+        QCoreApplication::processEvents();
+        QVERIFY(!icon->isVisible());
+
+        auto *mixedSession = qobject_cast<TextCompareSession *>(window.openComparison("text", mixed, right));
+        QVERIFY(mixedSession);
+        QCoreApplication::processEvents();
+        QVERIFY(icon->isVisible());
+
+        auto *area = sessions(window);
+        area->setCurrentIndex(area->indexOf(clean->widget()));
+        QCoreApplication::processEvents();
+        QVERIFY2(!icon->isVisible(), "切到干净会话后图标必须灭");
+
+        area->setCurrentIndex(area->indexOf(mixedSession->widget()));
+        QCoreApplication::processEvents();
+        QVERIFY2(icon->isVisible(), "切回混合会话后图标必须回来");
+
+        // 关掉所有会话（回到 Home 页）时也不该留着上一个会话的图标。
+        QVERIFY(area->closeAllSessions());
+        QCoreApplication::processEvents();
+        QVERIFY(!icon->isVisible());
     }
 };
 

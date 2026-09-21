@@ -29,6 +29,8 @@
 #include "cliexecution.h"
 #include <QDialogButtonBox>
 #include <QFormLayout>
+#include <QLabel>
+#include <QStyle>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QVBoxLayout>
@@ -104,6 +106,12 @@ MainWindow::MainWindow(QWidget *parent) : RibbonWindow(parent)
         });
         connect(m_sessions, &SessionArea::statusTextChanged, statusBar(),
                 [this](const QString &text) { statusBar()->showMessage(text); });
+        // 严重度是**另一条**通道，不能挂在上面那条上：上面那条只在文本变化时触发，
+        // 而「两侧从都混合变成都不混合」这类变化文案可以一字不差（图标该灭）。
+        connect(m_sessions, &SessionArea::statusSeverityChanged, this,
+                [this](CompareSession::StatusSeverity) {
+                    updateStatusWarning(m_sessions->currentSession());
+                });
         connect(m_sessions, &SessionArea::errorReported, this, &MainWindow::showError);
         connect(m_sessions->homePage(), &HomePage::recentSessionRequested, this, &MainWindow::openRecent);
     }
@@ -499,9 +507,40 @@ void MainWindow::setupStatusBar()
 {
     m_statusSpec = new QLabel(this);
     m_statusSession = new QLabel(this);
+    // 状态栏警告图标（TXT-010 第 4 条）。
+    //
+    // 为什么是一个**独立控件**而不是往状态文本里贴一个字符：状态文本是各会话自己
+    // 拼的字符串，塞进去等于要求每个会话都懂「怎么贴图标」，而且图标会跟着
+    // `showMessage()` 的生命周期一起被清掉。做成永久控件才能独立开关。
+    //
+    // 图标在装配时**一次**设好，之后只切可见性：每次刷新都重新生成一遍 pixmap
+    // 是白白开销，而且状态栏刷新在批量操作里是高频路径。
+    m_statusWarning = new QLabel(this);
+    m_statusWarning->setObjectName(QStringLiteral("statusWarningIcon"));
+    m_statusWarning->setPixmap(style()->standardIcon(QStyle::SP_MessageBoxWarning).pixmap(12, 12));
+    m_statusWarning->setToolTip(tr("This comparison needs attention; see the status message."));
+    m_statusWarning->setVisible(false);
+    statusBar()->addPermanentWidget(m_statusWarning);
     statusBar()->addPermanentWidget(m_statusSpec);
     statusBar()->addPermanentWidget(m_statusSession);
     statusBar()->showMessage(tr("Ready"));
+}
+
+void MainWindow::updateStatusWarning(CompareSession *session)
+{
+    if (!m_statusWarning) return;
+    // 图标只有**这一个写入点**（调用方也只有会话的严重度信号这一处）。
+    //
+    // 一开始这里还从 `refreshStatusBar()` 里也刷一遍，理由是「刷新状态栏时
+    // 顺手把图标也重算」——听起来无害，实际是**同一件事的第二条路**：
+    // 切标签时两条路都会跑，于是任何一条被删掉，图标的表现**一点变化都没有**
+    // （另一条把它兜住了）。本轮的两处变异（去掉容器在切标签时的严重度重播、
+    // 去掉 `refreshStatusBar()` 里的这次调用）因此**互相遮蔽、两边都测不出来**。
+    // 保留的是「容器重播」那条：它与 `SessionArea::statusTextChanged` 在切标签时
+    // 同样重播的既有约定对称，而 `refreshStatusBar()` 只负责状态栏的三个标签。
+    const bool warning = session
+        && session->statusSeverity() == CompareSession::StatusSeverity::Warning;
+    m_statusWarning->setVisible(warning);
 }
 
 void MainWindow::refreshTitle()
@@ -527,6 +566,9 @@ void MainWindow::refreshStatusBar()
     auto *session = m_sessions->currentSession();
     m_statusSpec->setText(session ? session->typeId() : QString());
     if (session) statusBar()->showMessage(session->statusText());
+    // 这里**故意不**刷警告图标：图标的唯一写入点是 `updateStatusWarning()`，
+    // 由会话的严重度信号驱动（切标签时容器会重播一次，因此这里漏不掉）。
+    // 两条路并存会让变异测试互相遮蔽，理由写在 `updateStatusWarning()` 上。
     updateCommandState();
 }
 

@@ -917,6 +917,92 @@ private slots:
             QVERIFY(!result.rows.isEmpty());
         }
     }
+    // TXT-010 第 3 条：开启「忽略行尾」时状态栏必须**明确说出来**。
+    // 不说的话，用户看着「0 difference block(s)」会以为两份文件真的一模一样，
+    // 而它们只是行尾风格不同（提交进版本库照样是一堆脏行）。
+    void statusBarReportsIgnoredLineEndingsAndFinalNewline()
+    {
+        QTemporaryDir directory;
+        const QString left = directory.filePath("left.txt"), right = directory.filePath("right.txt");
+        // 两侧只差行尾风格（CRLF vs LF），行内容一字不差。
+        writeFile(left, "one\r\ntwo\r\n");
+        writeFile(right, "one\ntwo\n");
+        TextCompareSession session(left, right);
+        QVERIFY(session.open());
+        QCOMPARE(session.comparisonOptions().ignoreEol, true);
+        QVERIFY(session.comparison().differences.isEmpty());
+        QVERIFY2(session.statusText().contains(QStringLiteral("Line endings ignored")),
+                 qPrintable(session.statusText()));
+        // 末尾换行那档出厂是**不忽略**，所以这句话不该出现——
+        // 出现了就说明默认值被改过，而提示还照着老默认值说话。
+        QVERIFY(!session.statusText().contains(QStringLiteral("Final newline ignored")));
+
+        // 关掉忽略 → 差异显出来，提示也必须跟着消失。留着一句「已忽略行尾」
+        // 而其实正在比较行尾，是**告诉用户一件不成立的事**——比不说还糟。
+        auto options = session.comparisonOptions();
+        options.ignoreEol = false;
+        session.setComparisonOptions(options);
+        QVERIFY(!session.comparison().differences.isEmpty());
+        QVERIFY2(!session.statusText().contains(QStringLiteral("Line endings ignored")),
+                 qPrintable(session.statusText()));
+
+        // 反过来打开末尾换行忽略 → 对应的提示出现（两个开关各有各的一句话）。
+        options.ignoreFinalNewline = true;
+        session.setComparisonOptions(options);
+        QVERIFY2(session.statusText().contains(QStringLiteral("Final newline ignored")),
+                 qPrintable(session.statusText()));
+    }
+    // TXT-010 第 4 条：状态栏把两侧行尾报成 LF/CRLF/CR/混合，**混合时**
+    // 把严重度抬到 `Warning`（状态栏据此亮警告图标），不混合时回落到 `Normal`。
+    void mixedEndingsRaiseTheStatusSeverity()
+    {
+        QTemporaryDir directory;
+        const QString left = directory.filePath("left.txt"), right = directory.filePath("right.txt");
+        const QString mixed = directory.filePath("mixed.txt"), uniform = directory.filePath("uniform.txt");
+        writeFile(mixed, "one\r\ntwo\n");   // LF + CRLF → 混合
+        writeFile(uniform, "one\ntwo\n");   // 全 LF
+        writeFile(left, "one\ntwo\n");
+        writeFile(right, "one\ntwo\n");
+
+        TextCompareSession session(left, right);
+        QVERIFY(session.open());
+        // 两侧都不混合 → 不警告，但行尾类型照样要报出来（这半句是第 4 条的前半句）。
+        QCOMPARE(session.statusSeverity(), CompareSession::StatusSeverity::Normal);
+        QVERIFY2(session.statusText().contains(QStringLiteral("Left: UTF-8, LF")),
+                 qPrintable(session.statusText()));
+        QVERIFY(!session.statusText().contains(QStringLiteral("Mixed")));
+
+        // 直接连信号而不是用 QSignalSpy：Spy 要靠元类型表才能存下参数，
+        // 这里只关心「发了几次」，直连更省事也更不容易被环境差异绊到。
+        QVector<CompareSession::StatusSeverity> severities;
+        connect(&session, &CompareSession::statusSeverityChanged, &session,
+                [&severities](CompareSession::StatusSeverity severity) { severities << severity; });
+
+        // 左侧换成混合文件 → 告警，且混合的计数要报出来（用户按这句话去数行）。
+        QVERIFY(session.setPaths(mixed, uniform));
+        // 三个计数**总是**都印出来（用不到的那档是 0），所以这里写全——
+        // 写半句会让人以为「Mixed 后面只跟两种风格」。
+        QVERIFY2(session.statusText().contains(QStringLiteral("Mixed (LF 1 / CRLF 1 / CR 0)")),
+                 qPrintable(session.statusText()));
+        QCOMPARE(session.statusSeverity(), CompareSession::StatusSeverity::Warning);
+        QCOMPARE(severities.size(), 1);
+        QCOMPARE(severities.last(), CompareSession::StatusSeverity::Warning);
+
+        // 换回两侧都不混合 → 图标该灭。这条必须走一遍：只验「亮」不验「灭」的话，
+        // 一个「一旦警告就再也回不去」的实现在测试里是全绿的。
+        QVERIFY(session.setPaths(uniform, uniform));
+        QCOMPARE(session.statusSeverity(), CompareSession::StatusSeverity::Normal);
+        QCOMPARE(severities.size(), 2);
+        QCOMPARE(severities.last(), CompareSession::StatusSeverity::Normal);
+
+        // 混合出现在**右侧**时同样该警告（只测左侧的话，
+        // 把判据写成「只看 m_left」不会有任何东西变红）。
+        QVERIFY(session.setPaths(uniform, mixed));
+        QCOMPARE(session.statusSeverity(), CompareSession::StatusSeverity::Warning);
+        QCOMPARE(severities.size(), 3);
+        QVERIFY2(session.statusText().contains(QStringLiteral("Mixed (LF 1 / CRLF 1 / CR 0)")),
+                 qPrintable(session.statusText()));
+    }
 };
 QTEST_MAIN(TextViewTests)
 #include "tst_textview.moc"

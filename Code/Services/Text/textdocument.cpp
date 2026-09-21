@@ -285,10 +285,16 @@ QString Document::warning() const
     return {};
 }
 
+void Document::countEndings(int *counts) const
+{
+    for (int i = 0; i < 4; ++i) counts[i] = 0;
+    for (const Line &line : m_lines) ++counts[static_cast<int>(line.eol)];
+}
+
 QString Document::eolDescription() const
 {
     int counts[4] = {};
-    for (const Line &line : m_lines) ++counts[static_cast<int>(line.eol)];
+    countEndings(counts);
     QStringList types;
     if (counts[1]) types << QStringLiteral("LF");
     if (counts[2]) types << QStringLiteral("CRLF");
@@ -301,10 +307,21 @@ QString Document::eolDescription() const
 Eol Document::preferredEol() const
 {
     int counts[4] = {};
-    for (const Line &line : m_lines) ++counts[static_cast<int>(line.eol)];
+    countEndings(counts);
     int best = 1;
     for (int i = 2; i < 4; ++i) if (counts[i] > counts[best]) best = i;
     return static_cast<Eol>(best);
+}
+
+bool Document::hasMixedEndings() const
+{
+    int counts[4] = {};
+    countEndings(counts);
+    // 与 `eolDescription()` 的 `Mixed` 判据逐字一致：只数 LF / CRLF / CR，
+    // 不数 `None`（理由见头文件）。
+    int present = 0;
+    for (int i = 1; i < 4; ++i) if (counts[i]) ++present;
+    return present > 1;
 }
 
 QString Document::normalizedText() const

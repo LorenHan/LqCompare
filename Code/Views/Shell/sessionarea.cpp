@@ -22,6 +22,10 @@ SessionArea::SessionArea(QWidget *parent) : QTabWidget(parent)
         emit activeSessionChanged(session);
         emit activeSessionStateChanged();
         emit statusTextChanged(session ? session->statusText() : tr("Ready"));
+        // 切标签时严重度要跟着一起播：新会话可能是「行尾混合」那一个，
+        // 只播文本的话图标会留着上一个会话的状态。
+        emit statusSeverityChanged(session ? session->statusSeverity()
+                                           : CompareSession::StatusSeverity::Normal);
     });
     // A moved Home tab must never be mistaken for a closable session.
     connect(tabBar(), &QTabBar::tabMoved, this, [this] {
@@ -72,6 +76,10 @@ int SessionArea::addSession(CompareSession *session)
     connect(session, &CompareSession::statusTextChanged, this, [this, session](const QString &text) {
         if (session == currentSession()) emit statusTextChanged(text);
     });
+    connect(session, &CompareSession::statusSeverityChanged, this,
+            [this, session](CompareSession::StatusSeverity severity) {
+                if (session == currentSession()) emit statusSeverityChanged(severity);
+            });
     connect(session, &CompareSession::errorReported, this, [this](const SessionError &error) {
         emit errorReported(error.message, error.detail);
     });

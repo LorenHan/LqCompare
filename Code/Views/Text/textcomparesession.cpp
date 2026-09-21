@@ -163,7 +163,16 @@ void TextCompareSession::updateStatus()
     if (!m_right.warning().isEmpty()) status += tr(" • Right: %1").arg(m_right.warning());
     if (m_leftReadOnly) status += tr(" • Left read-only");
     if (m_rightReadOnly) status += tr(" • Right read-only");
-    setStatusText(status);
+    // 行尾混合时把严重度抬到 `Warning`（状态栏据此亮警告图标，TXT-010 第 4 条）。
+    // 判据取自 `Document::hasMixedEndings()` 而不是在这里嗅 `eolDescription()` 的
+    // 文字——文案是给用户看的，判定不该跟着文案走。
+    //
+    // **两侧任意一侧混合就警告**：混合行尾本身是要处理的问题（提交进版本库后
+    // 会让 diff 工具反复报同一批行），而状态栏只有一行，没法按侧分别亮两个图标。
+    // 到底哪一侧混合，文本里两个 `eolDescription()` 已经分别写清楚了。
+    const StatusSeverity severity = (m_left.hasMixedEndings() || m_right.hasMixedEndings())
+        ? StatusSeverity::Warning : StatusSeverity::Normal;
+    setStatusText(status, severity);
 }
 
 bool TextCompareSession::setText(bool left, const QString &text, QString *error)

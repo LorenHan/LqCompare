@@ -252,6 +252,118 @@ private slots:
         QCOMPARE(compare(a.lines(), b.lines(), options).differences.size(), 1);
         QVERIFY(compare(b.lines(), c.lines(), options).differences.isEmpty());
     }
+    // 状态栏要显示的四种取值（TXT-010 第 4 条）。此前的覆盖只有一句
+    // `startsWith("Mixed")`：另外三支（LF / CRLF / CR）与「没有行尾」那支
+    // **零断言**，把某支的返回文案写错不会有任何东西变红。
+    void eolDescriptionNamesTheEndingStyle()
+    {
+        QCOMPARE(decoded("a\nb\n").eolDescription(), QStringLiteral("LF"));
+        QCOMPARE(decoded("a\r\nb\r\n").eolDescription(), QStringLiteral("CRLF"));
+        QCOMPARE(decoded("a\rb\r").eolDescription(), QStringLiteral("CR"));
+        QCOMPARE(decoded("a").eolDescription(), QStringLiteral("No line ending"));
+        QCOMPARE(decoded("").eolDescription(), QStringLiteral("No line ending"));
+        // 混合时不只是「说一句 Mixed」：三个计数也要对。用户拿着这句话去数行，
+        // 数字乱填的话他按图索骥只会更糊涂。
+        QCOMPARE(decoded("a\nb\r\nc\r\nd\r").eolDescription(),
+                 QStringLiteral("Mixed (LF 1 / CRLF 2 / CR 1)"));
+    }
+    // 状态栏图标（第 4 条后半句）要判「混不混合」。判据做成**数据上的谓词**，
+    // 而不是让调用方去嗅 `eolDescription()` 的文案——文案改词、加计数、
+    // 将来接翻译，都不该让图标失灵。
+    void mixedEndingsAreAPredicateNotAStringSniff()
+    {
+        QVERIFY(!decoded("a\nb\n").hasMixedEndings());
+        QVERIFY(!decoded("a\r\nb\r\n").hasMixedEndings());
+        QVERIFY(!decoded("a\rb\r").hasMixedEndings());
+        QVERIFY(!decoded("").hasMixedEndings());
+        QVERIFY(decoded("a\nb\r\n").hasMixedEndings());
+        QVERIFY(decoded("a\r\nb\r").hasMixedEndings());
+        QVERIFY(decoded("a\nb\r\nc\r").hasMixedEndings());
+
+        // **末尾没有换行不算一种「风格」**：它说的是「文件没有以换行收尾」，
+        // 与 LF/CRLF/CR 的选择是两条独立的事（第 2 条）。若把 `Eol::None` 也算进去，
+        // 任何不以换行收尾的文件都会被报成「混合」——警告图标就一直亮着，
+        // 叫狼来了的提示等于没有提示。
+        QVERIFY(!decoded("a\r\nb").hasMixedEndings());
+        QVERIFY(!decoded("a\nb").hasMixedEndings());
+        QVERIFY(!decoded("a").hasMixedEndings());
+
+        // 两处判据必须是同一件事。口径一旦分家，状态栏会出现
+        // 「Left: LF」旁边亮着一个「混合」警告图标。
+        for (const char *sample : {"a\nb\n", "a\r\nb\r\n", "a\rb\r", "a", "",
+                                   "a\nb\r\n", "a\r\nb", "a\nb\r\nc\r"}) {
+            const auto doc = decoded(sample);
+            QCOMPARE(doc.hasMixedEndings(),
+                     doc.eolDescription().startsWith(QStringLiteral("Mixed")));
+        }
+    }
+    // 完成标准 1 的原话是「仅行尾序列不同的行不判为差异」。
+    // **三种风格两两组合**都要成立：只测 CRLF↔LF 的话，CR 那条分支写漏
+    // （例如把 `if (ignoreEol && ending) ending = 1` 写成「非零即 CRLF」）
+    // 不会有任何东西变红。
+    void everyEndingStyleIsIgnoredWhileTheToggleIsOn()
+    {
+        const QVector<QByteArray> styles = {QByteArray("a\nb\n"), QByteArray("a\r\nb\r\n"),
+                                            QByteArray("a\rb\r")};
+        for (int i = 0; i < styles.size(); ++i) {
+            for (int j = 0; j < styles.size(); ++j) {
+                const auto left = decoded(styles[i]), right = decoded(styles[j]);
+                CompareOptions options; // ignoreEol 出厂为真
+                QVERIFY2(compare(left.lines(), right.lines(), options).differences.isEmpty(),
+                         qPrintable(QStringLiteral("忽略行尾时第 %1 与第 %2 种风格应当无差异").arg(i).arg(j)));
+                CompareOptions exact;
+                exact.ignoreEol = false;
+                const auto strict = compare(left.lines(), right.lines(), exact);
+                if (i == j) {
+                    // 关掉忽略**不是**「一律报差异」——同一风格仍应完全相同。
+                    QVERIFY(strict.differences.isEmpty());
+                } else {
+                    QVERIFY(!strict.differences.isEmpty());
+                    // 差异方向照旧：左是改前、右是改后。
+                    QCOMPARE(strict.blocks.first().change, Change::Replace);
+                }
+            }
+        }
+    }
+    // 完成标准 2 的原话：「文件末尾是否有换行这一差异**独立于**行尾类型，单独可控」。
+    // 把它拆成两条可判的断言：
+    //   独立 —— 末尾换行的判定不随 `ignoreEol` 是哪一档而改变；
+    //   可控 —— `ignoreFinalNewline` 一开一关就能决定它显不显出来。
+    // 两两组合（3 种风格 × 2 档 ignoreEol × 2 档 ignoreFinalNewline）都走一遍。
+    void finalNewlineToggleIsIndependentOfTheEndingStyle()
+    {
+        const QByteArray styles[] = {QByteArray("x\ny\n"), QByteArray("x\r\ny\r\n"),
+                                     QByteArray("x\ry\r")};
+        for (const QByteArray &style : styles) {
+            // 去掉最后一行的行尾序列（CRLF 去掉两个字节，LF / CR 去掉一个）。
+            const QByteArray withoutEnding = style.endsWith("\r\n")
+                ? style.left(style.size() - 2) : style.left(style.size() - 1);
+            const auto withEnd = decoded(style), withoutEnd = decoded(withoutEnding);
+            // 样本两侧都**不混合**，免得把「混合」那条规则也卷进来。
+            QVERIFY(!withEnd.hasMixedEndings());
+            QVERIFY(!withoutEnd.hasMixedEndings());
+
+            for (int strict = 0; strict < 2; ++strict) {
+                CompareOptions options;
+                options.ignoreEol = (strict == 0);
+                options.ignoreFinalNewline = false;
+                // 同一风格、只差收尾换行 → 总是差异，与 ignoreEol 无关（「独立」）。
+                QVERIFY2(!compare(withEnd.lines(), withoutEnd.lines(), options).differences.isEmpty(),
+                         qPrintable(QStringLiteral("ignoreEol=%1 时末尾换行差异被吞掉了").arg(strict)));
+                options.ignoreFinalNewline = true;
+                // 打开开关 → 总是无差异，同样与 ignoreEol 无关（「可控」）。
+                QVERIFY2(compare(withEnd.lines(), withoutEnd.lines(), options).differences.isEmpty(),
+                         qPrintable(QStringLiteral("ignoreEol=%1 时忽略末尾换行没生效").arg(strict)));
+            }
+        }
+
+        // 一个边界：另一侧为空时没有「末行的行尾」可借，忽略末尾换行不该把
+        // 「空文件」与「一行文本」说成一样。这条钉住 `keys()` 里的 `!other.isEmpty()`。
+        CompareOptions options;
+        options.ignoreFinalNewline = true;
+        QVERIFY(!compare({}, decoded("a").lines(), options).differences.isEmpty());
+        QVERIFY(!compare(decoded("a").lines(), {}, options).differences.isEmpty());
+    }
     void ignoreRulesKeepOriginals()
     {
         const auto a = decoded(" Foo  BAR \nfoo bar\n"), b = decoded("foo\tbar\nfoobar\n");

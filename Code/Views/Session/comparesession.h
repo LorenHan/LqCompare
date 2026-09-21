@@ -94,6 +94,25 @@ public:
     };
     Q_ENUM(State)
 
+    ///
+    /// \brief 状态栏文本的严重程度。
+    ///
+    /// **为什么要另开一条通道，而不是把「警告」写进文本里**：`TXT-010` 第 4 条
+    /// 要求「行尾混合时给出**警告图标**」——图标不是文字，容器无法从文本里
+    /// 可靠地推出来。若让 `MainWindow` 去嗅 `statusText()` 里有没有某个词，
+    /// 就是**反向解析自己刚拼好的那句话**（SESS-001 的注释里已经写过这条禁忌）：
+    /// 任何一次文案调整或翻译都会静默让图标失灵，而失败的样子是「图标不见了」，
+    /// 没有任何东西会红。严重程度与文本因此**分开上报、各自去重**。
+    ///
+    /// 取值刻意只有两档：需求里没有「错误/致命」这一级（未打开、失败由
+    /// `reportError()` 走另一条出口），多留一档就会有人随手用错。
+    ///
+    enum class StatusSeverity {
+        Normal,  ///< 普通信息，状态栏不额外显示任何图标
+        Warning, ///< 需要用户注意（例如两侧行尾混合），状态栏显示警告图标
+    };
+    Q_ENUM(StatusSeverity)
+
     explicit CompareSession(QString typeId, QObject *parent = nullptr);
     ~CompareSession() override;
 
@@ -155,6 +174,8 @@ signals:
 
     /// 公共出口 1：状态栏文本。会话不直接碰状态栏，由容器转接。
     void statusTextChanged(const QString &text);
+    /// 公共出口 1 的伴随通道：状态文本的严重程度变化（图标由容器决定怎么画）。
+    void statusSeverityChanged(LqCompare::CompareSession::StatusSeverity severity);
     /// 公共出口 2：错误上报。
     void errorReported(const LqCompare::SessionError &error);
     /// 公共出口 3：进度上报。
@@ -168,13 +189,15 @@ public:
     // （「正在打开命令行传入的文件……」），而让它们各自 emit 信号是不可能的——
     // 信号只能由本类发出。入口保持一个，状态栏就不必判断消息是谁发的。
     // -----------------------------------------------------------------------
-    void setStatusText(const QString &text);
+    void setStatusText(const QString &text, StatusSeverity severity = StatusSeverity::Normal);
     void reportError(const QString &message, const QString &detail = QString());
     void reportProgress(int current, int total, const QString &what = QString());
 
     /// 最近一次上报的状态栏文本。容器在挂上信号之前可以先读一次，
     /// 避免「连接建立得比第一次上报晚」而漏掉唯一的那条状态。
     QString statusText() const { return m_statusText; }
+    /// 最近一次上报的严重程度。缺省是 `Normal`——没上报过就说明还没有警告。
+    StatusSeverity statusSeverity() const { return m_statusSeverity; }
     /// 最近一次上报的进度。
     SessionProgress progress() const { return m_progress; }
 
@@ -219,6 +242,7 @@ private:
     QPointer<QWidget> m_widget;
     SessionSettings *m_settings = nullptr;
     QString m_statusText;
+    StatusSeverity m_statusSeverity = StatusSeverity::Normal;
     SessionProgress m_progress;
 };
 
