@@ -317,12 +317,48 @@ QTEST_APPLESS_MAIN(ZZProbeFail)
     # 挂死探针睡 25 秒，自测把超时设成 5 秒，所以它一定被看门狗打断。
     # **刻意不睡无限长**——运行器的超时被改坏时（变异测试会真的这么做），
     # 自测要「断言失败」，而不是跟着一起永久挂住。
+    #
+    # 它**在被打断之前自己写一份统计行**，这是刻意的（2026-09-21 加）：
+    # 「被看门狗打断的套件会不会留下统计行」**是平台相关的**——Linux 上 Qt Test
+    # 截住了 SIGTERM，写下 `Totals: 1 passed, 1 failed, … 5007ms` 之后以 SIGABRT
+    # （退出码 134）收场；macOS 上同一份代码被 TERM 直接带走，一个字节都不留。
+    # 靠这个差异去验「超时套件的用例数不计入合计」的话，这条规则就**只在 Linux 上
+    # 被验到**：本机无论怎么变异都不会红（而它正是 CI 上红的那一条）。
+    # 自己写一份出来，这个边界在**每个平台**上都是同一个形状：
+    #   计入 → 合计 7 passed / 2 failed；不计入 → 6 passed / 1 failed。
+    # 统计行是照运行器传给它的 `-o <路径>,txt` 找的，不额外加环境变量——
+    # 与 Qt 自己的致命信号处理器落在同一个文件上，形状最接近真实情形。
+    #
+    # **这条探针刻意用 `QTEST_MAIN` 而不是其余几条的 `QTEST_APPLESS_MAIN`**：
+    # 只有前者会真的建出应用对象，而 `QCoreApplication::arguments()` 没有应用对象
+    # 时会直接拒绝服务（实测：打印 “Please instantiate the QApplication object
+    # first”，返回空表，于是统计行根本没写下来，那条断言在一个「看起来完全正常」
+    # 的夹具上红了）。本工程 `QT -= gui`，所以 `QTEST_MAIN` 建的就是 QCoreApplication。
     write_probe ZZProbeHang tst_zzprobehang '
+#include <QCoreApplication>
+#include <QStringList>
 class ZZProbeHang : public QObject { Q_OBJECT
 private slots:
-    void neverFinishes() { QThread::sleep(25); QVERIFY(true); }
+    void neverFinishes()
+    {
+        const QStringList args = QCoreApplication::arguments();
+        for (int i = 0; i + 1 < args.size(); ++i) {
+            if (args.at(i) != QLatin1String("-o")) continue;
+            QString path = args.at(i + 1);
+            const int comma = path.lastIndexOf(QLatin1Char(0x2c));
+            if (comma > 0) path.truncate(comma);
+            QFile file(path);
+            if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+                file.write("Totals: 1 passed, 1 failed, 0 skipped, 0 blacklisted, 5007ms\n");
+                file.close();
+            }
+            break;
+        }
+        QThread::sleep(25);
+        QVERIFY(true);
+    }
 };
-QTEST_APPLESS_MAIN(ZZProbeHang)
+QTEST_MAIN(ZZProbeHang)
 #include "tst_zzprobehang.moc"'
 
     # 「没写结果就没了」探针。**刻意不用 SIGSEGV/SIGABRT**：Qt Test 对这两个
@@ -417,6 +453,15 @@ CPP
     st_contains "复现命令指向该套件自己的二进制" "${out4}" 'tst_zzprobefail -o'
     st_contains "挂死探针被超时打断并单独点名" "${out4}" '✗ 套件超时'
     st_contains "超时套件在末尾汇总里单独成一行" "${out4}" '^超时套件（'
+    # 这一条钉的是**分类规则**：`另有 N 个套件没有产出统计行` 这份清单只收
+    # 「非超时**且**没有统计行」的套件。挂死探针（已经被上面那行点过名）绝不许
+    # 在这里再出现一次——两个清单重叠会让「红了的套件数」与清单长度对不上，
+    # 而那正是最容易让人怀疑合计本身的地方。
+    # 为什么要写成整行：只断言「有这一行」的话，把挂死探针也塞进这份清单、
+    # 或者把统计行判据反过来写，都不会有任何东西变红（本轮之前就是如此）。
+    st_line_matches "无统计行清单只收「非超时且没统计行」的两个探针（超时的那个不许重复出现）" \
+        "${out4}" '^另有 [0-9]+ 个套件没有产出统计行' \
+        '另有 2 个套件没有产出统计行（其用例数不计入上面的合计）：ZZProbeBadBuild ZZProbeHardExit '
     st_contains "硬退出探针走「没有产出 Totals 行」" "${out4}" '没有产出 Totals 行'
     st_contains "硬退出探针的 stderr 被贴出来" "${out4}" 'stderr 结尾'
     # 注意 Qt 的口径：`Totals:` 行把 initTestCase 与 cleanupTestCase 也算作用例，
@@ -442,6 +487,13 @@ CPP
         "$([[ -s "${build}/ZZProbeHardExit/stderr.log" ]] && echo 0 || echo 1)"
     st_expect "超时探针留下了超时标记" \
         "$([[ -f "${build}/ZZProbeHang/timeout.marker" ]] && echo 0 || echo 1)"
+    # 这一条守的是**夹具的形状**，不是运行器的行为：断言「超时套件的用例数不计入
+    # 合计」之前，必须先确认那个超时探针**真的留下了统计行**——否则这条规则在这个
+    # 平台上根本没有被验到。它曾经就只在 Linux 上被验到（macOS 上那个探针被 TERM
+    # 直接带走、一个字节都不留），于是本机不管怎么变异都是绿的。
+    # 少了这一条，探针哪天不再写统计行，下面那条断言会「照样绿」，边界却已经空了。
+    st_contains "挂死探针在被打断前写下了统计行（否则「超时不计数」是空转的）" \
+        "${build}/ZZProbeHang/results.txt" '^Totals: 1 passed, 1 failed, 0 skipped'
     st_expect "构建日志被测出并留档" \
         "$([[ -s "${build}/ZZProbePass/build.log" ]] && echo 0 || echo 1)"
     # 「本轮产物必须在任何动作之前删干净」唯一的可观测点：构建失败那一轮
@@ -866,7 +918,17 @@ reap_suite() {
         read -r st to hs ps fs ss < "${summary_file}" || true
     fi
     st="${st:-255}"; to="${to:-0}"; hs="${hs:-0}"; ps="${ps:-0}"; fs="${fs:-0}"; ss="${ss:-0}"
-    if [[ ${hs} -eq 1 ]]; then
+    # **超时的套件一例都不计入合计**——末尾那句「超时套件（…其用例数不计入上面的
+    # 合计）」就是这句代码的承诺，必须由这一个条件同时守住。
+    #
+    # 为什么要写成 `hs -eq 1 && to -eq 0` 而不是只判 `hs`：**「被看门狗打断的套件
+    # 会不会留下统计行」是平台相关的**。Linux 上 Qt Test 截住了 SIGTERM，写下
+    # `Totals: 1 passed, 1 failed, … 5007ms` 之后以 SIGABRT（退出码 134）收场；
+    # macOS 上同一份代码被 TERM 直接带走，一个字节都不留。只判 `hs` 的话，
+    # 同一份运行器在 macOS 上算 6 passed、在 Linux 上算 7 passed——**而它自己在
+    # 同一份输出的末尾都写着「不计入合计」**。CI 的 ubuntu 腿就因为这个红了一整段
+    # 时间（自测步骤红 → 「运行测试套件」被跳过 → 那条腿一个套件都没跑过）。
+    if [[ ${hs} -eq 1 && ${to} -eq 0 ]]; then
         total_pass=$((total_pass + ps))
         total_fail=$((total_fail + fs))
         total_skip=$((total_skip + ss))
@@ -877,9 +939,11 @@ reap_suite() {
         failed_suites="${failed_suites}${suite} "
     elif [[ ${st} -ne 0 ]]; then
         if [[ ${hs} -eq 0 ]]; then
-            # 没有统计行的**非超时**套件才算「可能初始化就崩了」：超时的套件同样
-            # 不会有统计行，但它上面已经单独点名；列进两个清单会让
-            # 「6 个套件红了」与清单长度对不上，而这正是最容易让人怀疑合计的理由。
+            # 没有统计行的**非超时**套件才算「可能初始化就崩了」：超时的套件在
+            # 上面已经单独点名，列进两个清单会让「6 个套件红了」与清单长度对不上，
+            # 而这正是最容易让人怀疑合计的理由。（注意判据是 `to`，**不是**
+            # 「有没有统计行」——超时的套件在 Linux 上是留下统计行的，见上面
+            # 那句 `hs -eq 1 && to -eq 0` 的长注释。）
             no_summary_suites="${no_summary_suites}${suite} "
             no_summary_count=$((no_summary_count + 1))
         fi
