@@ -515,6 +515,7 @@ Folder::Options FolderCompareView::options() const
     options.maximumDepth = m_maximumDepth;
     options.scanMaskDeclaration = m_scanMask->toPlainText();
     options.nameCaseSensitivity = m_caseSensitive->isChecked() ? Qt::CaseSensitive : Qt::CaseInsensitive;
+    options.compareFirstBytes = m_compareFirstBytes;
     return options;
 }
 
@@ -525,6 +526,7 @@ void FolderCompareView::setOptions(const Folder::Options &options)
     m_maximumDepth = options.maximumDepth;
     m_scanMask->setPlainText(options.scanMaskDeclaration);
     m_caseSensitive->setChecked(options.nameCaseSensitivity == Qt::CaseSensitive);
+    m_compareFirstBytes = options.compareFirstBytes;
 }
 
 void FolderCompareView::activate(const QModelIndex &index)

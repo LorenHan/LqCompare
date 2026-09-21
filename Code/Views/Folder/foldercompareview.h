@@ -79,6 +79,10 @@ private:
     bool m_hasResult = false;
     bool m_rightActive = false;
     int m_maximumDepth = 128;
+    // 与 m_maximumDepth 同样的处理：视图目前没有对应的控件，但要**原样保留**
+    // 「只比较前 N 字节」的值。若 options() 不把它带回来，任何一次
+    // 「读视图选项 → 写回会话」都会把用户设好的预算静默重置成 0（关闭）。
+    qint64 m_compareFirstBytes = 0;
 };
 
 } // namespace LqCompare

@@ -16,6 +16,7 @@ const QString caseKey = QStringLiteral("folder.nameCaseSensitivity");
 const QString recursiveKey = QStringLiteral("folder.recursive");
 const QString contentKey = QStringLiteral("folder.compareContent");
 const QString depthKey = QStringLiteral("folder.maximumDepth");
+const QString bytesKey = QStringLiteral("folder.compareFirstBytes");
 
 QString optionsError(const Folder::Options &options)
 {
@@ -24,6 +25,8 @@ QString optionsError(const Folder::Options &options)
         return QObject::tr("名称大小写策略无效；必须选择区分或忽略大小写。");
     if (options.maximumDepth < 0 || options.maximumDepth > 256)
         return QObject::tr("递归深度上限必须是 0 到 256 之间的整数。");
+    if (options.compareFirstBytes < 0)
+        return QObject::tr("「只比较前 N 字节」必须是 0（关闭）或正整数。");
     const auto parsed = Filter::MaskFilter::parse(options.scanMaskDeclaration);
     return parsed.ok() ? QString() : QObject::tr("扫描掩码无效：\n%1").arg(parsed.describeErrors());
 }
@@ -41,6 +44,27 @@ bool exactInteger(const QVariant &value, int minimum, int maximum, int *number)
         || std::floor(candidate) != candidate)
         return false;
     *number = static_cast<int>(candidate);
+    return true;
+}
+
+// 字节预算只接受非负整数，且**必须是整数值**。
+//
+// 为什么不像 depth 那样宽松到「能转成整数就算」：0.5 被静默截断成 0 恰好等于
+// 「关闭」——用户设了个值，得到的却是默认行为，而且没有任何反馈。
+// 这类「值被悄悄改掉」的设置错比「值非法被拒绝」难发现得多。
+// 允许 Double 只是为了兼容 QVariant 里以浮点存储的整数值（如 JSON 反序列化）。
+bool exactByteCount(const QVariant &value, qint64 *bytes)
+{
+    switch (value.type()) {
+    case QVariant::Int: case QVariant::UInt: case QVariant::LongLong:
+    case QVariant::ULongLong: case QVariant::Double: break;
+    default: return false;
+    }
+    bool ok = false;
+    const double candidate = value.toDouble(&ok);
+    if (!ok || !std::isfinite(candidate) || candidate < 0.0 || std::floor(candidate) != candidate)
+        return false;
+    *bytes = static_cast<qint64>(candidate);
     return true;
 }
 
@@ -70,6 +94,9 @@ QString settingsOptions(SessionSettings *settings, Folder::Options *options)
     if (!exactInteger(settings->value(depthKey, restored.maximumDepth), 0, 256,
                       &restored.maximumDepth))
         return invalid(depthKey);
+    if (!exactByteCount(settings->value(bytesKey, restored.compareFirstBytes),
+                        &restored.compareFirstBytes))
+        return invalid(bytesKey);
     const QString error = optionsError(restored);
     if (!error.isEmpty())
         return error;
@@ -87,7 +114,7 @@ FolderCompareSession::FolderCompareSession(QObject *parent)
         if (m_writingSettings)
             return;
         if (key.isEmpty() || key == maskKey || key == caseKey || key == recursiveKey
-            || key == contentKey || key == depthKey)
+            || key == contentKey || key == depthKey || key == bytesKey)
             readComparisonSettings();
     });
     // Persist defaults too: a saved session keeps its comparison semantics if
@@ -297,6 +324,7 @@ bool FolderCompareSession::setComparisonOptions(const Folder::Options &options, 
     settings->setValue(recursiveKey, options.recursive);
     settings->setValue(contentKey, options.compareContent);
     settings->setValue(depthKey, options.maximumDepth);
+    settings->setValue(bytesKey, options.compareFirstBytes);
     if (view())
         view()->setOptions(options);
     if (error)

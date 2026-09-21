@@ -189,8 +189,14 @@ private:
                 entry.explanation = QObject::tr("无法读取 %1：%2").arg(right.fileName(), right.errorString());
                 return;
             }
-            constexpr qint64 blockSize = 256 * 1024;
+            // 「只比较前 N 字节」的字节预算；-1 表示不设限（读到底）。
+            //
+            // 放在大小比较**之后**是有意的：大小不等已经**证明**了内容不同，
+            // 而且不需要读一个字节。把它降级成「部分比较」等于把一个确定的结论
+            // 说成不确定的——那不是保守，是把已经拿到的证据丢掉。
+            const qint64 budget = options.compareFirstBytes > 0 ? options.compareFirstBytes : -1;
             qint64 offset = 0;
+            bool budgetReached = false;
             entry.status = Status::Same;
             entry.explanation = QObject::tr("逐字节比较，内容完全相同。");
             while (!left.atEnd() || !right.atEnd()) {
@@ -199,8 +205,18 @@ private:
                     entry.explanation = QObject::tr("扫描已取消，内容比较不完整。");
                     break;
                 }
-                const QByteArray a = left.read(blockSize);
-                const QByteArray b = right.read(blockSize);
+                if (budget >= 0 && offset >= budget) {
+                    // 到了预算边界而两侧都还有内容没读：这次比较**不足以**判定相同。
+                    budgetReached = true;
+                    break;
+                }
+                // 块大小以 kMaximumCompareBlockSize 为界，且不得越过剩余预算，
+                // 否则「只比较前 N 字节」会把第 N 字节之后的内容也读进来。
+                const qint64 want = budget >= 0
+                    ? qMin(kMaximumCompareBlockSize, budget - offset)
+                    : kMaximumCompareBlockSize;
+                const QByteArray a = left.read(want);
+                const QByteArray b = right.read(want);
                 if (left.error() != QFileDevice::NoError || right.error() != QFileDevice::NoError) {
                     entry.status = Status::Error;
                     entry.explanation = QObject::tr("读取内容失败：%1 / %2")
@@ -219,10 +235,29 @@ private:
                 }
                 offset += a.size();
             }
+            // 只在「限内全部相同、且文件还没读完」时把状态降为未知。
+            //
+            // 这里复用 Status::Unknown 而不是新加一个 Status::Partial：
+            // 主状态分类法（相同/不同/仅左/仅右/错误/未知）归 DIR-011，
+            // 而它已经把「未完整比较」定义为 Unknown，并要求「部分比较」放在
+            // **内容证据**这一维上而不是主状态里。本字段 partialComparison
+            // 就是那一维的最小实现；另起一个主状态会在同一件事上留下两套说法。
+            //
+            // 副作用是有意的：run() 已经把 Unknown 映射成 complete=false，
+            // 于是开了这个开关的整体结果必然标注为「不完整」——正合
+            // DIR-008 边界要求的「明确标注为不完整比对」。
+            // 两种例外不覆盖 explanation：取消（已写自己的原因）与错误。
+            if (budgetReached && entry.status == Status::Same) {
+                entry.status = Status::Unknown;
+                entry.partialComparison = true;
+                entry.explanation = QObject::tr("只比较了前 %1 字节，剩余内容未比较（部分比较；不足以判定相同）。")
+                                        .arg(budget);
+            }
         }
         if (!unchanged(entry.left) || !unchanged(entry.right)) {
             entry.status = Status::Error;
             entry.firstDifference = -1;
+            entry.partialComparison = false;
             entry.explanation = QObject::tr("比较期间文件发生变化，请刷新后重试。");
         }
     }

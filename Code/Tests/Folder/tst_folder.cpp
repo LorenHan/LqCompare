@@ -118,7 +118,8 @@ bool sameOptions(const Folder::Options &a, const Folder::Options &b)
 {
     return a.recursive == b.recursive && a.compareContent == b.compareContent
         && a.maximumDepth == b.maximumDepth && a.scanMaskDeclaration == b.scanMaskDeclaration
-        && a.nameCaseSensitivity == b.nameCaseSensitivity;
+        && a.nameCaseSensitivity == b.nameCaseSensitivity
+        && a.compareFirstBytes == b.compareFirstBytes;
 }
 
 } // namespace
@@ -166,6 +167,187 @@ private slots:
         QVERIFY(writeFile(pair.right + "/large.bin", a));
         result = Folder::compare(pair.left, pair.right);
         QCOMPARE(result.entries.first().status, Folder::Status::Same);
+    }
+
+    // DIR-008 第 2 条：开关本身。默认必须关闭（否则既有行为被悄悄改掉），
+    // 打开后差异落在限外时既不能说「不同」（没读到）也不能说「相同」（没读完）。
+    void partialByteLimitMarksIncompleteWithoutClaimingEquality()
+    {
+        Pair pair;
+        QVERIFY(writeFile(pair.left + "/tail.bin", "ABCD-one"));
+        QVERIFY(writeFile(pair.right + "/tail.bin", "ABCD-two"));
+
+        // 默认关闭：差异必须被发现，结论完整。
+        const auto full = Folder::compare(pair.left, pair.right);
+        QCOMPARE(full.entries.first().status, Folder::Status::Different);
+        QCOMPARE(full.entries.first().firstDifference, qint64(5));
+        QVERIFY(!full.entries.first().partialComparison);
+        QVERIFY(full.complete);
+
+        // 限 = 4：差异（偏移 5）落在限外。
+        Folder::Options options;
+        options.compareFirstBytes = 4;
+        const auto limited = Folder::compare(pair.left, pair.right, options);
+        const auto &entry = limited.entries.first();
+        QCOMPARE(entry.status, Folder::Status::Unknown);
+        QVERIFY(entry.partialComparison);
+        QCOMPARE(entry.firstDifference, qint64(-1)); // 没有结论，就不该有「首个差异」。
+        // 文案「部分比较」出自 DIR-008 的验收用语，不是实现细节，因此可以断言它；
+        // 但真正的判据是上面那个 partialComparison 标志——文字可以改，含义不能。
+        QVERIFY(entry.explanation.contains(QStringLiteral("部分比较")));
+        // 「不完整比对」必须体现在结果完整性上，而不只是某一行的说明文字里；
+        // 否则报表会说「无差异（完整）」。
+        QVERIFY(!limited.complete);
+    }
+
+    // DIR-008 第 1、2 条：限内发现差异时，结论**已经**被证明，不该再降级成不确定。
+    // 这条同时钉住边界：差异在偏移 2 时，限 3 算「已证明」，限 2 算「没读到」。
+    void partialByteLimitStillProvesDifferencesWithinTheLimit()
+    {
+        Pair pair;
+        QVERIFY(writeFile(pair.left + "/edge.bin", "abX"));
+        QVERIFY(writeFile(pair.right + "/edge.bin", "abY"));
+
+        Folder::Options inside;
+        inside.compareFirstBytes = 3;
+        auto result = Folder::compare(pair.left, pair.right, inside);
+        QCOMPARE(result.entries.first().status, Folder::Status::Different);
+        QCOMPARE(result.entries.first().firstDifference, qint64(2));
+        QVERIFY(!result.entries.first().partialComparison);
+        QVERIFY(result.complete); // 差异已证明，结果并不「不完整」。
+
+        // 差异正好落在限外一个字节：一个字节都不许多读。
+        Folder::Options outside;
+        outside.compareFirstBytes = 2;
+        result = Folder::compare(pair.left, pair.right, outside);
+        QCOMPARE(result.entries.first().status, Folder::Status::Unknown);
+        QVERIFY(result.entries.first().partialComparison);
+        QVERIFY(!result.complete);
+    }
+
+    // DIR-008 第 2、3 条：预算与分块必须夹逼，且分块大小有上界。
+    void partialByteLimitIsExactAcrossBlockBoundaries()
+    {
+        const qint64 block = Folder::kMaximumCompareBlockSize;
+        QVERIFY(block > 0);
+        // 上界存在的意义：块大小一旦被放大到「一次读完」，大文件比较就会重新吃掉内存。
+        // 1 MiB 是给调整留的余量，不是要卡死当前取值。
+        QVERIFY(block <= 1024 * 1024);
+
+        Pair pair;
+        // 横跨两个块，差异正好落在「第一个块之后 1 字节」。
+        const QByteArray a(static_cast<int>(2 * block), 'a');
+        QByteArray b = a;
+        b[static_cast<int>(block + 1)] = 'b';
+        QVERIFY(writeFile(pair.left + "/span.bin", a));
+        QVERIFY(writeFile(pair.right + "/span.bin", b));
+
+        auto result = Folder::compare(pair.left, pair.right);
+        QCOMPARE(result.entries.first().firstDifference, block + 1);
+
+        // 限 = 块 + 1：第二块只允许读 1 字节，偏移 block+1 处的差异读不到。
+        Folder::Options options;
+        options.compareFirstBytes = block + 1;
+        result = Folder::compare(pair.left, pair.right, options);
+        QCOMPARE(result.entries.first().status, Folder::Status::Unknown);
+        QVERIFY(result.entries.first().partialComparison);
+        QCOMPARE(result.entries.first().firstDifference, qint64(-1));
+
+        // 限 = 块 + 2：差异进入射程，必须被发现。
+        // 这条是上一句的对照：它证明「没发现差异」是预算算对了，而不是第二块压根没比较——
+        // 少了它，一个「第二块永不比较」的实现也能让上下两条一起通过。
+        options.compareFirstBytes = block + 2;
+        result = Folder::compare(pair.left, pair.right, options);
+        QCOMPARE(result.entries.first().status, Folder::Status::Different);
+        QCOMPARE(result.entries.first().firstDifference, block + 1);
+    }
+
+    // DIR-008 第 2 × 第 5 条的交叉：文件在**部分比较**期间被改动时，
+    // 「只比较了前 N 字节」这个说法本身也不再成立，必须跟着一起收回。
+    void fileChangeDuringComparisonDropsThePartialClaim()
+    {
+        // 一、限内全同、随后文件变了：不能再声称「比较了前 2 字节」。
+        {
+            Pair pair;
+            QVERIFY(writeFile(pair.left + "/file", "abXY"));
+            QVERIFY(writeFile(pair.right + "/file", "abXY"));
+            FaultFileSystem fs;
+            fs.changingFile = pair.left + "/file";
+            Folder::Options options;
+            options.compareFirstBytes = 2;
+            const auto result = Folder::compare(pair.left, pair.right, options, nullptr, {}, &fs);
+            const auto &entry = result.entries.first();
+            QCOMPARE(entry.status, Folder::Status::Error);
+            QVERIFY(entry.explanation.contains(QStringLiteral("变化")));
+            QVERIFY2(!entry.partialComparison, "读失败时连「比较了前 N 字节」都不成立");
+            QCOMPARE(entry.firstDifference, qint64(-1));
+            QVERIFY(!result.complete);
+        }
+        // 二、差异**已经**被找到、随后文件又变了：报表不能既说「读取失败」
+        //     又给出一个首个差异偏移量——那个偏移量是对旧内容的结论。
+        {
+            Pair pair;
+            QVERIFY(writeFile(pair.left + "/file", "abXY"));
+            QVERIFY(writeFile(pair.right + "/file", "abZZ"));
+            FaultFileSystem fs;
+            fs.changingFile = pair.left + "/file";
+            const auto result = Folder::compare(pair.left, pair.right, {}, nullptr, {}, &fs);
+            const auto &entry = result.entries.first();
+            QCOMPARE(entry.status, Folder::Status::Error);
+            QCOMPARE(entry.firstDifference, qint64(-1));
+            QVERIFY(!entry.partialComparison);
+        }
+    }
+
+    // DIR-008 第 2 条「默认关闭」+ 选项落库：值必须被校验而不是被静默改写。
+    void partialByteLimitSettingsAreValidatedNotTruncated()
+    {
+        Pair pair;
+        QVERIFY(writeFile(pair.left + "/same.bin", "abcd"));
+        QVERIFY(writeFile(pair.right + "/same.bin", "abcd"));
+        FolderCompareSession session(pair.left, pair.right);
+        std::unique_ptr<QWidget> widget(session.createWidget());
+        Folder::Options accepted;
+        accepted.compareFirstBytes = 4096;
+        QVERIFY(session.setComparisonOptions(accepted));
+        QCOMPARE(session.sessionSettings()->value(QStringLiteral("folder.compareFirstBytes")).toLongLong(),
+                 qint64(4096));
+        // 视图没有这个控件，但必须原样带回：否则任何一次「读视图选项 → 写回会话」
+        // 都会把用户设好的预算静默重置成 0（关闭）。
+        QCOMPARE(session.view()->options().compareFirstBytes, qint64(4096));
+
+        QSignalSpy finished(&session, &FolderCompareSession::scanFinished);
+        QString error;
+        // 0.5 截断后恰好等于 0，而 0 就是「关闭」——静默接受等于悄悄改掉用户的设置。
+        QVERIFY(session.sessionSettings()->setValue(QStringLiteral("folder.compareFirstBytes"), 0.5));
+        QVERIFY(!session.open(&error));
+        QVERIFY(error.contains(QStringLiteral("folder.compareFirstBytes")));
+        QCOMPARE(finished.count(), 0);
+        QVERIFY(sameOptions(session.comparisonOptions(), accepted));
+
+        // 字符串形式的数字同样非法：设置文件里的 "4096" 不是 4096。
+        QVERIFY(session.sessionSettings()->setValue(QStringLiteral("folder.compareFirstBytes"),
+                                                    QStringLiteral("4096")));
+        QVERIFY(!session.open(&error));
+        QVERIFY(error.contains(QStringLiteral("folder.compareFirstBytes")));
+        QCOMPARE(finished.count(), 0);
+
+        // 修好之后必须真的生效：限 2 字节、文件 4 字节且前 2 字节相同 → 未完整比较。
+        QVERIFY(session.sessionSettings()->setValue(QStringLiteral("folder.compareFirstBytes"), qint64(2)));
+        QVERIFY2(session.open(&error), qPrintable(error));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 5000);
+        QCOMPARE(session.result().entries.first().status, Folder::Status::Unknown);
+        QVERIFY(session.result().entries.first().partialComparison);
+        QVERIFY(!session.result().complete);
+
+        // 负数走的是另一条路（optionsError，不是设置反序列化）：也必须被拒绝，
+        // 且不能把已经生效的 2 换成别的东西。
+        Folder::Options negative;
+        negative.compareFirstBytes = -1;
+        QString reason;
+        QVERIFY(!session.setComparisonOptions(negative, &reason));
+        QVERIFY(reason.contains(QStringLiteral("只比较前")));
+        QCOMPARE(session.comparisonOptions().compareFirstBytes, qint64(2));
     }
 
     void emptyDirectoriesAndEmptyFiles()
@@ -679,6 +861,7 @@ private slots:
         chosen.recursive = false;
         chosen.compareContent = false;
         chosen.maximumDepth = 7;
+        chosen.compareFirstBytes = 4096;
 
         FolderCompareSession original(pair.left, pair.right);
         std::unique_ptr<QWidget> originalWidget(original.createWidget());
@@ -689,9 +872,10 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(originalFinished.count(), 1, 5000);
         QVERIFY(sameOptions(original.comparisonOptions(), chosen));
         const QVariantMap values = savedSettings(original.sessionSettings());
-        QCOMPARE(values.size(), 5);
+        QCOMPARE(values.size(), 6);
         QCOMPARE(values.value(QStringLiteral("folder.scanMaskDeclaration")).toString(), chosen.scanMaskDeclaration);
         QCOMPARE(values.value(QStringLiteral("folder.nameCaseSensitivity")).toInt(), int(Qt::CaseInsensitive));
+        QCOMPARE(values.value(QStringLiteral("folder.compareFirstBytes")).toLongLong(), qint64(4096));
 
         original.view()->findChild<QCheckBox *>(QStringLiteral("folderHideEmpty"))->setChecked(true);
         original.view()->findChild<QCheckBox *>(QStringLiteral("folderHideExcluded"))->setChecked(false);

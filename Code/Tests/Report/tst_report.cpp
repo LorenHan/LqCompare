@@ -557,6 +557,32 @@ private slots:
         QVERIFY(!R::statistics(model).complete);
     }
 
+    // DIR-008 第 4 条：首个差异的偏移量必须能被报表读者看到，而不只活在内存模型里。
+    void folderReportShowsFirstDifferenceOffset()
+    {
+        Folder::Result result;
+        result.leftRoot = QStringLiteral("/left");
+        result.rightRoot = QStringLiteral("/right");
+        auto entry = folderEntry(QStringLiteral("bin.dat"), Folder::Status::Different);
+        entry.explanation = QStringLiteral("字节内容不同。");
+        entry.firstDifference = 4097;
+        result.entries.append(entry);
+
+        const R::Model model = R::fromFolder(result);
+        QCOMPARE(model.rows.size(), 1);
+        QVERIFY(model.rows.first().detail.contains(QStringLiteral("4097")));
+        // 导出后仍然在：只写进内存模型的偏移量对读者没有意义。
+        R::Options options;
+        options.format = R::Format::PlainText;
+        QVERIFY(R::render(model, options).contains(QStringLiteral("4097")));
+
+        // 没有结论的条目不许凭空长出一个偏移量。既不能漏 0，也不能把 -1 印出来。
+        entry.firstDifference = -1;
+        result.entries = {entry};
+        const R::Model withoutOffset = R::fromFolder(result);
+        QCOMPARE(withoutOffset.rows.first().detail, entry.explanation);
+    }
+
     void invalidOptionsDoNotReplaceExistingFile()
     {
         QTemporaryDir dir;
