@@ -171,6 +171,26 @@ st_contains() {
     st_expect "$1" "$?"
 }
 
+st_line_matches() {
+    # $1 描述 $2 文件 $3 行首模式（ERE）$4 期望的整行
+    #
+    # 为什么要有这个、而不是继续用 `st_contains '^…$'`：**失败时必须把实际值印出来**。
+    # 硬编码整行的断言在别的平台上一旦对不上，日志里只剩一个「✗」——
+    # ubuntu 腿的「合计把各套件的用例数累加起来了」就这样红了十几轮，谁都不知道
+    # 实际合计是什么（2026-09-21 实测：自测步骤加进 CI 之后，ubuntu 腿**每次**都红在
+    # 这一条上，于是「运行测试套件」那一步永远被跳过，整条 ubuntu 腿一个套件都没跑过）。
+    local actual
+    actual="$(grep -m1 -E "$3" "$2" 2>/dev/null || true)"
+    if [[ "${actual}" == "$4" ]]; then
+        echo "  ✓ $1"
+    else
+        echo "  ✗ $1"
+        echo "      期望：$4"
+        echo "      实际：${actual:-（文件里没有匹配 ${3} 的行）}"
+        selftest_failures=$((selftest_failures + 1))
+    fi
+}
+
 st_max_concurrency() {
     # 从探针写下的「epoch毫秒 名字 start|end」轨迹里算出最大并发数。
     #
@@ -184,6 +204,42 @@ st_max_concurrency() {
          ($2 in closed) { print $1, ($3 == "start" ? 1 : -1) }' "$1" "$1" \
         | sort -k1,1n -k2,2n \
         | awk '{ run += $2; if (run > peak) peak = run } END { print peak + 0 }'
+}
+
+st_snapshot_evidence() {
+    # 把「这一遍到底发生了什么」当场写进 $1。
+    #
+    # **必须在每一遍跑完之后立刻调用**：两遍共用同一个构建目录，
+    # `summary.env` 与 `results.txt` 会被下一遍覆盖。早先的版本在全部断言跑完
+    # 之后才去读这些文件，于是「首遍合计是 0」这个最要命的现象恰好是唯一看不到的
+    # ——证据块里每个探针都显示得漂漂亮亮，那是第二遍留下的（实测首遍 0/0/0、
+    # 次遍 6/1/0）。
+    #
+    # 为什么这块要**无条件**印出来：自测的断言一旦在某个平台上红了，日志里只有
+    # 一个「✗」，而「哪个探针没进合计」这件事光看断言名字是推不出来的——
+    # 失败探针与硬退出探针都会印「✗ 套件失败」，超时探针与失败探针又会印同格式的
+    # 复现命令，所以「失败探针报套件失败」这条断言绿着也说明不了它进了合计。
+    # ubuntu 腿就卡在这里十几轮（见 st_line_matches 的注释）。
+    local dst="$1" log="$2" b="$3"
+    {
+        echo "  合计行：$(grep -m1 '^合计：' "${log}" || echo '（没有这一行）')"
+        echo "  运行器自己报的异常清单："
+        grep -E '^(超时套件（|另有 [0-9]+ 个套件|失败套件：)' "${log}" | sed 's/^/    /' || true
+        echo "  每个探针的判定与产物："
+        local probe d state totals
+        for probe in ZZProbeBadBuild ZZProbeFail ZZProbeHang ZZProbeHardExit ZZProbePass; do
+            d="${b}/${probe}"
+            state="（没有 summary.env）"
+            if [[ -f "${d}/summary.env" ]]; then
+                # summary.env 的六列：状态 超时 有统计行 passed failed skipped
+                read -r p_st p_to p_hs p_ps p_fs p_ss < "${d}/summary.env" || true
+                state="status=${p_st:-?} timed_out=${p_to:-?} has_summary=${p_hs:-?} passed=${p_ps:-?} failed=${p_fs:-?} skipped=${p_ss:-?}"
+            fi
+            totals="$(grep -m1 -E '^Totals:' "${d}/results.txt" 2>/dev/null || echo '（没有 Totals 行）')"
+            printf '    %-16s results.txt=%-4s totals=%-52s %s\n' "${probe}" \
+                "$([[ -f "${d}/results.txt" ]] && echo 有 || echo 无)" "${totals}" "${state}"
+        done
+    } > "${dst}"
 }
 
 run_self_test() {
@@ -333,6 +389,11 @@ CPP
     local peak4
     peak4="$(st_max_concurrency "${trace}")"
 
+    # ---- 第一遍的证据必须**当场**快照下来 ----
+    # 理由见 st_snapshot_evidence 的注释：两遍共用同一个构建目录。
+    local ev4="${selftest_tmp}/evidence-jobs4.txt"
+    st_snapshot_evidence "${ev4}" "${out4}" "${build}"
+
     # ---- 第二遍：串行，用来把「并行」证明成真的并发，而不是「看起来快」 ----
     local out1="${selftest_tmp}/out-jobs1.log" code1=0
     : > "${trace}"
@@ -344,6 +405,8 @@ CPP
         bash "${SELF}" >"${out1}" 2>&1 || code1=$?
     local peak1
     peak1="$(st_max_concurrency "${trace}")"
+    local ev1="${selftest_tmp}/evidence-jobs1.txt"
+    st_snapshot_evidence "${ev1}" "${out1}" "${build}"
 
     echo
     echo "── 断言：失败与超时的报错（日志 ${out4}）──"
@@ -364,7 +427,8 @@ CPP
     # 这一条盯的是**父进程的合计**，不是某个套件自己的 `Totals:` 行。
     # 并发化最容易出的错（计数写进子 shell 的局部变量）不影响任何一条单套件输出，
     # 只会让合计变成 `0 passed`——只有断言合计本身才看得见它。
-    st_contains "合计把各套件的用例数累加起来了" "${out4}" '^合计：6 passed, 1 failed, 0 skipped$'
+    st_line_matches "合计把各套件的用例数累加起来了" "${out4}" '^合计：' \
+        '合计：6 passed, 1 failed, 0 skipped'
     st_contains "构建期失败的探针报 qmake 失败" "${out4}" '✗ qmake 失败'
 
     echo
@@ -432,6 +496,13 @@ CPP
     # 是看不出来的。
     st_expect "并行与串行的合计逐字相同" \
         "$([[ "$(grep -m1 '^合计：' "${out4}")" == "$(grep -m1 '^合计：' "${out1}")" ]] && echo 0 || echo 1)"
+
+    echo
+    echo "── 证据：两遍各自的判定与产物（跨平台差异只能靠这一块定位）──"
+    echo "▸ 首遍（并行 4，并发峰值实测 ${peak4}）："
+    cat "${ev4}"
+    echo "▸ 次遍（串行 1，并发峰值实测 ${peak1}）："
+    cat "${ev1}"
 
     echo
     if [[ ${selftest_failures} -eq 0 ]]; then
