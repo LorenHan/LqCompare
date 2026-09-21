@@ -1852,7 +1852,7 @@ ad-hoc 签名后离屏启动到「`LqCompare 0.1.0 启动完成`」。**没有�
 - **`Change::Ignored` 仍不分档**（大小写？空白？），同 §1.27。
   同一对行同时命中大小写与空白两条规则时，界面只给一个弱化标记，说不出是哪条造成的。
 
-代码提交 `待回填`（提交号由紧随其后的纯文档提交回填；见 §3.1 那一行）。
+代码提交 `15a6530`（提交号由紧随其后的纯文档提交回填；见 §3.1 那一行）。
 
 ## 2. 已验证的事实（不用再花时间确认）
 | 项目 | 结论 | 验证方式 |
@@ -2214,7 +2214,7 @@ docs/
 | `3b3a993` | **TXT-003 耐心对齐（Patience）与 Myers 回退**：`Alignment` 枚举 + `CompareOptions::alignment`（新字段加在末尾）、内部共享的区间收集器 `AlignmentBuilder`（区间表 / 预算 / `limited` 由两种算法共用，因此块边界与受限度都只有一个来源）、内部 `Patience`（公共前后缀 → 两侧唯一行计数 → 严格递增最长子序列挑锚点 → 锚点间递归；**没有唯一行的一段与深度到顶都交给 Myers**）、算法表 `AlignmentDescriptor` 与四个查询加一个自检（默认值取「表里第一条已实现项」，未实现的两道机制分别是 `availableAlignments()` 过滤与 `validateAlignmentTable()` 报警）、枚举外取值退到默认算法的兜底；新增 `Tests/Alignment`（14 个用例函数，**纯 QtCore**）。9 处变异 9 处检出，另有 1 处**按设计漏检**（`<` 与 `<=` 在「候选下标互不相同」这条不变量下等价，注释里写明了上层放宽后会怎么坏） | TXT-003 |
 | `5c16735` | **测试运行器的并行、超时与自测**（ENG-003 的五条完成标准里，原本有三条没做）：套件级并行（默认 `min(4, 核数)`，墙钟 3 分 53 秒 → 1 分 21 秒，合计逐字不变）、单套件超时（自建轮询，不依赖 macOS 上不存在的 GNU `timeout`，超时与断言失败分开命名且不计入合计）、`Tests/OptionsDialog` 的截图不再写进仓库根（并按**指纹**而非文件名断言落点，否则「覆盖写」会隐身）；另新增 `run-tests.sh --self-test`——在临时目录里现造五个探针套件，用同一个运行器跑两遍（并行 4 / 串行 1）逐条断言它自己该说的话，因为「运行器自己错了」恰恰是它本该报告的那类静默失败。13 处变异 13 处检出（其中两处第一次是真漏检：断言盯错了量、断言比名字不比内容） | ENG-003 |
 | `5af6b9e` | **TXT-008 忽略大小写差异的核对与闭环**：实现（`ignoreCase` / `Change::Ignored` / Rules 勾选框 / `text.ignoreCase` 键 / 弱化底色）**早已在仓库里**，缺的是断言与「链」这个名字。把匿名命名空间里的 `normalized()` 提成公开的 `normalizedLine()`（整条链只有一个实现，头文件那段注释同时就是第 4 条要求的那份土耳其语取舍记录），并补 7 个用例函数：`Tests/Text` 25 → 31（逐行重要性切换、只有仅大小写不同的行失去差异身份、链「少做任何一步都不相等」+ 左右对调、12 行非 ASCII 折叠对照表、土耳其语四格 + 土耳其语 locale 下结论不变、折叠长度守恒），`Tests/TextView` 18 → 19（被忽略的行仍被标记、与从**真实渲染**采出的三种差异色都不同且彩度更低）。8 处变异 8 处符合预期，其中 1 处**按设计漏检**（链的两步可交换，调换顺序不该红） | TXT-008 |
-| 待回填 | **TXT-009 忽略空白变化的核对与闭环**：实现（`Whitespace` 三值、`normalizedLine()` 里的分支、Rules 里的下拉、`text.whitespace` 键、`Change::Ignored` 的弱化底色）**早已在仓库里**，缺的是「分水岭」那类语料、模式表，以及界面文案那条链的断言。新增 `WhitespaceDescriptor` / `whitespaceTable()` / `whitespaceIdentifier()` / `defaultWhitespace()` / `availableWhitespaces()` / `validateWhitespaceTable()`（与 `alignmentTable()` 同一个定位：界面按表铺下拉、按表读回，缺项/重复/未实现都由自检报出来），界面改按 `availableWhitespaces()` 铺下拉与读回（不再 `static_cast<Whitespace>(currentIndex())`），并把界面文案提成公开静态接口 `TextCompareView::whitespaceLabel()` 让「文案链」可验；补 4 个用例函数：`Tests/Text` 31 → 34（9 行三模式并排语料 + 嵌套不变量、10 行 Tab/空格混排语料（含 `isSpace()` 的边界字符）、模式表与自检四份坏表、枚举外取值退化为 `Exact`），`Tests/TextView` 19 → 20（下拉第 i 行**显示的字**与**实际生效的模式**两条链 + 被忽略的空白差异仍留标记、真正相同的行不留标记）。**10 处变异 10 处检出**，其中第 10 处（把下拉铺法改成倒序）**第一版是真漏检**——只钉了值那条链 | TXT-009 |
+| `15a6530` | **TXT-009 忽略空白变化的核对与闭环**：实现（`Whitespace` 三值、`normalizedLine()` 里的分支、Rules 里的下拉、`text.whitespace` 键、`Change::Ignored` 的弱化底色）**早已在仓库里**，缺的是「分水岭」那类语料、模式表，以及界面文案那条链的断言。新增 `WhitespaceDescriptor` / `whitespaceTable()` / `whitespaceIdentifier()` / `defaultWhitespace()` / `availableWhitespaces()` / `validateWhitespaceTable()`（与 `alignmentTable()` 同一个定位：界面按表铺下拉、按表读回，缺项/重复/未实现都由自检报出来），界面改按 `availableWhitespaces()` 铺下拉与读回（不再 `static_cast<Whitespace>(currentIndex())`），并把界面文案提成公开静态接口 `TextCompareView::whitespaceLabel()` 让「文案链」可验；补 4 个用例函数：`Tests/Text` 31 → 34（9 行三模式并排语料 + 嵌套不变量、10 行 Tab/空格混排语料（含 `isSpace()` 的边界字符）、模式表与自检四份坏表、枚举外取值退化为 `Exact`），`Tests/TextView` 19 → 20（下拉第 i 行**显示的字**与**实际生效的模式**两条链 + 被忽略的空白差异仍留标记、真正相同的行不留标记）。**10 处变异 10 处检出**，其中第 10 处（把下拉铺法改成倒序）**第一版是真漏检**——只钉了值那条链 | TXT-009 |
 
 > 上面这张表里，PLAT-005、FILT-001、SESS-001、SESS-002、SESS-006、SESS-007、
 > FILT-005、FILT-003、FILT-002、FILT-004、`ac32665`、`c03dc79`、`bdede29`、`d084060`、
