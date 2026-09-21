@@ -425,7 +425,7 @@ SESS-003 的范围，本轮改了会与它撞车。另有一条用例对一段**
 | 目录 | 内容 |
 | --- | --- |
 | `Pictures/` | 图标资源（SVG）与 `Pictures.qrc`。图标由 `tools/generate_icons.py` 生成 |
-| `Tests/` | 每个测试套件一个子目录 + 一个 `.pro`；`run-tests.sh` 是统一运行器（**65 个套件 / 3487 条**，2026-09-21）。`Support/` 放多个套件共用的测试替身（如内存文件系统）。**刻意不链接 QtGui 的套件**（`Tests/Filter`、`Tests/AttributeFilter`、`Tests/FilterStack`、`Tests/NameFilter`、`Tests/ContentFilter`、`Tests/FileOpsOptions`、`Tests/Logging`、`Tests/SessionType`、`Tests/Settings`、`Tests/SettingsScope`、`Tests/PatchApply`）兼作「服务层不依赖界面」的编译期护栏；**链接 QtWidgets 的套件**（`Tests/Session`、`Tests/SettingsDialog`、`Tests/VcsView`、`Tests/VcsBlameView` 等）跑在 offscreen 平台上。新套件必须自己 `QTEST_MAIN`，否则链接报 `_main` 未定义。**`Tests/OptionsDialog` 的 `saveReviewScreenshots()` 会把对话框截图写到当前目录**（就是仓库根），因此 `.gitignore` 里有一条 `/options-*.png` |
+| `Tests/` | 每个测试套件一个子目录 + 一个 `.pro`；`run-tests.sh` 是统一运行器（**66 个套件 / 3598 条**，2026-09-21）。**运行器的产物一律落在磁盘上、不依赖 stdout**：每个套件在 `_test-build/<套件>/` 下留 `results.txt`（纯文本）、`results.xml`（**JUnit**，供 CI 消费）与 `build.log`（构建的完整输出，构建失败时唯一的线索）；CI 把这三样整体上传（见 §4 的三条相关决策）。`Support/` 放多个套件共用的测试替身（如内存文件系统）。**刻意不链接 QtGui 的套件**（`Tests/Filter`、`Tests/AttributeFilter`、`Tests/FilterStack`、`Tests/NameFilter`、`Tests/ContentFilter`、`Tests/FileOpsOptions`、`Tests/Logging`、`Tests/SessionType`、`Tests/Settings`、`Tests/SettingsScope`、`Tests/PatchApply`）兼作「服务层不依赖界面」的编译期护栏；**链接 QtWidgets 的套件**（`Tests/Session`、`Tests/SettingsDialog`、`Tests/VcsView`、`Tests/VcsBlameView` 等）跑在 offscreen 平台上。新套件必须自己 `QTEST_MAIN`，否则链接报 `_main` 未定义。**`Tests/OptionsDialog` 的 `saveReviewScreenshots()` 会把对话框截图写到当前目录**（就是仓库根），因此 `.gitignore` 里有一条 `/options-*.png` |
 | `ThirdParty/` | `myclasspath.pri`（定位 LqRibbon）与 `lqribbon.pri`（引入） |
 
 ## 4. 关键设计决策
@@ -621,6 +621,9 @@ SESS-003 的范围，本轮改了会与它撞车。另有一条用例对一段**
 | **数字项的单位后缀进定义表，不在界面按键名硬编码** | 界面曾经对所有整数项一律加 `" pt"`，于是新加一个「体积确认阈值（兆字节）」会显示成 **`100 pt`**——数字对、单位错，而没有任何断言会失败。把 `unit` 放进 `OptionDefinition` 之后，标签由数据推导，`Tests/OptionsDialog` 断言的是 `" MB"` / `" 个"` / `" pt"` 三种后缀各就各位。**新字段必须追加在结构体末尾**，理由见交接文档的坑表 | OPT-005 |
 | **缺了私有可选依赖时，流水线降级成「更窄的验证」，不是整体红掉** | LqRibbon 在私有仓 MyClass 里，公开 CI 拿不到；匿名 clone 会以 128 退出，**于是整条流水线在第一步就红掉，它后面的构建与测试从来没有跑过**——而那才是流水线真正该给出的信息。因为 66 个测试工程里只有 2 个依赖它（见 §2），「拿不到依赖」的后果是**少验证 2 个套件、不构建主程序**，而不是「什么都验不了」。降级范围必须来自实测（对每个 `.pro` 跑一次 `LQCOMPARE_MYCLASS_ROOT=/nonexistent qmake`，失败的即依赖方），不能来自 grep | ENG-004 / ENG-002 |
 | **降级必须被看见：被排除的套件要同时出现在开头与汇总里** | 「排除掉依赖缺失的套件」与「静默跳过」在日志上只差一句话，可信度却差一个数量级：前者报告「64 个套件通过、2 个未验证」，后者报告「全部套件通过」——后者会把「有 2 个套件从未在公开 CI 上编译过」读成「全都验证过了」。因此 `run-tests.sh` 在 `LQCOMPARE_TEST_SKIP` 生效时，开头打一行排除清单、末尾把 `全部套件通过` 换成 `通过（已排除 N 个套件、未验证）`；全部被排除时仍以退出码 2 报「一个测试都没跑」。同一处纪律还要求：**CI 里的 `run:` 在 Windows 上默认是 pwsh**，所以 bash 语法必须显式声明 `shell: bash`，否则三平台只剩两平台 | ENG-004 / ENG-003 |
+| **测试结果的传递不走 stdout，只走文件** | 运行器原本用 Qt 的 `-o -,txt` 把结果同时打到屏幕上。这一路在本机（macOS）正常，在 **Windows（Git Bash）上一行都不输出**，而同一轮的文件产物写得好好的——于是 Windows 腿的日志里没有 `Totals:`、没有失败用例名，合计还被算成 `0 passed`。**「结果怎么被看见」不能依赖一个只在一个平台上成立的约定**：改成只写 `results.txt` / `results.xml`，运行器再把文件 `cat` 回来，路径由运行器自己拼、与上传的 CI 产物逐字一致。同一处还要求跑之前 `rm -f` 上一轮的产物——套件崩在 `initTestCase()` 时不写文件，留着旧的会把一次崩溃显示成一次通过 | ENG-004 / ENG-003 |
+| **「汇总」与「明细」的口径差必须在同一句话里解释，不能靠读者自己推** | Windows 腿上一轮报出「34 个套件红了」而合计只有 `26 failed`。两个数字都对：Qt 的 `Totals:` 行只在套件正常跑完时才写，**崩在初始化阶段（或构建失败）的套件一条用例都不计入合计**。日志里没有一句话说明来源，于是它看起来像统计错误——而一个看起来像统计错误的日志，下一步就是被人忽略。运行器因此在合计之外单独打一行「另有 N 个套件没有产出统计行（其用例数不计入上面的合计）：…」。**凡是「总数」与「明细条数」并列出现的地方，都要能解释两者的差从哪来** | ENG-004 / ENG-003 |
+| **失败路径的原始输出必须留痕，`>/dev/null` 只允许出现在结果已被别处记下的地方** | 运行器原本把 qmake / make 的输出丢进 `/dev/null`，于是 CI 上 ubuntu 17 个、Windows 26 个套件「构建失败」而**连一条编译器错误都看不到**——只有「哪个套件红了」，没有「为什么红」，而那正是这条流水线要回答的问题。改成写 `<套件>/build.log`、失败时打末尾 20/30 行、并把 `build.log` 加进上传产物之后，下一跑就有原因可读 | ENG-004 / ENG-003 |
 
 ## 5. 装配流程
 

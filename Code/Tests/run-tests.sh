@@ -27,7 +27,9 @@
 #   5. Windows（Git Bash）上没有 `make`，MinGW 装的是 `mingw32-make`；
 #      而且可执行文件带 `.exe` 后缀，`[[ -x foo ]]` 不会自动补。
 #      这两条都不探测的话，Windows 上表现是「每个套件都构建失败」。
-# 下面用可移植写法规避这五点。
+#   6. Qt 的 `-o -,txt`（把结果写到 stdout）在 Windows 上**一行都不输出**，
+#      文件产物却正常。所以只写文件、再由脚本 `cat` 回来，不依赖 stdout 约定。
+# 下面用可移植写法规避这六点。
 set -uo pipefail
 
 CODE_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -103,6 +105,8 @@ total_skip=0
 failed_suites=""
 skipped_suites=""
 skipped_count=0
+no_summary_suites=""
+no_summary_count=0
 ran_suites=0
 
 if [[ -n "${SKIP}" ]]; then
@@ -134,15 +138,26 @@ for project in "${PROJECTS[@]}"; do
 
     echo "──────────────────────────────────────────────────────────────"
     echo "▶ ${suite}"
-    if ! (cd "${build_dir}" && "${QMAKE}" "${project}" >/dev/null 2>&1); then
+
+    # 构建输出一律落盘到 `<build_dir>/build.log`。以前是直接丢进 /dev/null，
+    # 于是 CI 里 17 个（Ubuntu）/ 26 个（Windows）套件「构建失败」而**一个字的原因
+    # 都没有**——只有「哪个套件红了」，没有「为什么红」。那正好是这条流水线要
+    # 回答的问题（ENG-004 第 3 条），所以失败时把末尾若干行打出来，完整输出留给
+    # 上传的构建产物。
+    build_log="${build_dir}/build.log"
+    if ! (cd "${build_dir}" && "${QMAKE}" "${project}" >"${build_log}" 2>&1); then
         echo "  ✗ qmake 失败"
+        echo "    完整输出：${build_log}；末尾："
+        tail -n 20 "${build_log}" | sed 's/^/    | /'
         failed_suites="${failed_suites}${suite} "
         total_fail=$((total_fail + 1))
         continue
     fi
-    if ! (cd "${build_dir}" && "${MAKE}" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)" >/dev/null 2>&1); then
+    if ! (cd "${build_dir}" && "${MAKE}" -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)" >>"${build_log}" 2>&1); then
         echo "  ✗ 构建失败"
         echo "    复现：cd ${build_dir} && ${MAKE}"
+        echo "    完整输出：${build_log}；末尾："
+        tail -n 30 "${build_log}" | sed 's/^/    | /'
         failed_suites="${failed_suites}${suite} "
         total_fail=$((total_fail + 1))
         continue
@@ -179,14 +194,29 @@ for project in "${PROJECTS[@]}"; do
 
     # 输出同时落盘两份：一份纯文本（给人看，也是 CI 失败时要上传的「日志」），
     # 一份 JUnit XML（给 CI 消费，见 ENG-003 第 3 条与 ENG-004 第 3 条）。
-    # 顺序（文件在前、`-` 在后）是为了让屏幕上的输出保持原样。
     #
     # 格式必须是 `junitxml` 而不是 `xml`：Qt 的 `xml` 是它自己的私有格式
     # （根节点 `<TestCase>`），任何 CI 的测试报告解析器都不认；`junitxml` 才
     # 产出 `<testsuite failures=... tests=...>` 这种 JUnit 根节点，失败用例清单
     # 才能被 CI 当作「失败用例清单」直接消费（ENG-004 第 3 条）。
-    output="$("${binary}" -o "${build_dir}/results.txt,txt" -o "${build_dir}/results.xml,junitxml" -o -,txt 2>&1)"
+    #
+    # **不要再加 `-o -,txt` 去拿 stdout**：实测在 Windows（Git Bash）上这一路
+    # 一行输出都没有——文件产物正常写出，stdout 是空的。于是 Windows 腿的日志里
+    # 既没有 `Totals:` 也没有任何失败用例，只剩「哪个套件红了」，
+    # 而合计还被算成 `0 passed`。改成「只写文件、再由脚本把文件读回来」之后，
+    # 路径由脚本自己拼、与上传的产物**逐字一致**，也不依赖 MSYS 的参数转换。
+    #
+    # 跑之前先删掉上一轮的两份产物：套件崩溃时不会写文件，留着旧的会被当成
+    # 「这一轮的输出」——那会让一次崩溃看起来像一次通过。
+    results_txt="${build_dir}/results.txt"
+    results_xml="${build_dir}/results.xml"
+    rm -f "${results_txt}" "${results_xml}"
+    "${binary}" -o "${results_txt},txt" -o "${results_xml},junitxml" >/dev/null 2>&1
     status=$?
+    output=""
+    if [[ -f "${results_txt}" ]]; then
+        output="$(cat "${results_txt}")"
+    fi
     summary="$(printf '%s\n' "${output}" | grep -E '^Totals:' | tail -n 1)"
     printf '%s\n' "${output}" | grep -E '^(FAIL!|PASS.*skipped)' | head -n 20
 
@@ -205,7 +235,16 @@ for project in "${PROJECTS[@]}"; do
 
     if [[ ${status} -ne 0 ]]; then
         echo "  ✗ 套件失败"
-        echo "    复现：QT_QPA_PLATFORM=${QT_QPA_PLATFORM} ${binary}"
+        echo "    复现：QT_QPA_PLATFORM=${QT_QPA_PLATFORM} ${binary} -o ${results_txt},txt"
+        # 崩溃的套件（例如死在 initTestCase）不会写出 `Totals:` 行，于是它
+        # **一条用例都不计入合计**。CI 上就出现过「34 个套件红了」而合计只有
+        # 「0 passed, 26 failed」——两个数字对不上，看日志的人会以为算错了。
+        # 单独报一行，不去把「用例数」与「套件数」这两个单位混在一起。
+        if [[ -z "${summary}" ]]; then
+            echo "    （没有产出 Totals 行：套件可能在初始化阶段就崩了）"
+            no_summary_suites="${no_summary_suites}${suite} "
+            no_summary_count=$((no_summary_count + 1))
+        fi
         failed_suites="${failed_suites}${suite} "
     else
         echo "  ✓ 通过"
@@ -224,6 +263,11 @@ if [[ ${ran_suites} -eq 0 ]]; then
     exit 2
 fi
 echo "合计：${total_pass} passed, ${total_fail} failed, ${total_skip} skipped"
+# 合计只统计「跑出了统计行的套件」。崩溃的套件必须在合计之外单独点名，
+# 否则「合计 0 failed」与「6 个套件红了」会看起来像矛盾。
+if [[ -n "${no_summary_suites}" ]]; then
+    echo "另有 ${no_summary_count} 个套件没有产出统计行（其用例数不计入上面的合计）：${no_summary_suites}"
+fi
 if [[ -n "${failed_suites}" ]]; then
     echo "失败套件：${failed_suites}"
     exit 1

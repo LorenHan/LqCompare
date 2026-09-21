@@ -203,6 +203,8 @@ jobs:
       # ENG-004 第 3 条：测试**失败时也要**留下日志，否则「CI 红了」这句话对
       # 排查毫无帮助。`run-tests.sh` 已经把每个套件的纯文本日志与 JUnit XML
       # 落到 `_test-build/<套件>/`，这里整体上传（`always()` 保证失败时也执行）。
+      # `build.log` 是**构建**失败时唯一的线索（第一次跑 CI 时 17 个 Ubuntu 套件
+      # 与 26 个 Windows 套件构建失败，而构建输出被丢进了 /dev/null，无从排查）。
       - name: 上传测试日志
         if: always()
         uses: actions/upload-artifact@v4
@@ -211,6 +213,7 @@ jobs:
           path: |
             _test-build/**/results.txt
             _test-build/**/results.xml
+            _test-build/**/build.log
           if-no-files-found: warn
 
       # ENG-004 第 4 条：可执行文件作为构建产物上传，便于手工验证。
