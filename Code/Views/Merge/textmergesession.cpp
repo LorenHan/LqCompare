@@ -233,17 +233,66 @@ bool TextMergeSession::setOutputText(const QString &text, QString *error)
     pushUndo();
     auto ranges = m_snapshot.ranges;
     for (auto &range : ranges) range.length = 0;
+    // 「这次手工编辑把几个块粘在了一起」必须按**一处改动**判断，不能按单个差异块。
+    // TXT-005 起，一段改写在这份对齐里可能是「删除 + 新增」两块：单看插入块的话，
+    // 它的左右行数是 0 : m，`joinsBlocks` 里的 `leftCount != rightCount` 照样成立，
+    // 但 `firstOwner` 与 `finalOwner` 会落在同一个块上，于是恒假——「用户已经把这处
+    // 输出改成跨块的内容」这件事被漏掉，`resolveBlock()` 会在他改过的输出上照旧
+    // 套用某一侧的原文。归并成一处改动之后，两侧行数之比与首末归属都回到了原来的口径。
+    const QVector<Text::DifferenceRun> runs = Text::differenceRuns(alignment);
+    QVector<int> runOfBlock(alignment.blocks.size(), -1);
+    QVector<int> runFirstOld(runs.size(), 0), runOldCount(runs.size(), 0);
+    QVector<int> runFirstNew(runs.size(), 0);
+    QVector<int> runFinalOwner(runs.size(), -1), runJoinsBlocks(runs.size(), 0);
+    for (int index = 0; index < runs.size(); ++index) {
+        int leftTotal = 0, rightTotal = 0;
+        for (int b = runs[index].firstBlock; b <= runs[index].lastBlock; ++b) {
+            runOfBlock[b] = index;
+            leftTotal += alignment.blocks[b].leftCount;
+            rightTotal += alignment.blocks[b].rightCount;
+        }
+        const auto &first = alignment.blocks[runs[index].firstBlock];
+        runFirstOld[index] = first.leftStart;
+        runOldCount[index] = leftTotal;
+        // 一处改动里第一块与最后一块的**新增侧起点相同**（`compare()` 的删除块与
+        // 紧随其后的新增块共用同一个 `b`），所以取第一块的 `rightStart` 就够了。
+        runFirstNew[index] = first.rightStart;
+        runFinalOwner[index] = leftTotal
+            ? ownerForLine(first.leftStart + leftTotal - 1)
+            : blockAt(offsets[qBound(0, first.leftStart, offsets.size() - 1)]);
+        runJoinsBlocks[index] = ownerForLine(first.leftStart) != runFinalOwner[index]
+            && leftTotal != rightTotal;
+    }
     int lastOwner = 0;
-    for (const auto &block : alignment.blocks) {
-        const int firstOwner = ownerForLine(block.leftStart);
-        const int finalOwner = ownerForLine(block.leftStart + qMax(0, block.leftCount - 1));
-        const bool changedBlock = block.change != Text::Change::Equal;
-        const bool joinsBlocks = changedBlock && firstOwner != finalOwner
-            && block.leftCount != block.rightCount;
+    for (int b = 0; b < alignment.blocks.size(); ++b) {
+        const auto &block = alignment.blocks[b];
+        const int run = runOfBlock[b];
+        const bool changedBlock = run >= 0;
+        // 相同块的行一定左右成对（`Equal` / `Ignored` 都是按行发出的），
+        // 走到这个兜底分支只可能是差异块，所以它的口径是「改动末尾」。
+        const int blockAnchor = block.leftCount
+            ? ownerForLine(block.leftStart + block.leftCount - 1)
+            : blockAt(offsets[qBound(0, block.leftStart, offsets.size() - 1)]);
         for (int r = block.firstRow; r < block.firstRow + block.rowCount; ++r) {
             const auto &row = alignment.rows[r];
-            int owner = row.leftLine >= 0 ? ownerForLine(row.leftLine)
-                : block.leftCount ? finalOwner : blockAt(offsets[block.leftStart]);
+            int owner = -1;
+            if (row.leftLine >= 0) {
+                owner = ownerForLine(row.leftLine);
+            } else if (!changedBlock) {
+                owner = blockAnchor;
+            } else {
+                // 纯新增行没有对应的旧行，只能用**位置**找它的对应物：一处改动里
+                // 「第 i 个新增行 ↔ 第 i 个旧行」。这个对应关系只存在于这一层——
+                // 逐行去看 `Row` 是看不出来的（纯新增行的 `leftLine` 是 -1）。
+                // 它决定手工编辑后的输出行归属哪个块，也就决定「改过的块还能不能
+                // 被某一侧整体覆盖」（`selectingFirstBlockPreservesLaterManualEdits`
+                // 守的就是这一条）。新增行比旧行多时，多出来的那些归给改动末尾。
+                const int offset = row.rightLine - runFirstNew[run];
+                const int counterpart = runFirstOld[run] + offset;
+                const bool inside = runOldCount[run] > 0 && offset >= 0
+                    && counterpart < runFirstOld[run] + runOldCount[run];
+                owner = inside ? ownerForLine(counterpart) : runFinalOwner[run];
+            }
             owner = qMax(lastOwner, owner);
             if (owner < 0 || owner >= ranges.size()) continue;
             if (changedBlock) {
@@ -255,7 +304,7 @@ bool TextMergeSession::setOutputText(const QString &text, QString *error)
             lastOwner = owner;
             const auto &line = afterLines[row.rightLine];
             ranges[owner].length += line.text.size() + (line.eol == Text::Eol::None ? 0 : 1);
-            if (joinsBlocks) ranges[owner].manualGroup = true;
+            if (changedBlock && runJoinsBlocks[run]) ranges[owner].manualGroup = true;
         }
     }
     int start = 0;

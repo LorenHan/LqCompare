@@ -148,7 +148,11 @@ private slots:
         QVERIFY(window.openPaths({left, right}));
         auto *text = qobject_cast<TextCompareSession *>(area->currentSession());
         QVERIFY(text); QCOMPARE(text->state(), CompareSession::State::Open);
-        QCOMPARE(text->comparison().differences.size(), 1);
+        // `left` 与 `right` 的相似度只有 22（只有一个公共字符 `t`），低于出厂阈值 50，
+        // 于是这一处是「删除 + 新增」两块——但仍然是**一处改动**（块下标连续）。
+        // 两个数都断言：差异块数是差异引擎的口径，「一处改动」是导航/状态栏的口径。
+        QCOMPARE(text->comparison().differences.size(), 2);
+        QCOMPARE(text->differenceCount(), 1);
         QVERIFY(text->widget()->findChild<TextPane *>("leftTextPane"));
         const QString screenshot = qEnvironmentVariable("LQCOMPARE_APP_SCREENSHOT_PATH");
         if (!screenshot.isEmpty()) {

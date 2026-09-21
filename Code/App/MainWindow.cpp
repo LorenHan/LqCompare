@@ -981,6 +981,8 @@ bool MainWindow::openRequest(const Cli::Request &request, const QString &working
     document.settings.insert(QStringLiteral("text.ignoreEol"),request.textOptions.ignoreEol);
     document.settings.insert(QStringLiteral("text.ignoreFinalNewline"),request.textOptions.ignoreFinalNewline);
     document.settings.insert(QStringLiteral("text.whitespace"),int(request.textOptions.whitespace));
+    document.settings.insert(QStringLiteral("text.alignSimilarLines"),request.textOptions.alignSimilarLines);
+    document.settings.insert(QStringLiteral("text.similarityThreshold"),request.textOptions.similarityThreshold);
     if (!request.encoding.isEmpty()) {
         document.settings.insert(QStringLiteral("text.leftEncoding"),QString::fromLatin1(request.encoding));
         document.settings.insert(QStringLiteral("text.rightEncoding"),QString::fromLatin1(request.encoding));

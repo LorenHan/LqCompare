@@ -308,6 +308,7 @@ Y Repository checks in 13s
 | `Services/Text/`（行对齐引擎） | TXT-002 / TXT-003 | **TXT-002 已完成；TXT-003 已完成**（Myers 与 Patience 两种算法 + 回退 + 可选算法表；界面上的算法下拉与持久化属 TXT-004，本轮**未做**，见 §1.26） | `Tests/Text`（25 个用例函数）+ `Tests/Alignment`（14 个用例函数，**纯 QtCore**） |
 | `Services/Text/`（行内容规范化链） | TXT-008 | **已完成**（四条标准全落；链提到公开接口 `normalizedLine()`，土耳其语取舍与 simple folding 的两条边界都以注释 + 用例两面记录，见 §1.27。**注意本轮没有新建套件**：实现与测试都在既有的 `textdiff` / `Tests/Text` / `Tests/TextView` 里） | `Tests/Text`（31 个用例函数，本轮 25 → 31）+ `Tests/TextView`（19 个用例函数，本轮 18 → 19） |
 | `Services/Text/`（空白模式表） | TXT-009 | **部分完成**（5 条里 4 条已落：两级语义的分水岭、Tab/空格混排语料、单一枚举 + 模式表、忽略行的可视标记；第 4 条后半句「标记可由 **View 页**开关关闭」**没有住所**——View 页属 `OPT-007` / `OPT-003`，尚未落地。见 §1.28） | `Tests/Text`（34 个用例函数，本轮 31 → 34）+ `Tests/TextView`（20 个用例函数，本轮 19 → 20） |
+| `Services/Text/`（相似行对齐与阈值） | TXT-005 | **已完成**（四条标准全落；新模块 `linesimilarity.{h,cpp}`：分值 / 阈值判定 / 单调配对 / 两个工作量上限；引擎新增「一处改动」归并 `DifferenceRun` / `differenceRuns()`，状态栏、上一处/下一处、复制这一处、命令行摘要统一改用它。**顺带修掉一个连带缺陷**：三方合并按块粒度解读会让基线行从结果里消失，见 §1.29） | **新套件** `Tests/Similarity`（15 条用例函数，**纯 QtCore**）；另 `Tests/Text`、`Tests/TextView`、`Tests/Report`、`Tests/AppIntegration`、`Tests/Cli`、`Tests/Merge`、`Tests/MergeView` 均有断言改动 |
 | `Services/Files/`（文件系统） | PLAT-002 | **部分完成**（Windows 实现未编译验证） | `Tests/FileSystem`（50 用例） |
 | `Services/Files/`（回收站） | PLAT-003 | **部分完成**（Windows 实现未编译验证） | `Tests/Trash`（35 用例） |
 | `Services/Files/`（名称与 Unicode） | PLAT-007 | **部分完成**（长路径只写在 Windows 侧，未编译验证） | `Tests/PathName`（40 用例 + 1 个仅 Linux 执行） |
@@ -1854,12 +1855,78 @@ ad-hoc 签名后离屏启动到「`LqCompare 0.1.0 启动完成`」。**没有�
 
 代码提交 `15a6530`（提交号由紧随其后的纯文档提交回填；见 §3.1 那一行）。
 
+### 1.29 TXT-005 相似度阈值与相似行对齐：四条标准全落，并顺带拔出一个「合并丢数据」的连带缺陷（2026-09-21 15:0x）
+
+**为什么这一轮做 TXT-005**：它是同族里唯一「四条标准全都指向一个还不存在的模块」的条目
+（`TXT-010` 的 `ignoreEol` / `ignoreFinalNewline` 两个开关已在同一条链里生效，属于「先核对」那类；
+TXT-005 属于「从零写」那类）。判据照旧：`/opt/homebrew/bin/gh issue view 60` 逐条读完成标准，
+再去 `Code/Services/Text/` 与 `Code/Tests/` 里 `ls` 找对应实现。
+
+**核对结果**：`Services/Text/` 下只有 `textdocument.*` / `textdiff.*`，
+**没有任何**相似度相关的源码，`Tests/` 下也没有对应套件——四条标准全部要新写。
+（若只 grep `similarity` 会看到 `CompareOptions::similarityThreshold` 这个字段与它注释里
+「本字段尚未被引擎读取」，那不是实现，别当成「已经有了」。）
+
+**四条标准的落地程度：**
+
+| 标准 | 证据 | 状态 |
+| --- | --- | --- |
+| 1 阈值可配置（0–100）并提供「相似行对齐」总开关 | `MaximumSimilarity` / `defaultSimilarityThreshold()` / `clampSimilarityThreshold()` 都在 `linesimilarity`；`CompareOptions::alignSimilarLines` 与 `similarityThreshold` 由引擎真正读取；会话键 `text.alignSimilarLines` / `text.similarityThreshold` 往返有 `Tests/TextView` 用例 | **已勾** |
+| 2 固定候选行对的分值与阈值判定有边界测试（低于阈值不配对）；「全局重排后不要求修改块数量单调，改用固定语料验证对应关系与无丢行」 | `Tests/Similarity` 15 条：分值在用例里按定义 `2·LCS/(len左+len右)` **另算一遍**再比对（不抄实现里的数）；`isSimilarEnough` 钉住「含等号」；配对用三条结构不变量判（下标各自严格递增 / 每对都 `>= 阈值` / 配对数与总分值不得被更优解压过）。**「无丢行」由固定语料显式断言**：配对前后左右两侧被覆盖的行数必须相等 | **已勾** |
+| 3 关闭相似行对齐后，相似行被呈现为删除 + 新增两条独立块 | `Tests/Text` / `Tests/Similarity` 同一组夹具跑两种开关，断言「开着 = 1 个替换块、关掉 = 删除块 + 新增块」；命令行另有 `--similar-lines` / `--no-similar-lines` 两种跑法的摘要比对 | **已勾** |
+| 4 阈值与开关写入会话设置并可用于命令行 | 会话键在 `textcomparesession` 里读写往返；命令行 `--similar-lines` / `--no-similar-lines` / `--similarity-threshold <0-100>` 三条都进 `Tests/Cli`（含 6 行非法参数：101 / -1 / `abc` / `70.5` / 缺值 / 两个开关同时给） | **已勾** |
+
+**新增模块**：`Code/Services/Text/linesimilarity.{h,cpp}`——分值 `lineSimilarityPercent()`、
+阈值判定 `isSimilarEnough()`、单调配对 `pairSimilarLines()`、两个工作量上限
+（`similarityPairingMaximumCells()` 512×512、`similarityPairingBudget()` 10^8）
+与钳制 `clampSimilarityThreshold()`，全部是**纯函数**，因此新套件 `Tests/Similarity`
+刻意 `QT -= gui`（与 `Tests/Text` / `Tests/Alignment` 同一条纪律）。
+
+**「一处改动」这个新概念**：一段改动会被铺成**若干相邻块**，于是「差异块个数」
+不再等于「界面上数得出的改动处数」。为此在 `textdiff` 加 `DifferenceRun` / `differenceRuns()`
+（判据只用「块下标连续」——两种算法产出的区间本来就是「相同段 / 非相同段」交替的），
+状态栏、上一处/下一处、复制这一处、命令行摘要四处**统一改用它**。
+这一层不是顺手加的：不加的话现象是「状态栏说 3 处、按两次『下一处』就到头了」。
+
+**顺带拔出的连带缺陷（本轮最值钱的一条）**：拆分「一处改写」之后，**三方合并引擎**
+按**块**粒度解读两侧编辑，于是「左改 B→C、右改 B→D」在 `A B C` / `A D C` / 基线 `A B C` 上
+被读成两组互不重叠的编辑，**基线行 `B` 从结果里消失**（输出 `A\nC\n` 而不是 `A\nB\nC\n`）。
+这是**丢数据**，比多报一个冲突严重得多，而它只在 TXT-005 落地之后才可能出现。
+修法：`mergeengine` 加 `changeRunLength()`，把「基点相接」的同侧相邻非 Equal 块归并成一处
+再交给合并判定；`textmergesession` 的输出行→块映射同样改按「一处改动」口径算归属
+（否则纯新增行会挂到错误的旧行上）。**判据是「基点相接」而不是块类型**。
+
+**验证**：单套件全绿——`Text` 34/0、`TextView` 20/0、`Similarity` 15/0、`Merge` 45/0、
+`MergeView` 26/0、`Report` 36/0、`AppIntegration` 12/0、`Cli` 116/0；全量
+**3649 passed / 0 failed / 2 skipped**（68 个套件，此前 3626；增量的主体是新套件
+`Tests/Similarity` 的 15 条，其余为 `Tests/Cli`（本轮新增两个用例函数，含 6 行非法参数数据行）
+与 `Tests/TextView` 新增的 1 条同属本轮；未删改任何既有用例）；
+五道护栏全过（`check_winapi` 正式扫描 **337** 个源文件，比上轮 333 多 4 个 = 本轮新增源码）；
+主程序增量与 `make -B` 全量重编均为 **0 条本仓 warning**，ad-hoc 签名后离屏启动正常；
+**12 处变异 12 处检出、0 漏检**（驱动 `/tmp/txt005_mutate.py`，不进仓库）。
+
+**本轮的教训（值得带走）：一个「夹具与手推分值都错」的假红，会被误读成「实现错了」。**
+TXT-005 落地后 `Tests/Text` / `Tests/TextView` / `Tests/Report` / `Tests/AppIntegration`
+一起变红，第一反应是「引擎把块拆错了」。真实原因是那批夹具里既有「两个不同文件恰好
+各有一处差异」也有「某对行在出厂阈值 50 下根本配不上对」（实测 `bravo Two` / `BRAVO two`
+只有 33 分、`a` / `left` / `right` 只有 22 分），**分值是从定义算出来的，不是从直觉猜的**。
+→ **改行为之前先用一个独立小程序把真实数值 dump 出来**（本轮用了 `/tmp/lqdbg/`），
+凡是断言里出现具体数字，那个数字要么有独立来源、要么是实测的，不能是「看起来差不多」。
+
+**两处刻意的反直觉取舍**（理由已写进注释，别被「修正」回去）：
+① 命令行越界**报错**、会话文件越界**钳制**——两条路刻意不同（脚本作者需要知道参数没生效；
+   手改坏的会话文件不该改成一个用户没设过的数）。
+② 配对目标**先配对数、后总分值**——反过来会让「一对 90 分」压过「两对 60 分」，
+   用户看到两行改动被缩成一处，与这个功能的目的正好相反。
+
+代码提交 `（见 §3.1 那一行，提交号由紧随其后的纯文档提交回填）`。
+
 ## 2. 已验证的事实（不用再花时间确认）
 | 项目 | 结论 | 验证方式 |
 | --- | --- | --- |
 | 构建 | Qt 5.15.2 clang_64 上 qmake + make 通过，产出 `dist/macos/LqCompare.app` | `qmake && make -j8` |
 | 运行 | 主程序离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
-| 测试（全量） | **3626 passed / 0 failed / 2 skipped，67 个套件**（2026-09-21 14:4x 实测，并行 4 时约 1 分 40 秒，EXIT=0）。3626 = 3622（TXT-008 那一轮，见 §1.27）+ 4（TXT-009 本轮新增：`Tests/Text` 3 个 + `Tests/TextView` 1 个，见 §1.28），**没有删改任何既有用例**。2 条跳过分别来自 `PathName`（40/0/1）与 `Registry`（61/0/1），都是按平台条件跳过的用例 | `Code/Tests/run-tests.sh` |
+| 测试（全量） | **3649 passed / 0 failed / 2 skipped，68 个套件**（2026-09-21 15:0x 实测，并行 4 时约 1 分 30 秒，EXIT=0）。3649 = 3626（TXT-009 那一轮，见 §1.28）+ 23（TXT-005 本轮：新套件 `Tests/Similarity` 15 条 + `Tests/Cli` 两个新用例函数与其数据行 + `Tests/TextView` 1 条），**没有删改任何既有用例**。2 条跳过分别来自 `PathName`（40/0/1）与 `Registry`（61/0/1），都是按平台条件跳过的用例 | `Code/Tests/run-tests.sh` |
 | 运行器自己也有红有绿（ENG-003 第 2、3 条，本轮新增） | `run-tests.sh --self-test` 在**临时目录**里现造五个探针套件（通过 / 失败 / 挂死 / 硬退出 / 构建期失败），用同一个运行器跑两遍（并行 4 与串行 1），**24 条断言全绿**；并发度实测**并行峰值 3 / 串行峰值 1**，两遍的 `合计：6 passed, 1 failed, 0 skipped` 逐字相同。探针跑完即删、不进仓库（`LQCOMPARE_SELFTEST_KEEP=1` 可留现场）。自测同时是超时保护与「产物必须先删」两条规则的**唯一可重复证据**（这两条只在失败路径上才看得出来） | `Code/Tests/run-tests.sh --self-test` |
 | ENG-003 能反向验证 | **13 处变异 13 处检出、0 处漏检**（其中有**两处第一次是真漏检**：M4「盯错了量」、M13「只比文件名，覆盖写看不出差异」——两处都是**验证本身有洞**而不是实现有 bug，补强断言后才抓住；成因见 §1.24 第四、七节） | 变异测试（结论写在 issue #335 的落地说明里），驱动 `/tmp/lqcompare-mutate-eng003.py`，**不进仓库** |
 | 测试不许脏工作目录（ENG-003 第 5 条，本轮修） | `Tests/OptionsDialog` 原来每跑一次全量测试就把三张对话框截图写进仓库根（`QDir::current()`），现已落到 `QTemporaryDir`，并断言「工作目录里那几个 `options-*.png` 的**指纹**（名字 + 大小 + 修改时间）没变」——只比名字会被同名旧文件掩盖（实测 M13 第一版就此漏检）。实测：改成临时目录之后再跑该套件，三个旧文件的 mtime 保持不变 | `Code/Tests/run-tests.sh OptionsDialog` |
@@ -1868,6 +1935,8 @@ ad-hoc 签名后离屏启动到「`LqCompare 0.1.0 启动完成`」。**没有�
 | 规范化链的四条标准**现在真的被守住了**（TXT-008，本轮补） | 实现（`ignoreCase`、`Change::Ignored`、Rules 勾选框、`text.ignoreCase` 键、`colorFor(Ignored)` 的弱化底色）**早就都在**，缺的是断言与「链」这个名字。本轮把链提成公开的 `normalizedLine()` 并补 **7 个**用例函数（`Tests/Text` 25 → 31，`Tests/TextView` 18 → 19）。**8 处变异 8 处符合预期**（7 处检出 + 1 处按设计漏检），且**每处都比对了 `.o` 的 mtime** 来确认构建真的发生 | `Code/Tests/run-tests.sh Text` + `/tmp/txt008_mutate.py`（不进仓库） |
 | 空白三级模式的边界就是「数量 vs 有无」（TXT-009，本轮补） | 本机 Qt 5.15.2 实测：`simplified()` 折叠内部连续空白为一个空格并去掉首尾，`QChar::isSpace()` 认空格 / Tab / CR / LF / VT / FF / **U+00A0 NBSP** / **U+202F 窄 NBSP** / **U+3000 表意空格** / U+2028 / U+2029，**不认 U+200B 零宽空格**。因此 `IgnoreChanges` 下 `ab` 与 `a b` **仍不同**（折叠后那个空格还在），只有 `IgnoreAll` 判等——这就是两级的分水岭，也是「两个模式不是一强一弱」的判据。`Tests/Text` 的固定语料表按这条边界搭，并额外断言判等关系必须嵌套（`Exact ⊆ IgnoreChanges ⊆ IgnoreAll`） | `Code/Tests/run-tests.sh Text`（探针 `/tmp/foldprobe/probe4.cpp`，不进仓库） |
 | 空白模式的三级语义**现在真的被守住了**（TXT-009，本轮补） | 实现（`Whitespace` 三值、`normalizedLine()` 里的分支、界面的下拉、`text.whitespace` 键）**早就都在**，缺的是「分水岭」那类语料与模式表。本轮补 **4 个**用例函数（`Tests/Text` 31 → 34，`Tests/TextView` 19 → 20）与模式表/自检。**10 处变异 10 处检出、0 漏检**；其中第 10 处（把下拉的铺法改成倒序）**第一版是真漏检**——见 §1.28 与 §6 那两条新坑 | `Code/Tests/run-tests.sh Text` + `/tmp/txt009_mutate.py`（不进仓库） |
+| 相似度分值的**确切数值**（TXT-005，本轮新增，**以后不用再猜**） | 分值定义为 `2·LCS/(len左+len右)` 的百分点（LCS = 最长公共子序列长度），两侧都过 `normalizedLine()`。实测（`/tmp/lqdbg/`）：`abc` vs `cba` = **33**（顺序被计入；按字符集合算会是 100）；`int x;` vs `int x; // 一整段很长的注释` ≈ **38**（短行被长行包含**不**自动满分，这是刻意的）；`bravo Two` vs `BRAVO two` = **33**、`a` vs `left` / `a` vs `right` = **22**——**出厂阈值 50 下它们配不上对**，本轮那批「四个套件一起变红」的假红正是它们造成的。阈值判定**含等号**（分值 == 阈值也算相似）。开了忽略大小写之后 `HELLO world` vs `hello world` 必须是 **100**，否则「开了忽略大小写反而更不像」 | `Code/Tests/run-tests.sh Similarity`（探针 `/tmp/lqdbg/`，**不进仓库**） |
+| 相似行对齐**现在真的被守住了**（TXT-005，本轮） | 新套件 `Tests/Similarity` **15 条全绿**（**纯 QtCore**，刻意不链接 QtGui），加上引擎侧「一处改动」的归并层 `DifferenceRun` / `differenceRuns()`。**12 处变异 12 处检出、0 处漏检**（分布 M1 9 红 / M2 3 / M3 1 / M4 1 / M5 1 / M6 2 / M7 1 / M8 1 / M9 3 / M10 32 / M11 2 / M12 2）。其中 **M12 第一版是真漏检**——命令行 `--similarity-threshold` 在 `Tests/Cli` 里零覆盖，补两个用例函数 + 6 行非法参数之后才检出。**注意这一轮的连带修复**：TXT-005 把「一处改写」拆成多块之后，三方合并会**丢基线行**（见 §1.29 与 §6），已修 | `Code/Tests/run-tests.sh` + `/tmp/txt005_mutate.py`（**不进仓库**） |
 | 套件崩溃的原因现在看得见（本轮新增） | 每个套件跑完都会留下 `<套件>/stderr.log`：**通过时是 0 字节**（Qt 正常跑完不写 stderr），崩溃时有内容且失败日志里直接贴出末尾 15 行；「stderr 是空的」单独成句（被 SIGKILL/段错误直接带走的情形本身也是信息）。用三个临时探针套件端到端验过（配方见 §1.23）：`ZZProbeStderr`（stderr 有内容 + stdout 不泄漏）、`ZZProbeSilent`（空 stderr）、`ZZProbeBadBuild`（qmake 失败 → 陈旧产物必须已删）。**5 处变异 5 处检出**，其中 M4 连漏两次的原因（真等价 vs 观测点选错）见 §6 | `Code/Tests/run-tests.sh ZZProbe`（探针跑完即删，不进仓库）+ `/tmp/lqcompare-mutate-stderr.py` |
 | CI 三条腿的实测（读的是 run `35549157384`，并已在 `35551066378` 上复现一致） | **macOS 腿完整**：`macos-15-intel` 64 套件全部产出 `Totals:`，**3568 passed / 0 failed / 2 skipped**，其中 `Tests/Archive` **106 passed**——这是第一次真的跑在 **Python 3.14** 上，同时验证了 §1.21 的夹具修法。**ubuntu 腿只剩 1 个运行期崩溃**：构建失败 **17 → 0**（`trash_linux.cpp` 的 include，`525a872`），`3538 passed / 0 failed`，`Tests/Folder` 跑到第 8 个用例 `linksAreComparedWithoutFollowing()` 时进程消失。**Windows 腿仍是 26 个套件构建失败**（本轮故意未动，清单在 §1.22）。两次运行的这三组数字**逐项相同** | `/opt/homebrew/bin/gh run download <id>` 后逐套件读 `results.txt` / `build.log` / `stderr.log` |
 | `Tests/Folder` 崩溃的原因已定性（本轮新增） | `stderr.log` 全文只有一行：**`*** buffer overflow detected ***: terminated`**——glibc 的 `_FORTIFY_SOURCE` 抓到的**缓冲区越界**（不是死循环/栈溢出/OOM）。**macOS 的 libc 没有这个机制，所以本机结构性看不到这一类失败**。下一个动作是在本机用 **ASan** 复现（同盯一类错误、macOS 可用），其次才是让脚本在崩溃时自动补跑 `-v2`（详见 §4.0.1 第 4 条与 §6） | `cat /tmp/ci-art2/test-logs-ubuntu-latest/Folder/stderr.log` |
@@ -2060,6 +2129,18 @@ Code/
 │   │                             成立），分开之后变异测试只需重建这一个套件。断言骨架是
 │   │                             **手推的黄金串**（纸上枚举锚点与后缀剥离）加一个返回
 │   │                             「第一条被违反项」的契约纯函数
+│   ├── Similarity/              tst_similarity + .pro（15 用例函数，**纯 QtCore**，
+│   │                             刻意不链接 QtGui）。TXT-005 的相似行对齐验收：分值是
+│   │                             `2·LCS/(len左+len右)` 的百分点，用例按**定义另算一遍**
+│   │                             再比对（不抄实现里的数）；阈值判定钉住「含等号」；
+│   │                             配对用三条结构不变量判——左右下标各自严格递增、
+│   │                             每一对都 `>= 阈值`、配对数与总分值不得被更优解压过；
+│   │                             「无丢行」由固定语料显式断言（配对前后左右被覆盖的
+│   │                             行数相等）。**刻意不与 Tests/Text 合并**：那一套守的是
+│   │                             「切完之后块边界对不对」，这一套守的是「切完之后哪些行
+│   │                             配成一对」，夹具与变异面都不重叠。两条工作量上限
+│   │                             （512×512 单元格 / 10^8 字符）的「超限退回按位配对」
+│   │                             也在这里断言
 │   ├── CommandRegistry/          tst_commandregistry + .pro（14 用例）
 │   ├── ContentFilter/            tst_contentfilter + .pro（85 用例函数，**纯 QtCore**，
 │   │                             刻意不链接 QtGui；九组 A~I，含用真的 Text 比对引擎
@@ -2215,16 +2296,17 @@ docs/
 | `5c16735` | **测试运行器的并行、超时与自测**（ENG-003 的五条完成标准里，原本有三条没做）：套件级并行（默认 `min(4, 核数)`，墙钟 3 分 53 秒 → 1 分 21 秒，合计逐字不变）、单套件超时（自建轮询，不依赖 macOS 上不存在的 GNU `timeout`，超时与断言失败分开命名且不计入合计）、`Tests/OptionsDialog` 的截图不再写进仓库根（并按**指纹**而非文件名断言落点，否则「覆盖写」会隐身）；另新增 `run-tests.sh --self-test`——在临时目录里现造五个探针套件，用同一个运行器跑两遍（并行 4 / 串行 1）逐条断言它自己该说的话，因为「运行器自己错了」恰恰是它本该报告的那类静默失败。13 处变异 13 处检出（其中两处第一次是真漏检：断言盯错了量、断言比名字不比内容） | ENG-003 |
 | `5af6b9e` | **TXT-008 忽略大小写差异的核对与闭环**：实现（`ignoreCase` / `Change::Ignored` / Rules 勾选框 / `text.ignoreCase` 键 / 弱化底色）**早已在仓库里**，缺的是断言与「链」这个名字。把匿名命名空间里的 `normalized()` 提成公开的 `normalizedLine()`（整条链只有一个实现，头文件那段注释同时就是第 4 条要求的那份土耳其语取舍记录），并补 7 个用例函数：`Tests/Text` 25 → 31（逐行重要性切换、只有仅大小写不同的行失去差异身份、链「少做任何一步都不相等」+ 左右对调、12 行非 ASCII 折叠对照表、土耳其语四格 + 土耳其语 locale 下结论不变、折叠长度守恒），`Tests/TextView` 18 → 19（被忽略的行仍被标记、与从**真实渲染**采出的三种差异色都不同且彩度更低）。8 处变异 8 处符合预期，其中 1 处**按设计漏检**（链的两步可交换，调换顺序不该红） | TXT-008 |
 | `15a6530` | **TXT-009 忽略空白变化的核对与闭环**：实现（`Whitespace` 三值、`normalizedLine()` 里的分支、Rules 里的下拉、`text.whitespace` 键、`Change::Ignored` 的弱化底色）**早已在仓库里**，缺的是「分水岭」那类语料、模式表，以及界面文案那条链的断言。新增 `WhitespaceDescriptor` / `whitespaceTable()` / `whitespaceIdentifier()` / `defaultWhitespace()` / `availableWhitespaces()` / `validateWhitespaceTable()`（与 `alignmentTable()` 同一个定位：界面按表铺下拉、按表读回，缺项/重复/未实现都由自检报出来），界面改按 `availableWhitespaces()` 铺下拉与读回（不再 `static_cast<Whitespace>(currentIndex())`），并把界面文案提成公开静态接口 `TextCompareView::whitespaceLabel()` 让「文案链」可验；补 4 个用例函数：`Tests/Text` 31 → 34（9 行三模式并排语料 + 嵌套不变量、10 行 Tab/空格混排语料（含 `isSpace()` 的边界字符）、模式表与自检四份坏表、枚举外取值退化为 `Exact`），`Tests/TextView` 19 → 20（下拉第 i 行**显示的字**与**实际生效的模式**两条链 + 被忽略的空白差异仍留标记、真正相同的行不留标记）。**10 处变异 10 处检出**，其中第 10 处（把下拉铺法改成倒序）**第一版是真漏检**——只钉了值那条链 | TXT-009 |
+| `（提交号由紧随其后的纯文档提交回填）` | **TXT-005 相似度阈值与相似行对齐**：新增纯函数模块 `Services/Text/linesimilarity.{h,cpp}`——分值 `lineSimilarityPercent()`（`2·LCS/(len左+len右)` 的百分点，两侧都过 `normalizedLine()`，因此忽略规则在相似度这一层同样生效）、阈值判定 `isSimilarEnough()`（**含等号**）、单调配对 `pairSimilarLines()`（**先最大化配对数、再最大化总分值**）、两个**开跑前就能算出来**的工作量上限（512×512 单元格 / 10^8 字符，超限**退回按位配对**并把 `limited` 交出去，不静默）、`clampSimilarityThreshold()`。引擎侧新增「一处改动」的归并 `DifferenceRun` / `differenceRuns()`（判据只用「块下标连续」，背后是 `AlignmentBuilder` 的区间交替结构），状态栏、上一处/下一处、复制这一处、命令行摘要**四处统一改用它**——否则现象是「状态栏说 3 处、按两次『下一处』就到头了」。`CompareOptions::alignSimilarLines` / `similarityThreshold` 由引擎真正读取；会话键 `text.alignSimilarLines` / `text.similarityThreshold` 往返有断言；命令行补 `--similar-lines` / `--no-similar-lines` / `--similarity-threshold <0-100>` 三条（越界 / 非数字 / `70.5` / 缺值 / 两个开关同时给**都算用法错误**，退出码 2——与「会话文件里的坏值钳制」刻意不同）。**顺带修掉一个连带缺陷**：拆分「一处改写」之后三方合并按**块**粒度解读，会让**基线行从冲突结果里消失**（`A\nC\n` 而非 `A\nB\nC\n`，丢数据）；`mergeengine` 加 `changeRunLength()` 把「基点相接」的同侧相邻非 Equal 块归并成一处，`textmergesession` 的输出行→块归属同改「一处改动」口径。新增套件 `Tests/Similarity`（15 条用例函数，**纯 QtCore**），另有 `Tests/Text`、`Tests/TextView`、`Tests/Report`、`Tests/AppIntegration`、`Tests/Cli`、`Tests/Merge`、`Tests/MergeView` 的断言改动。**12 处变异 12 处检出、0 漏检** | TXT-005 |
 
 > 上面这张表里，PLAT-005、FILT-001、SESS-001、SESS-002、SESS-006、SESS-007、
 > FILT-005、FILT-003、FILT-002、FILT-004、`ac32665`、`c03dc79`、`bdede29`、`d084060`、
-> `a1cd3ee`、`786cf46`、`24225e8`、`525a872`、`0ba8476`、`6cd5831`、`6bd1385`、`810262f`、`3b3a993`、`5af6b9e` 与 TXT-009 那一行（本轮）这二十五行由
+> `a1cd3ee`、`786cf46`、`24225e8`、`525a872`、`0ba8476`、`6cd5831`、`6bd1385`、`810262f`、`3b3a993`、`5af6b9e` 与 TXT-009 / TXT-005 那两行（本轮）这二十六行由
 > **单独的纯文档提交**补写提交号，原因见下一段——把一个提交的提交号写进它自己，
 > 会因为 `--amend` 每次都改变提交号而永远对不上。
 > 补写链**只到代码提交为止**：补写这些行的那个纯文档提交自身不再上表，否则每轮都会多出一行
 > 永远指不到自己的记录（`bf05600`、TXT-003 与 TXT-008 那两轮的补写提交都是这样未被记录的）。
 > 本轮走的是同一条路：代码提交里只写「提交号见 §3.1」，
-> 由紧随其后的纯文档提交把这一行与 §1.28 的末句一起定稿。
+> 由紧随其后的纯文档提交把这一行与 §1.29 的末句一起定稿。
 
 远端：369 个 issue 全部创建，标签为 `需求 / 待实现 / <模块> / <优先级>`，
 其中 P0 59 条。反查入口是 `docs/github/prd-issues.json`。
@@ -2857,6 +2939,65 @@ issue 什么标签，两个都判不出来。核对的结果是：**四条标准
    但属于构建配置一致性，单独一轮做。**TXT-009 这一轮同样没有新建套件，清单没有增长**。
 8. **锁文件在收工前删除**（本轮已确认删除）。
 
+### 4.0.8 最新一轮（2026-09-21 15:0x）：TXT-005 相似度阈值与相似行对齐（issue #60，**已完成**）
+
+**先读 §1.29**，那里有逐条对着完成标准核对的结果、四条标准的落地表、
+「一处改动」这个新口径的由来、顺带拔出的那个**合并丢数据**缺陷，以及 12 处变异的清单。
+
+**为什么这一轮做 TXT-005**：上一轮（§4.0.7 第 4 条）把它排在同族的可做条目里，
+而它是其中**唯一「四条标准全都指向一个还不存在的模块」**的那一条
+（`TXT-010` 的 `ignoreEol` / `ignoreFinalNewline` 已经在同一条链里生效，属「先核对」；
+TXT-005 属「从零写」）。判据仍是那句：**先逐条读完成标准，再 `ls` 源码与测试目录**。
+**核对结果**：`Services/Text/` 下只有 `textdocument.*` / `textdiff.*`，
+没有任何相似度相关的源码，`Tests/` 下也没有对应套件——四条标准全部要新写。
+（若只 grep `similarity`，会看到 `CompareOptions::similarityThreshold` 这个字段与
+它注释里的「本字段尚未被引擎读取」——**那是声明，不是实现**，别当成「已经有了」。）
+
+**这一轮多出来的方法论收获**（比条目本身更值钱）：
+**一个「夹具与手推分值都错」的假红，会被误读成「实现错了」。**
+TXT-005 落地后四个既有套件一起变红，第一反应是「引擎把块拆错了」；
+真实原因是那批夹具里某个文件恰好有两处差异、以及某对行在出厂阈值 50 下**根本配不上对**
+（实测 `bravo Two` / `BRAVO two` 只有 33 分、`a` / `left` / `right` 只有 22 分）。
+→ 判据可以带走：**凡断言里出现具体数字，那个数字要么有独立来源、要么是实测的**，
+不能是「看起来差不多」；改行为之前**先用一个独立小程序把真实数值 dump 出来**
+（本轮用的是 `/tmp/lqdbg/`，不进仓库）。
+这与 §1.28 那条「两条链都要有断言」互补：那条讲**盯错了量**，这条讲**量本身算错了**。
+
+**本轮之后，按优先级排**（第 1~3 条与前两轮相同，第 4 条起为新顺序）：
+
+1. **`Tests/Folder` 在 ubuntu 上的缓冲区越界**（`linksAreComparedWithoutFollowing()`，
+   stderr 只有一行 `*** buffer overflow detected ***: terminated`）。
+   按 §4.0.1 第 4 条给的三步走：**先在本机用 ASan 复现**（`-fsanitize=address -g`
+   单独编一份 `Tests/Folder`，`_FORTIFY_SOURCE` 与 ASan 盯的是同一类错误，
+   而 ASan 在 macOS 上可用）；静默的话给崩溃套件自动补跑 `-v2`；
+   重点看 `Services/Files/filesystem_posix.cpp::linkTarget()` 的 `readlink` 增长循环。
+   **不要先读代码猜。** 已经连续四轮没做（它不闭环任何 issue，而每轮的目标是闭环条目）。
+2. **Windows 腿的 26 个套件构建失败**（§1.22 的清单）：先只做两条系统性原因
+   （`_WIN32_WINNT`、`winioctl.h`），推一次看剩多少，**再**动那两个真 bug。
+3. **`actions/checkout@v4` / `upload-artifact@v4` → v5**（运行器已有 Node 20 弃用告警）。
+   它属于流水线维护，改错 major 版本会让三条腿一起红，值得单独一轮配一次推送去验。
+4. **同族里还剩的可做条目**（都属「本机可完整闭环」，都按「先逐条核对再动手」办）：
+   - **`TXT-010`（忽略行尾差异）优先** —— `ignoreEol` / `ignoreFinalNewline` 两个开关
+     就在同一条链上，且 `Tests/Text` 现有的行尾用例可能已经顺带碰过，先去看而不是先写。
+   - 其次 **`TXT-011` / `TXT-012` / `TXT-015` ~ `TXT-017`**（注释 / 行号数字日期 /
+     BOM / 行尾规范化 / 制表符宽度）：与 TXT-008 / TXT-009 同一部引擎、同一类判据。
+     **注意 `TXT-005` 已从这张单子上划掉**（本轮闭环）。
+   - **`TXT-004`（对齐/模式选择与持久化）**：三套 `*Descriptor`（算法 / 空白，
+     加本轮的值域与默认值）已把它的数据备齐，而 §1.28 末尾记着的那处
+     `qBound(0, value, 2)` 序号耦合正落在它的射程内。它**属于界面**（Compare 页的下拉），
+     先看 §4.1。
+   - **`DIR-002` ~ `DIR-012`**：`Services/Folder/foldercompare.{h,cpp}` 已经存在
+     （见 §3 目录树），先逐条核对再决定。
+5. **超时分支在 Windows 上未实测**（§4.0.3 第 4 条）：CI 的 Windows 腿**显式跳过**
+   `--self-test` 并打 `::warning::`。要补先测「Git Bash 的 `kill -TERM` 能不能终止一个
+   原生 Windows 进程」。**并行那一半不需要补**。
+6. **回到「界面接通那一批」**（§4.0 第 1 条）与 `OPT-002` 的最小集。
+   **`TXT-009` 第 4 条的后半句在等这儿的 `OPT-007`**（见 §4.1 那行）。
+7. **测试工程的 `DESTDIR`**：`OptionsDialog` / `MediaView` 两处还差一行
+   （§4.0.3 第 6 条）。**TXT-005 本轮新建的 `Tests/Similarity/SimilarityTests.pro`
+   一开始就带了这一行，清单没有增长。**
+8. **锁文件在收工前删除**（本轮已确认删除）。
+
 ### 4.1 选下一步之前先看这一节：哪些条目被谁阻塞
 
 **为什么单独写一节**：本项目的推进方式是「一次闭环一条 issue」，
@@ -2895,6 +3036,7 @@ issue 什么标签，两个都判不出来。核对的结果是：**四条标准
 | ~~`TXT-002` 基础行对齐算法（Myers）~~ | **已落地**（issue #57，记录见 §1.25） | 四条完成标准**全部已勾**。算法（`textdiff.{h,cpp}`，192 行）与 `Tests/Text` 原本就在，但**第 3 条的一半与整个第 4 条从来没有被断言过**：既有用例只断言 `differences` 为空（对「有几个块」毫无约束）、只比过两遍的 `rows[i].leftLine/rightLine`。本轮只加测试（`Tests/Text` 22 → 25 条，全量 3598 → 3601）、**不动一行生产代码**：全相同 → 单个相同块的边界、把 `Result` 摊成文本的逐字段快照（五个手推黄金串）、以及专为 `alignmentLimited` 造的输入。9 处变异 9 处检出。**它对任何条目没有阻塞**，也不被任何条目阻塞 |
 | ~~`TXT-003` 耐心对齐（Patience）~~ | **已落地**（issue #58，记录见 §1.26） | 四条完成标准**全部已勾**：唯一行优先（计数 + 严格递增最长子序列挑锚点）、无唯一行时**与 Myers 逐字段相同**的回退、可选算法表（`availableAlignments()` 只返回已实现的 / `validateAlignmentTable()` 报出规格被降级）、固定语料上切换算法改变块的数量与位置。9 处变异 9 处检出。**它对任何条目没有阻塞**，也不被任何条目阻塞。**它把 TXT-004 需要的数据备齐了**（算法标识符、可选清单、默认值）——但 TXT-004 的入口是 Compare 页的算法下拉，属界面，**不要**把这两条混为一谈 |
 | ~~`TXT-008` 忽略大小写差异~~ | **已落地**（issue #63，记录见 §1.27） | 四条完成标准**全部已勾**。这一条的特殊之处是**实现早就在**（`ignoreCase` / `Change::Ignored` / Rules 勾选框 / `text.ignoreCase` 键 / `colorFor(Ignored)` 的弱化底色全在仓库里），缺的只是断言与「链」这个名字——本轮的产出因此主要落在**测试**上（7 个新用例函数）加一次把 `normalizedLine()` 提到公开接口的生产改动。**它对任何条目没有阻塞**，也不被任何条目阻塞；**但它给 TXT-025 留了一条硬约束**：字符级高亮可以直接拿规范化后的下标当原文下标用，前提是折叠长度守恒——`Tests/Text` 有一条用例专门把这个前提钉住，改成 full folding 会立刻红 |
+| ~~`TXT-005` 相似度阈值与相似行对齐~~ | **已落地**（issue #60，记录见 §1.29） | 四条完成标准**全部已勾**。**这一条是「从零写」而非「先核对」**：核对阶段 `Services/Text/` 下只有 `textdocument.*` / `textdiff.*`，相似度相关源码一行都没有（`CompareOptions::similarityThreshold` 只是声明，注释里自己写着「尚未被引擎读取」）。新增纯函数模块 `linesimilarity.{h,cpp}` 与「一处改动」的归并层 `DifferenceRun` / `differenceRuns()`，`Tests/Similarity` 15 条。**它对任何条目没有阻塞**，也不被任何条目阻塞。**它给同族的 TXT-010 ~ TXT-017 留了一份可复用的判据**：「先逐条读完成标准，再 `ls` 源码与测试目录；`grep` 到的**字段声明**不算实现」。**它还暴露了一条排序纪律**：多个套件的夹具里若出现「两个不同的量恰好相等」或「某对行在出厂阈值下根本配不上对」，先怀疑夹具而不是实现——见 §1.29 那条教训 |
 
 **`FILT-002` 第 2 条当时为什么需要先决策（已被解决，留作记录）**：那条要求
 「正则匹配有超时保护（默认 200ms/条），超时记录为错误条目并继续」。但
@@ -3219,3 +3361,6 @@ issue 什么标签，两个都判不出来。核对的结果是：**四条标准
 | **界面上「用户看到的」与「实际生效的」是两条链，只钉一条会漏检** | TXT-009 第一版把界面的第 i 行钉在模式表第 i 项上——但它断言的是「选第 i 行，引擎用的就是表第 i 项」，**没有断言第 i 行显示的是什么字**。于是把下拉的铺法改成倒序（文案与序号脱钩）**10 处变异里唯一没被检出的就是它**：值那条路是 `whitespaceAt(index)` 按表取的，倒序只改变了用户看到的字。用户选「忽略全部空白」得到「比较空白」的行为，而 54 条用例全绿 | 两条链都要钉：值那条（第 i 行 ↔ 表第 i 项 ↔ 会话选项 ↔ 落盘值）+ **文案那条**（第 i 行**显示的字** ↔ 表第 i 项的文案）。取「期望文案」不能靠把三行英文抄进测试（那又是第二份事实来源），正解是把标签函数提成**公开静态接口**（`TextCompareView::whitespaceLabel()`），顺序仍由模式表决定，所以不是同义反复；再补一条「三条文案彼此不同」，否则三条一样的文案也能过逐项比对。**判据可以带走：凡 UI 值与 UI 文案同源不同路，两条都要有断言** |
 | **`enum class` 成员的类外定义不能落在匿名命名空间里；`tr` 在类外定义处要写限定名** | 把视图里的自由函数提成 `TextCompareView::whitespaceLabel()` 时，定义写在了原位置——而那个位置在匿名命名空间**里面**，报 `cannot define or redeclare 'whitespaceLabel' here because namespace '' does not enclose namespace 'TextCompareView'`（后续 5 条错误都是它的连锁）。改到命名空间外之后，`return tr(...)` 又报 `use of undeclared identifier 'tr'`：`Q_OBJECT` 提供的静态 `tr` 只在**类作用域内**可见，类外定义处必须写 `TextCompareView::tr(...)` | 成员的类外定义一律放在匿名命名空间的**结束括号之后**；`tr` 用限定名。**报错位置（第几行、哪几个标识符）看着像函数体有问题时，先看它到底在不在这块命名空间里**（TXT-009） |
 | **批量删 `.o` 会撞本机沙箱的批量删除守卫；`run-tests.sh` 在有套件失败时仍然退 0** | 变异驱动为了让 `make` 重编而删掉所有构建目录下的 `.o`（56 个），被沙箱拦下并**把驱动自己弄死**（`SAFE_DELETE_BULK_CONFIRM_REQUIRED`，阈值 50/轮），表现为「驱动突然只输出一行就结束」。另一处：把 `run-tests.sh` 的退出码当判据会**把「用例全红」读成「变异漏检」**——实测套件失败时它依然 `EXIT=0` | ① 不删文件，改成 `os.utime` 把目标 `.o` 的时间戳**推回一小时前**，同样逼 `make` 重编（源码一侧用普通写入，mtime 自然是当前时刻，避开 `shutil.copy2` 带回旧 mtime 那条坑）；② 判据一律**解析合计行里的失败数**（`合计：N passed, M failed`），不看退出码。两条都只在「本机无人值守跑反向验证」时出现，正常开发踩不到（TXT-009） |
+| **变异驱动里「这次真的重编了吗」的判据，必须在**还原源码之前**取** | 驱动为了让 `make` 重编会先 `os.utime(target, (0, 0))` 把 `.o` 的 mtime 回拨到纪元，然后才去读 `.o` 的 mtime 判「重编发生与否」——于是 12 处变异**全部报成「重编发生=False」**，而每一处的 `failed` 都大于 0、构建确实发生了。这个假阴性会让整份反向验证报告在「构建到底有没有带上变异」这一栏上完全失去意义 | 取 mtime 的时机挪到**还原源码之后、回拨之前**：先记录变异前 mtime → 回拨 → 构建 → **立刻**读 mtime 判定 → 才还原源码与 mtime。更稳的写法是干脆不依赖 mtime，改为在变异体里塞一个**编译期可见的标记**（本轮没走到那一步，但下次可以）。**判据：只要报告里出现一整栏恒定的「False/0」，先怀疑判据本身，不要当成结论**（TXT-005） |
+| **把「一处改写」拆成多块之后，一切按**块**粒度读的东西都会悄悄错——合并引擎会**丢行**** | TXT-005 把 `Change::Replace` 拆成「配对的修改块 + 未配对的删除 / 新增块」之后，三方合并引擎仍按**块**解读两侧编辑：「左把 B 改成 C、右把 B 改成 D」在 `A B C` / `A D C` / 基线 `A B C` 上被读成**两组互不重叠**的编辑（一组覆盖 `B`、另一组覆盖 `B`），于是基线行 `B` 从结果里消失——输出 `A\nC\n` 而不是 `A\nB\nC\n`。**这是丢数据**，比多报一个冲突严重得多，而它只在 TXT-005 落地之后才可能出现。两方合并的输出行→块映射同样按块粒度读，会让纯新增行挂到错误的旧行上（现象是「点了接受，改动落到了别处」） | 在 `mergeengine` 里加 `changeRunLength()`，把「**基点相接**的同侧相邻非 Equal 块」归并成**一处**改写再交给合并判定；`textmergesession` 的归属计算改用 `differenceRuns()` 建 `runOfBlock` / `runFirstOld` / `runOldCount` / `runFirstNew` / `runFinalOwner` 五张表。判据是「基点相接」（`next.leftStart == previous.leftStart + previous.leftCount`，且两块不能都是纯新增）而**不是**块类型：`addBlock` 已经保证删除排在新增之前、相邻同类块会合并。**可带走的规则：把一个粗粒度单位拆细之后，要把所有「按这个单位计数或操作」的调用点列一遍**——本轮正是靠这条找出四处（状态栏 / 导航 / 复制 / 命令行摘要）与两处合并归属（TXT-005） |
+| **`html.contains(payload)` 对「不含正则元字符的普通载荷」是恒真的，转义断言会变成假的** | `Tests/Report` 里那条「HTML 转义每一个非信任字段」的用例原本写死 `model.rows[3]` 并断言 `!html.contains("<script>...")`。TXT-005 改了行序之后下标指到了别的行，于是改成「按内容查找第一个两侧非空的变化行」——第一版改完仍然红，原因是那一行两侧都是**普通中文**（载荷成了 `末行旧` 这种不含任何元字符的串），`html.contains()` 对「根本没被转义的原文」也为真，断言失去区分力 | 断言必须把**载荷自己注入**到待测单元格里（用例先把两侧文本设成 `"<script>alert(1)</script>"`、`"a & b \" c"` 这类真载荷，再导出并逐条查「转义后的形态在、原文不在」），而不是指望夹具里恰好有一行含元字符。**判据：凡断言形如 `!输出.contains(X)`，先问「X 在**未经转义**的输出里还在不在」**——不在的话这条断言什么也没测（TXT-005） |

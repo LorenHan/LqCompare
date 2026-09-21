@@ -18,6 +18,31 @@ public:
     const Text::Result &comparison() const { return m_result; }
     Text::CompareOptions comparisonOptions() const { return m_options; }
     int currentDifference() const { return m_currentDifference; }
+    ///
+    /// \brief 「一处改动」的条数（TXT-005 起与 `comparison().differences.size()` 不再相等）。
+    ///
+    /// 引擎从 TXT-005 起会把一段改动铺成**若干个相邻的块**：够像的行配成一对
+    /// （替换块），不够像的行各自成块（删除块 / 新增块）。于是「一处改动」
+    /// 在引擎里可以是两三个块。界面上用户按一次「下一处」应当跳过**一整处**
+    /// 而不是停在半途，复制一处改动也必须把这一整处搬过去——所以导航、状态栏
+    /// 与复制都走这里，而不是直接数引擎块。
+    ///
+    /// 判据：`comparison().differences` 里**下标连续**的一串块属于同一处改动。
+    /// 之所以用「下标连续」而不是别的规则：两种算法产出的区间本来就是
+    /// 「相同段 / 非相同段」交替的，两处独立改动之间必然隔着一个相同段，
+    /// 因此各自成块的两个非相同段**不可能**下标连续——这条判据不需要再引入
+    /// 「行号是否相邻」之类的第二套口径。
+    ///
+    int differenceCount() const { return m_differenceRuns.size(); }
+    /// 第 `index` 处改动在 `comparison().blocks` 里的下标区间；越界返回 -1。
+    int differenceFirstBlock(int index) const;
+    int differenceLastBlock(int index) const;
+    /// `block` 落在第几处改动里；不属于任何一处时返回 -1。
+    /// 光标移动时要用它把「当前块」翻回「第几处」，不能拿块下标去 `differences` 里
+    /// 找位置——一处改动的第二块在那个列表里同样有位置，于是光标一进第二块
+    /// 就会跳到另一处去。
+    int differenceIndexOfBlock(int block) const;
+
     bool setPaths(const QString &left, const QString &right, QString *error = nullptr);
     void setComparisonOptions(const Text::CompareOptions &options);
     bool setText(bool left, const QString &text, QString *error = nullptr);
@@ -87,6 +112,8 @@ private:
     QByteArray m_leftCodec;
     QByteArray m_rightCodec;
     int m_currentDifference = -1;
+    /// 每一处改动对应的块下标区间（闭区间），见 `differenceCount()`。
+    QVector<Text::DifferenceRun> m_differenceRuns;
     QVector<BufferState> m_undo;
     QVector<BufferState> m_redo;
     bool m_leftReadOnly = false;

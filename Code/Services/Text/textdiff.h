@@ -38,6 +38,30 @@ struct CompareOptions {
     // 脚本引擎、报表都是如此），但也确实被按位置初始化过。往中间插一个字段，
     // 被拉开的那个位置不会报错，只会悄悄换一个含义——史上最容易漏的一种错。
     Alignment alignment = Alignment::Myers;
+    ///
+    /// 「相似行对齐」总开关（TXT-005）。
+    ///
+    /// `false` 时，一段「左侧有若干行、右侧也有若干行」的非相同区间被拆成
+    /// **删除块 + 新增块两条独立块**，不再尝试把相似的行配成「修改」。
+    /// `true` 时由 `similarityThreshold` 决定每一对候选行配不配得上。
+    ///
+    /// 出厂值是 `true`：这不是「新功能开开关默认关」的保守选择，而是因为
+    /// 关掉之后**每一处单行改动都会变成两行（一删一增）**，界面上看起来像
+    /// 「这份文件被整段重写了」。真正的保守方向在这里是「开着但阈值可调」——
+    /// 阈值才是那个需要用户按语料调的旋钮（见规格的边界条款）。
+    ///
+    bool alignSimilarLines = true;
+    ///
+    /// 相似度阈值（0–100，含边界）。`>=` 阈值才算相似（见 `isSimilarEnough()`）。
+    ///
+    /// 出厂值 50 是**在固定语料上选的**（语料与结论写在 `Tests/Similarity` 的
+    /// `defaultThresholdSeparatesRewritesFromUnrelatedLines()` 里）：
+    /// 一边是「同一行的两种写法」（`return true;` / `return false;` 这类，
+    /// 实测 72%），另一边是「本来就不相干的两行」（`left 0` / `right 0` 实测 46%）。
+    /// 50 落在二者之间。调低到 0 就等于回到「无论多不像都配对」的旧行为，
+    /// 调高到 100 则连只差一个字符的行也会被拆成一删一增。
+    ///
+    int similarityThreshold = 50;
 };
 struct Block {
     Change change = Change::Equal;
@@ -60,6 +84,15 @@ struct Result {
     QVector<int> differences; // indexes into blocks; ignored changes are excluded
     int ignoredBlocks = 0;
     bool alignmentLimited = false;
+    ///
+    /// 至少有一段区间因为**工作量上限**而没做相似度配对、退回按位配对（TXT-005）。
+    ///
+    /// 单独一个字段而不是并进 `alignmentLimited`：两者要提示用户的事情不同——
+    /// 前者是「这两份文件太大，只做了粗略对齐」，后者是「这段改动太大，
+    /// 没有逐行判相似」。合成一个字段，界面就只能给出一句与真实原因无关的话，
+    /// 而用户按那句话去调阈值会发现「调了没反应」。
+    ///
+    bool similarityPairingLimited = false;
 };
 
 ///
@@ -77,6 +110,36 @@ struct Result {
 ///
 Result compare(const QVector<Line> &left, const QVector<Line> &right,
                const CompareOptions &options = CompareOptions());
+
+// -----------------------------------------------------------------------------
+// 「一处改动」的归并（TXT-005）
+// -----------------------------------------------------------------------------
+
+///
+/// \brief 一处改动在块列表里占据的下标区间（闭区间）。
+///
+/// 为什么需要这一层：引擎从 TXT-005 起会把**一段**改动铺成若干个相邻的块
+/// （够像的行配成一个替换块、不够像的行各自成删除块 / 新增块），
+/// 于是「差异块的个数」不再等于「用户在界面上数得出的改动处数」。
+/// 任何**按处**计数或**按处**操作的地方（状态栏、上一处/下一处、复制这一处、
+/// 命令行摘要）都必须过这一层，否则同一件事会有两套口径，
+/// 而现象是「状态栏说 3 处、按两次『下一处』就到头了」。
+///
+struct DifferenceRun
+{
+    int firstBlock = -1;
+    int lastBlock = -1;
+};
+
+///
+/// \brief 把 `Result::differences` 里**下标连续**的一串块归并成一处改动。
+///
+/// 判据只用「块下标连续」，不需要再看行号：两种对齐算法产出的区间本来就是
+/// 「相同段 / 非相同段」交替的（见 `AlignmentBuilder`），因此两处独立的改动
+/// 之间必然隔着一个相同段，各自成块的两个非相同段不可能下标连续。
+/// 换句话说，这条判据的背后是 `compare()` 的区间结构，不是巧合。
+///
+QVector<DifferenceRun> differenceRuns(const Result &result);
 
 // -----------------------------------------------------------------------------
 // 行内容规范化链（TXT-008 第 3、4 条）

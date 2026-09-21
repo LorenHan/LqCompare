@@ -136,47 +136,53 @@ private slots:
     {
         const R::Model model = fixtureModel();
         QCOMPARE(model.kind, R::Kind::Text);
-        QCOMPARE(model.rows.size(), 10);
+        // 报表的行是差异块的直接投影，所以 TXT-005 会改变这里的数：`<script>…`
+        // 与 `<img …>` 这对行在出厂阈值（50）下**不够像**（相似度远低于阈值），
+        // 于是它们不再并成一行「修改」，而是各占一行（左独有 + 右独有）。
+        // 行数 10 → 11、`changed` 2 → 1、两侧独有各 1 → 2，都是这一条的直接后果；
+        // 报表没有自己的行模型，它只是把 `Text::Result` 摊平（这个用例守的就是这件事）。
+        QCOMPARE(model.rows.size(), 11);
         QCOMPARE(model.metadata.leftSource, metadata().leftSource);
         QCOMPARE(model.metadata.rightSource, metadata().rightSource);
         QVERIFY(model.metadata.settings.contains(metadata().settings.first()));
         QVERIFY(model.metadata.settings.size() > metadata().settings.size());
         const R::Statistics defaults = R::statistics(model);
-        QCOMPARE(defaults.total, qint64(10));
+        QCOMPARE(defaults.total, qint64(11));
         QCOMPARE(defaults.equal, qint64(5));
         QCOMPARE(defaults.ignored, qint64(1));
-        QCOMPARE(defaults.changed, qint64(2));
-        QCOMPARE(defaults.leftOnly, qint64(1));
-        QCOMPARE(defaults.rightOnly, qint64(1));
-        QCOMPARE(defaults.exported, qint64(4));
+        QCOMPARE(defaults.changed, qint64(1));
+        QCOMPARE(defaults.leftOnly, qint64(2));
+        QCOMPARE(defaults.rightOnly, qint64(2));
+        QCOMPARE(defaults.exported, qint64(5));
         QVERIFY(defaults.hasDifferences());
         QVERIFY(defaults.complete);
         QCOMPARE(model.rows.first().leftLine, 1);
         QCOMPARE(model.rows.first().rightLine, 1);
         QCOMPARE(model.rows.first().left, QStringLiteral("中文标题 😀"));
         QCOMPARE(model.rows[1].state, R::State::Ignored);
-        QCOMPARE(model.rows[5].state, R::State::LeftOnly);
-        QCOMPARE(model.rows[5].leftLine, 6);
-        QCOMPARE(model.rows[5].rightLine, 0);
-        QCOMPARE(model.rows[7].state, R::State::RightOnly);
-        QCOMPARE(model.rows[7].leftLine, 0);
-        QCOMPARE(model.rows[7].rightLine, 7);
+        // 下标按新的行序对齐：插入行（3）把后面所有行都推后了一格。
+        QCOMPARE(model.rows[6].state, R::State::LeftOnly);
+        QCOMPARE(model.rows[6].leftLine, 6);
+        QCOMPARE(model.rows[6].rightLine, 0);
+        QCOMPARE(model.rows[8].state, R::State::RightOnly);
+        QCOMPARE(model.rows[8].leftLine, 0);
+        QCOMPARE(model.rows[8].rightLine, 7);
         QCOMPARE(model.rows.last().left, QStringLiteral("末行旧"));
         QCOMPARE(model.rows.last().right, QStringLiteral("末行新"));
 
         R::Options options;
         options.includeEqual = options.includeIgnored = true;
-        QCOMPARE(R::statistics(model, options).exported, qint64(10));
+        QCOMPARE(R::statistics(model, options).exported, qint64(11));
         options.includeOrphans = false;
-        QCOMPARE(R::statistics(model, options).exported, qint64(8));
+        QCOMPARE(R::statistics(model, options).exported, qint64(7));
         options.includeEqual = options.includeIgnored = false;
-        QCOMPARE(R::statistics(model, options).exported, qint64(2));
+        QCOMPARE(R::statistics(model, options).exported, qint64(1));
         R::Model filtered = model;
         filtered.rows.last().visible = false;
         const R::Statistics visible = R::statistics(filtered, options);
         QCOMPARE(visible.total, defaults.total);
         QCOMPARE(visible.changed, defaults.changed);
-        QCOMPARE(visible.exported, qint64(1));
+        QCOMPARE(visible.exported, qint64(0));
     }
 
     void exportedContentRespectsFilters()
@@ -207,14 +213,33 @@ private slots:
     {
         R::Model model = fixtureModel();
         model.kind = R::Kind::Folder; // Exercise paths as well as both text cells.
+        // 挑「两侧都有内容的一行」当载荷时按**内容**找，不写死下标：TXT-005 之后
+        // 行数随相似度阈值变（一行改写够像才并成一对），写死下标会让这个用例在夹具
+        // 一动就退化成「拿空串当载荷」——而 `html.contains(payload)` 对空串恒真，
+        // 于是失败信息是一条看不出原因的 "Raw HTML payload:"。先断言找到了那一行。
+        int changed = -1;
+        for (int index = 0; index < model.rows.size(); ++index) {
+            const R::Row &row = model.rows[index];
+            if (row.state == R::State::Changed && !row.left.isEmpty() && !row.right.isEmpty()) {
+                changed = index;
+                break;
+            }
+        }
+        QVERIFY(changed >= 0);
+        // 两侧单元格由本用例**注入**，不依赖夹具原文：这段断言要证的是「所有不可信
+        // 字段都被转义」，而判据 `!html.contains(payload)` 对不含 HTML 元字符的载荷
+        // （比如普通中文行）恒为假阳性——它本来就该原样出现在转义后的文本里。
+        // 夹具一改就可能挑到那种行，所以载荷自己带 `<` `>` `"` `&` 才是有意义的。
+        model.rows[changed].left = QStringLiteral("左<script>alert('cell')</script>\"&");
+        model.rows[changed].right = QStringLiteral("右<img src='https://bad.invalid/cell'>\"&");
         model.metadata.title = QStringLiteral("标题</title><script>alert('title')</script>\"&");
         model.metadata.leftSource = QStringLiteral("左<iframe src='https://bad.invalid/left'>\"&");
         model.metadata.rightSource = QStringLiteral("右<img src='https://bad.invalid/right'>\"&");
         model.metadata.toolVersion = QStringLiteral("版本<meta http-equiv='refresh' content='0'>\"&");
         model.metadata.settings.append(QStringLiteral("设置<style>@import 'https://bad.invalid/style';</style>\"&"));
         model.warnings.append(QStringLiteral("警告<svg onload='alert(1)'>\"&"));
-        model.rows[3].path = QStringLiteral("目录/<a href='javascript:alert(1)'>路径</a>\"&.txt");
-        model.rows[3].detail = QStringLiteral("详情<object data='https://bad.invalid/object'>\"&");
+        model.rows[changed].path = QStringLiteral("目录/<a href='javascript:alert(1)'>路径</a>\"&.txt");
+        model.rows[changed].detail = QStringLiteral("详情<object data='https://bad.invalid/object'>\"&");
         R::Options options;
         options.includeEqual = options.includeIgnored = true;
         const QString html = R::render(model, options);
@@ -222,7 +247,8 @@ private slots:
         const QStringList payloads{model.metadata.title, model.metadata.leftSource,
             model.metadata.rightSource, model.metadata.toolVersion,
             model.metadata.settings.last(), model.warnings.first(),
-            model.rows[3].path, model.rows[3].left, model.rows[3].right, model.rows[3].detail};
+            model.rows[changed].path, model.rows[changed].left, model.rows[changed].right,
+            model.rows[changed].detail};
         const QString decoded = decodedHtmlText(html);
         for (const QString &payload : payloads) {
             QVERIFY2(!html.contains(payload), qPrintable(QStringLiteral("Raw HTML payload: ") + payload));
@@ -572,7 +598,10 @@ private slots:
         options.rowsPerGroup = 2;
         const R::Model model = fixtureModel();
         const QString html = R::render(model, options);
-        QCOMPARE(html.count(QRegularExpression(QStringLiteral("<details(?: open)?>"))), 2);
+        // 分组数是 `ceil(导出行数 / rowsPerGroup)`：TXT-005 之后导出行 4 → 5
+        // （`<script>`/`<img>` 那对不再并成一行修改，见上一条用例的说明），
+        // 于是 2 行为一组时由 2 组变成 3 组。只有**第一组**默认展开。
+        QCOMPARE(html.count(QRegularExpression(QStringLiteral("<details(?: open)?>"))), 3);
         QCOMPARE(html.count(QStringLiteral("<details open>")), 1);
         QVERIFY(decodedHtmlText(html).contains(QStringLiteral("左 9 / 右 9")));
         options.showLineNumbers = false;

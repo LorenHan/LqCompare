@@ -137,7 +137,9 @@ ExecutionResult compareInputs(const Request &r)
         if (!a.canEdit() || !b.canEdit())
             return errorResult(DataError, QStringLiteral("Input is binary or could not be decoded losslessly; specify a valid --encoding for text."), r.json);
         const Text::Result compared = Text::compare(a.lines(), b.lines(), r.textOptions);
-        differences = compared.differences.size();
+        // 数「一处改动」而不是「差异块」：TXT-005 起一处改动可能由相邻的若干块拼成，
+        // 数块会让摘要里的数字比用户数得出来的多。与界面状态栏同源（Text::differenceRuns）。
+        differences = Text::differenceRuns(compared).size();
         ignored = compared.ignoredBlocks;
         result.summary.insert(QStringLiteral("alignmentLimited"), compared.alignmentLimited);
         result.summary.insert(QStringLiteral("leftLines"), a.lines().size());

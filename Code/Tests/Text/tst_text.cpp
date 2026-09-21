@@ -209,14 +209,30 @@ private slots:
     {
         auto left = decoded("a\nb\nc\nd\n");
         auto right = decoded("a\nnew\nb\nchanged\nd\n");
+        // TXT-005 起，出厂阈值（50）下 `c` 与 `changed` **不配对**——它们的相似度
+        // 只有 25（只有一个公共字符 `c`，2·1/(1+7)）。于是这一处是「删除 + 新增」
+        // 两块，而不是一块替换。这不是回归：规格把「修改行被拆成增删」明确定义为
+        // 阈值调高的后果，而出厂值是在固定语料上选的（见 `Tests/Similarity`）。
         const auto result = compare(left.lines(), right.lines());
-        QCOMPARE(result.differences.size(), 2);
+        QCOMPARE(result.differences.size(), 3);
         QCOMPARE(result.blocks[result.differences[0]].change, Change::Insert);
-        QCOMPARE(result.blocks[result.differences[1]].change, Change::Replace);
+        QCOMPARE(result.blocks[result.differences[1]].change, Change::Delete);
+        QCOMPARE(result.blocks[result.differences[2]].change, Change::Insert);
         QCOMPARE(result.rows[1].leftLine, -1);
         QCOMPARE(result.rows[1].rightLine, 1);
-        QCOMPARE(result.rows[2].leftLine, 1);
-        QCOMPARE(result.rows[2].rightLine, 2);
+        // 阈值放到 0 就是「无论多不像都配对」= 这个功能出现之前的行为，
+        // 于是同一份输入回到「一块插入 + 一块替换」。两条一起断言是为了让
+        // 「阈值到底起没起作用」这件事在同一处看得见。
+        CompareOptions loose;
+        loose.similarityThreshold = 0;
+        const auto paired = compare(left.lines(), right.lines(), loose);
+        QCOMPARE(paired.differences.size(), 2);
+        QCOMPARE(paired.blocks[paired.differences[0]].change, Change::Insert);
+        QCOMPARE(paired.blocks[paired.differences[1]].change, Change::Replace);
+        QCOMPARE(paired.rows[1].leftLine, -1);
+        QCOMPARE(paired.rows[1].rightLine, 1);
+        QCOMPARE(paired.rows[2].leftLine, 1);
+        QCOMPARE(paired.rows[2].rightLine, 2);
         const auto reversed = compare(right.lines(), left.lines());
         QCOMPARE(reversed.blocks[reversed.differences[0]].change, Change::Delete);
         const auto empty = compare({}, left.lines());
@@ -551,11 +567,17 @@ private slots:
     // 逐行断言才是那条标准要的形状。
     void caseOnlyChangesTurnRowsIntoIgnoredButKeepThemMarked()
     {
-        auto left = decoded("Alpha\nBravo\nCharlie\nDelta\n");
-        // 右侧**故意**有一行写成全大写：两侧都含会被折叠改动的字符，
-        // 于是「只对一侧应用规范化」的实现会在这里红——若右侧全是已经折好的
-        // 小写，那种错误在数据上与正确实现完全重合，用例会静默放过它。
-        auto right = decoded("alpha\nBRAVO\ncharlie\ndelta\n");
+        // 夹具的形状被 TXT-005 收紧过一次：每一对都必须在**区分大小写**时
+        // 仍然够像（出厂阈值 50），否则这一组会变成「阈值」的用例而不是
+        // 「折叠」的用例。逐对的分值是量出来的（`lineSimilarityPercent()`，见
+        // handoff §6 记的坑：这里有三个值当初是手推错的）：85 / 85 / 88 / 86。
+        //
+        // 每对都**两侧各有大小写**：左侧首字母大写、右侧行尾那个词首字母大写。
+        // 于是「只对一侧应用规范化」的实现会在这里红——无论漏掉哪一侧，留下来
+        // 的那一侧都还剩一个大写字母没被折掉，判等自然不成立。若把某一侧写成
+        // 已经折好的全小写，那种错误在数据上与正确实现完全重合，用例会静默放过它。
+        auto left = decoded("Alpha one end\nBravo two end\nCharlie three end\nDelta four end\n");
+        auto right = decoded("alpha one End\nbravo two End\ncharlie three End\ndelta four End\n");
         CompareOptions options;
 
         const auto before = compare(left.lines(), right.lines(), options);
@@ -578,8 +600,8 @@ private slots:
         QVERIFY(after.differences.isEmpty());
         QCOMPARE(after.ignoredBlocks, 1);
         // 折叠只发生在判等用的键上，原文一个字都不许动。
-        QCOMPARE(left.lines().at(0).text, QStringLiteral("Alpha"));
-        QCOMPARE(right.lines().at(0).text, QStringLiteral("alpha"));
+        QCOMPARE(left.lines().at(0).text, QStringLiteral("Alpha one end"));
+        QCOMPARE(right.lines().at(0).text, QStringLiteral("alpha one End"));
     }
 
     // 标准 1 + 标准 2：混合语料里**只有**「仅大小写不同」的行失去差异身份。
@@ -587,9 +609,11 @@ private slots:
     // 却会让真正不同的行也悄悄消失，是本模块最危险的一种错。
     void onlyCaseOnlyRowsLoseDifferenceStatus()
     {
-        auto left = decoded("Alpha\nkeep\nBravo\n");
-        // 与上一条同理：第 0 行的右侧写成全大写，让「只折一侧」的错误无处躲。
-        auto right = decoded("ALPHA\nkeep\nBravo2\n");
+        // 与上一条同理：第 0 行的左侧全小写、右侧有大写，于是「只折一侧」的
+        // 错误无处躲，而这一对在区分大小写时仍有 68 分（` one two ` 之外
+        // 还有 ` hree`），出厂阈值下照样配对。
+        auto left = decoded("alpha one two three\nkeep\nBravo\n");
+        auto right = decoded("ALPHA one two Three\nkeep\nBravo2\n");
         CompareOptions options;
 
         const auto off = compare(left.lines(), right.lines(), options);
@@ -717,9 +741,13 @@ private slots:
             // 少了这一半，一个「永远返回无差异」的实现能让上面全部通过。
             if (left != right) {
                 options.ignoreCase = false;
-                QCOMPARE(compare(QVector<Line>{{left, Eol::LF}},
+                // 这里只断言「仍然是差异」，**不**断言差异块的个数：TXT-005 起
+                // 一对不够像的行会被拆成删除 + 新增两块，而这两行够不够像
+                // 与本条要守的东西（折叠规则）毫无关系。钉个数会把一条
+                // 关于「折叠」的用例变成一条关于「阈值」的用例。
+                QVERIFY(!compare(QVector<Line>{{left, Eol::LF}},
                                  QVector<Line>{{right, Eol::LF}},
-                                 options).differences.size(), 1);
+                                 options).differences.isEmpty());
             }
         }
     }

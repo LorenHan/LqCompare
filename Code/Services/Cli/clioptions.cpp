@@ -1,4 +1,5 @@
 #include "clioptions.h"
+#include "linesimilarity.h"
 #include "sessiontype.h"
 #include <QSet>
 #include <QTextCodec>
@@ -105,6 +106,9 @@ const QVector<Option> &options()
         {"ignore-eol", {}, {}, "Comparison", "Ignore CR/LF differences (the default)."},
         {"exact-eol", {}, {}, "Comparison", "Include CR/LF differences."},
         {"ignore-final-newline", {}, {}, "Comparison", "Ignore the presence of the final newline."},
+        {"similar-lines", {}, {}, "Comparison", "Align similar but unequal lines as modifications (the default)."},
+        {"no-similar-lines", {}, {}, "Comparison", "Show similar lines as separate deletions and insertions."},
+        {"similarity-threshold", {}, "percent", "Comparison", "Similarity threshold 0-100 for aligning similar lines; default 50."},
         {"encoding", {}, "codec", "Comparison", "Decode BOM-less text with this Qt codec; default UTF-8."},
         {"no-recursive", {}, {}, "Comparison", "Compare immediate folder children only."},
         {"json", {}, {}, "Output", "Emit a UTF-8 JSON comparison summary."},
@@ -191,6 +195,18 @@ ParseResult parse(const QStringList &arguments, Platform platform)
         else if (key == "ignore-eol") r.textOptions.ignoreEol = true;
         else if (key == "exact-eol") r.textOptions.ignoreEol = false;
         else if (key == "ignore-final-newline") r.textOptions.ignoreFinalNewline = true;
+        else if (key == "similar-lines") r.textOptions.alignSimilarLines = true;
+        else if (key == "no-similar-lines") r.textOptions.alignSimilarLines = false;
+        else if (key == "similarity-threshold") {
+            bool numeric = false;
+            const int percent = value.toInt(&numeric);
+            // 越界**报错**而不是钳制：命令行是脚本用的，静默把 250 变成 100
+            // 会让脚本作者以为参数生效了。会话文件那条路才用钳制
+            //（那里是用户手改出来的，报错就没人能修）。
+            if (!numeric || percent < 0 || percent > Text::MaximumSimilarity)
+                return fail(QStringLiteral("Similarity threshold must be 0-100, received '%1'.").arg(value));
+            r.textOptions.similarityThreshold = percent;
+        }
         else if (key == "encoding") {
             r.encoding = value.toUtf8();
             if (!QTextCodec::codecForName(r.encoding)) return fail(QStringLiteral("Unknown encoding '%1'.").arg(value));
@@ -227,6 +243,8 @@ ParseResult parse(const QStringList &arguments, Platform platform)
     }
     if (seen.contains("ignore-eol") && seen.contains("exact-eol"))
         return fail(QStringLiteral("--ignore-eol and --exact-eol conflict."));
+    if (seen.contains("similar-lines") && seen.contains("no-similar-lines"))
+        return fail(QStringLiteral("--similar-lines and --no-similar-lines conflict."));
     if (r.noLogFile && !r.logFile.isEmpty()) return fail(QStringLiteral("--log and --no-log-file conflict."));
     if (!paths.isEmpty() && (seen.contains("left") || seen.contains("right")
                             || seen.contains("base") || seen.contains("output")))

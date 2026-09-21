@@ -1,4 +1,5 @@
 #include "textcomparesession.h"
+#include "linesimilarity.h"
 #include "textcompareview.h"
 
 #include <QFileInfo>
@@ -27,6 +28,16 @@ TextCompareSession::TextCompareSession(const QString &left, const QString &right
         m_options.ignoreFinalNewline = settings->value(QStringLiteral("text.ignoreFinalNewline"), false).toBool();
         m_options.whitespace = static_cast<Text::Whitespace>(qBound(0,
             settings->value(QStringLiteral("text.whitespace"), 0).toInt(), 2));
+        // 出厂值从 `CompareOptions` 取，不在这一行再写一个 true / 50：
+        // 默认值只能有一个来源，否则界面、命令行与文档会各说各话。
+        const Text::CompareOptions defaults;
+        m_options.alignSimilarLines = settings->value(QStringLiteral("text.alignSimilarLines"),
+                                                      defaults.alignSimilarLines).toBool();
+        // 阈值走 `clampSimilarityThreshold()`：会话文件是用户手改得动的，
+        // 落在外面的值要压回边界（命令行那条路会直接报错，见 clioptions.cpp）。
+        m_options.similarityThreshold = Text::clampSimilarityThreshold(
+            settings->value(QStringLiteral("text.similarityThreshold"),
+                            defaults.similarityThreshold).toInt());
         if (state() == State::Open) recompute();
     });
 }
@@ -93,6 +104,9 @@ void TextCompareSession::setComparisonOptions(const Text::CompareOptions &option
     settings->setValue(QStringLiteral("text.ignoreEol"), options.ignoreEol);
     settings->setValue(QStringLiteral("text.ignoreFinalNewline"), options.ignoreFinalNewline);
     settings->setValue(QStringLiteral("text.whitespace"), static_cast<int>(options.whitespace));
+    settings->setValue(QStringLiteral("text.alignSimilarLines"), options.alignSimilarLines);
+    settings->setValue(QStringLiteral("text.similarityThreshold"),
+                       Text::clampSimilarityThreshold(options.similarityThreshold));
     m_options = options;
     recompute();
 }
@@ -100,17 +114,41 @@ void TextCompareSession::setComparisonOptions(const Text::CompareOptions &option
 void TextCompareSession::recompute()
 {
     m_result = Text::compare(m_left.lines(), m_right.lines(), m_options);
-    m_currentDifference = m_result.differences.isEmpty() ? -1
-        : qBound(0, m_currentDifference, m_result.differences.size() - 1);
+    // 把引擎的块列表归并成「一处改动」：判据与理由见 `Text::differenceRuns()`。
+    // 归并逻辑只此一份——命令行摘要数「差异数」时走的也是它。
+    m_differenceRuns = Text::differenceRuns(m_result);
+    m_currentDifference = m_differenceRuns.isEmpty() ? -1
+        : qBound(0, m_currentDifference, m_differenceRuns.size() - 1);
     setDirty(m_left.isModified() || m_right.isModified());
     emit comparisonChanged();
     updateStatus();
 }
 
+int TextCompareSession::differenceFirstBlock(int index) const
+{
+    if (index < 0 || index >= m_differenceRuns.size()) return -1;
+    return m_differenceRuns[index].firstBlock;
+}
+
+int TextCompareSession::differenceLastBlock(int index) const
+{
+    if (index < 0 || index >= m_differenceRuns.size()) return -1;
+    return m_differenceRuns[index].lastBlock;
+}
+
+int TextCompareSession::differenceIndexOfBlock(int block) const
+{
+    for (int index = 0; index < m_differenceRuns.size(); ++index) {
+        const Text::DifferenceRun &run = m_differenceRuns.at(index);
+        if (block >= run.firstBlock && block <= run.lastBlock) return index;
+    }
+    return -1;
+}
+
 void TextCompareSession::updateStatus()
 {
     QString status = tr("%1 difference block(s), %2 ignored • Left: %3, %4 • Right: %5, %6")
-        .arg(m_result.differences.size()).arg(m_result.ignoredBlocks)
+        .arg(m_differenceRuns.size()).arg(m_result.ignoredBlocks)
         .arg(QString::fromLatin1(m_left.codecName()), m_left.eolDescription(),
              QString::fromLatin1(m_right.codecName()), m_right.eolDescription());
     if (m_options.ignoreEol) status += tr(" • Line endings ignored");
@@ -118,6 +156,9 @@ void TextCompareSession::updateStatus()
     if (m_left.hasBom() != m_right.hasBom()) status += tr(" • BOM differs (metadata only)");
     if (m_left.codecName() != m_right.codecName()) status += tr(" • Encoding differs (metadata only)");
     if (m_result.alignmentLimited) status += tr(" • Alignment work limit reached; unmatched range shown as replacement");
+    // 相似度配对没做成（工作量超限）与对齐受限是两件事，各自有各自的提示：
+    // 合成一句会让用户按错误的旋钮去调（见 `Result::similarityPairingLimited`）。
+    if (m_result.similarityPairingLimited) status += tr(" • Similar-line pairing skipped for an oversized change; lines paired by position");
     if (!m_left.warning().isEmpty()) status += tr(" • Left: %1").arg(m_left.warning());
     if (!m_right.warning().isEmpty()) status += tr(" • Right: %1").arg(m_right.warning());
     if (m_leftReadOnly) status += tr(" • Left read-only");
@@ -220,16 +261,31 @@ bool TextCompareSession::copyDifference(bool leftToRight, QString *error)
         return reject(error, tr("Select a difference first."));
     if (isSideReadOnly(!leftToRight))
         return reject(error, tr("The destination side is read-only."));
-    const Text::Block block = m_result.blocks[m_result.differences[m_currentDifference]];
     const Text::Document &source = leftToRight ? m_left : m_right;
     if (!source.canEdit())
         return reject(error, tr("The source cannot be copied safely: %1").arg(source.warning()));
     Text::Document &destination = leftToRight ? m_right : m_left;
     const auto before = bufferState();
-    const auto lines = source.lines().mid(leftToRight ? block.leftStart : block.rightStart,
-                                         leftToRight ? block.leftCount : block.rightCount);
-    if (!destination.replaceLines(leftToRight ? block.rightStart : block.leftStart,
-                                  leftToRight ? block.rightCount : block.leftCount, lines, error)) return false;
+    // 复制的范围是**一整处改动**而不是一个块：TXT-005 起一处改动可能由
+    // 相邻的若干块拼成（不够像的行各自成块），只搬其中一块会让目标侧多出一截，
+    // 而用户按的是「复制这一处」。
+    //
+    // 区间由「首块起点」到「末块终点」推出，而不是把各块长度相加：
+    // 块序列在两侧都是首尾相接的（引擎保证），因此两端一减就是准确长度，
+    // 也不怕将来块类型再增加。
+    const int first = differenceFirstBlock(m_currentDifference);
+    const int last = differenceLastBlock(m_currentDifference);
+    if (first < 0 || last < first) return reject(error, tr("Select a difference first."));
+    const Text::Block &head = m_result.blocks[first];
+    const Text::Block &tail = m_result.blocks[last];
+    const int sourceStart = leftToRight ? head.leftStart : head.rightStart;
+    const int sourceCount = (leftToRight ? tail.leftStart + tail.leftCount
+                                         : tail.rightStart + tail.rightCount) - sourceStart;
+    const int targetStart = leftToRight ? head.rightStart : head.leftStart;
+    const int targetCount = (leftToRight ? tail.rightStart + tail.rightCount
+                                         : tail.leftStart + tail.leftCount) - targetStart;
+    const auto lines = source.lines().mid(sourceStart, sourceCount);
+    if (!destination.replaceLines(targetStart, targetCount, lines, error)) return false;
     recordChange(before);
     recompute();
     if (m_currentDifference >= 0) emit currentDifferenceChanged(m_currentDifference);
@@ -238,8 +294,10 @@ bool TextCompareSession::copyDifference(bool leftToRight, QString *error)
 
 void TextCompareSession::selectDifference(int index)
 {
-    if (index < 0 || index >= m_result.differences.size()) {
-        setStatusText(m_result.differences.isEmpty() ? tr("No differences under the current comparison rules.")
+    // 边界按「一处改动」数（`m_differenceRuns`）而不是引擎块数：用户按「下一处」
+    // 应当在**整处**改动之间走，而不是在同一处改动的两个半块之间停一下。
+    if (index < 0 || index >= m_differenceRuns.size()) {
+        setStatusText(m_differenceRuns.isEmpty() ? tr("No differences under the current comparison rules.")
             : tr("Reached the %1 difference.").arg(index < 0 ? tr("first") : tr("last")));
         return;
     }
@@ -250,7 +308,7 @@ void TextCompareSession::selectDifference(int index)
 void TextCompareSession::previousDifference() { selectDifference(m_currentDifference - 1); }
 void TextCompareSession::nextDifference() { selectDifference(m_currentDifference + 1); }
 void TextCompareSession::firstDifference() { selectDifference(0); }
-void TextCompareSession::lastDifference() { selectDifference(m_result.differences.size() - 1); }
+void TextCompareSession::lastDifference() { selectDifference(m_differenceRuns.size() - 1); }
 
 void TextCompareSession::appendHistory(QVector<BufferState> &history, const BufferState &buffers)
 {

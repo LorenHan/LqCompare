@@ -1,4 +1,6 @@
 #include "cliexecution.h"
+#include "linesimilarity.h"
+#include "textdocument.h"
 #include "../CliProbe/cliprobe.h"
 
 #include <QtTest>
@@ -99,6 +101,8 @@ private slots:
     void sessionTypes_data();
     void sessionTypes();
     void optionsMapToRequest();
+    void similarityOptionsMapToTextOptions();
+    void similarityOptionsAreUsableFromTheCommandLine();
     void scriptArguments();
     void invalidArguments_data();
     void invalidArguments();
@@ -291,6 +295,93 @@ void CliTests::optionsMapToRequest()
     QVERIFY(readonly.request.leftReadOnly && readonly.request.rightReadOnly);
 }
 
+// TXT-005 标准 4 的前半段：开关与阈值要能被命令行指定。
+//
+// 这一条是新加的——变异测试（把「越界报错」改成「静默接受」）第一轮**漏检**，
+// 因为 `Code/Tests/Cli/` 里根本没有 `--similarity-threshold` / `--similar-lines`
+// 的任何用例。完成标准里写着「并可用于命令行」，而当时只有实现、没有断言。
+void CliTests::similarityOptionsMapToTextOptions()
+{
+    const auto on = Cli::parse({"--similar-lines", "--similarity-threshold=70", "l", "r"});
+    QVERIFY2(on.ok(), qPrintable(on.error));
+    QVERIFY(on.request.textOptions.alignSimilarLines);
+    QCOMPARE(on.request.textOptions.similarityThreshold, 70);
+
+    const auto off = Cli::parse({"--no-similar-lines", "l", "r"});
+    QVERIFY2(off.ok(), qPrintable(off.error));
+    QVERIFY(!off.request.textOptions.alignSimilarLines);
+    // 没写就保持出厂值，命令行不得悄悄改掉它。
+    QCOMPARE(off.request.textOptions.similarityThreshold, Text::defaultSimilarityThreshold());
+
+    // 两个边界值都必须接受（0 与 100 是合法值，不是「越界」）。
+    for (const int percent : {0, 100}) {
+        const auto edge = Cli::parse({"--similarity-threshold=" + QString::number(percent), "l", "r"});
+        QVERIFY2(edge.ok(), qPrintable(edge.error));
+        QCOMPARE(edge.request.textOptions.similarityThreshold, percent);
+    }
+}
+
+// 同一条标准的后半段：这些参数要真的走到比对引擎，而不是只被记下来。
+//
+// 这里要讲清一件容易误解的事：**命令行摘要里的 `differences` 不随这两个开关变**。
+// 那个数是「一处改动」的个数（与界面状态栏同源，见 `cliexecution.cpp`），
+// 而阈值改变的是**一处改动内部的块粒度**——够像的行配成一块替换、不够像的拆成
+// 删除 + 新增，改动站点数两者相同。所以下面同时钉住两件事：
+//   ① 摘要字段三种跑法都一样（它一旦随开关变，就说明有人把命令行改成了按块计数，
+//      那时状态栏说 2 处、命令行说 3 处，正是本仓列为坑的「同一件事两套口径」）；
+//   ② 块粒度**确实**被改变了（直接在引擎上复算一遍，免得①被误读成「参数没生效」）。
+void CliTests::similarityOptionsAreUsableFromTheCommandLine()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const auto l = dir.filePath(QStringLiteral("left.txt"));
+    const auto r = dir.filePath(QStringLiteral("right.txt"));
+    const QByteArray leftBytes("a\nb\nc\nd\n"), rightBytes("a\nnew\nb\nchanged\nd\n");
+    QVERIFY(writeBytes(l, leftBytes));
+    QVERIFY(writeBytes(r, rightBytes));
+    const auto before = fileSnapshot(dir.path());
+
+    const auto byDefault = comparePaths(l, r);
+    const auto loose = comparePaths(l, r, {QStringLiteral("--similarity-threshold=0")});
+    const auto off = comparePaths(l, r, {QStringLiteral("--no-similar-lines")});
+    for (const auto *result : {&byDefault, &loose, &off}) {
+        QCOMPARE(result->exitCode, int(Cli::Different));
+        QVERIFY2(result->standardError.isEmpty(), qPrintable(result->standardError));
+        QCOMPARE(result->summary.value(QStringLiteral("differences")).toInt(), 2);
+    }
+    // 比对不得改动输入。
+    QCOMPARE(fileSnapshot(dir.path()), before);
+
+    // 出厂阈值（50）下 `c` 与 `changed` 的相似度只有 25，不配对；
+    // 阈值放到 0 就把这一处配成一块替换，于是块数 3 → 2。
+    const auto leftLines = Text::Document::splitLines(QString::fromUtf8(leftBytes));
+    const auto rightLines = Text::Document::splitLines(QString::fromUtf8(rightBytes));
+    const auto strict = Text::compare(leftLines, rightLines, Text::CompareOptions());
+    QCOMPARE(strict.differences.size(), 3);
+    Text::CompareOptions looseOptions;
+    looseOptions.similarityThreshold = 0;
+    const auto paired = Text::compare(leftLines, rightLines, looseOptions);
+    QCOMPARE(paired.differences.size(), 2);
+    Text::CompareOptions positional;
+    positional.alignSimilarLines = false;
+    QCOMPARE(Text::compare(leftLines, rightLines, positional).differences.size(), 3);
+
+    // 越界与非数字在**真实进程**里也是用法错误（退出码 2），不是静默钳制：
+    // 命令行是脚本用的，把 250 悄悄变成 100 会让脚本作者以为参数生效了。
+    for (const QStringList &bad : {QStringList{QStringLiteral("--similarity-threshold=101")},
+                                   QStringList{QStringLiteral("--similarity-threshold=-1")},
+                                   QStringList{QStringLiteral("--similarity-threshold=abc")},
+                                   QStringList{QStringLiteral("--similarity-threshold=70.5")},
+                                   QStringList{QStringLiteral("--similar-lines"),
+                                               QStringLiteral("--no-similar-lines")}}) {
+        const auto result = runProbe(bad + QStringList{QStringLiteral("--silent"), l, r});
+        QVERIFY2(result.finished, result.err.constData());
+        QCOMPARE(result.status, QProcess::NormalExit);
+        QCOMPARE(result.exitCode, int(Cli::UsageError));
+        QVERIFY2(!result.err.trimmed().isEmpty(), qPrintable(bad.join(QLatin1Char(' '))));
+    }
+}
+
 void CliTests::scriptArguments()
 {
     for (const auto &args : {QStringList{"@jobs/run.lqs"}, QStringList{"--script=jobs/run.lqs"}}) {
@@ -335,6 +426,15 @@ void CliTests::invalidArguments_data()
     QTest::newRow("script-duplicate-name") << QStringList{"@a", "--script-arg=x=1", "--script-arg=x=2"};
     QTest::newRow("log-conflict") << QStringList{"--log=out.log", "--no-log-file", "a", "b"};
     QTest::newRow("eol-conflict") << QStringList{"--ignore-eol", "--exact-eol", "a", "b"};
+    // TXT-005：阈值越界在命令行是**报错**而不是钳制（会话文件那条路才钳制，
+    // 因为那里是用户手改出来的，报错就没人能修）。
+    QTest::newRow("similarity-too-large") << QStringList{"--similarity-threshold=101", "a", "b"};
+    QTest::newRow("similarity-negative") << QStringList{"--similarity-threshold=-1", "a", "b"};
+    QTest::newRow("similarity-not-numeric") << QStringList{"--similarity-threshold=abc", "a", "b"};
+    QTest::newRow("similarity-fractional") << QStringList{"--similarity-threshold=70.5", "a", "b"};
+    QTest::newRow("similarity-needs-value") << QStringList{"--similarity-threshold", "a", "b"};
+    QTest::newRow("similar-lines-conflict")
+        << QStringList{"--similar-lines", "--no-similar-lines", "a", "b"};
     QTest::newRow("report-needs-destination") << QStringList{"--report=txt", "a", "b"};
     QTest::newRow("report-needs-format") << QStringList{"--report-file=out.txt", "a", "b"};
     QTest::newRow("report-on-diff-needs-report") << QStringList{"--report-on-diff-only", "a", "b"};

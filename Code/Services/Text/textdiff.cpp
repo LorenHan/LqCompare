@@ -1,4 +1,5 @@
 #include "textdiff.h"
+#include "linesimilarity.h"
 
 #include <QHash>
 #include <QPair>
@@ -357,9 +358,61 @@ Result compare(const QVector<Line> &left, const QVector<Line> &right, const Comp
             for (int i = 0; i < range.n; ++i)
                 addBlock(left[range.a + i] == right[range.b + i] ? Change::Equal : Change::Ignored,
                          range.a + i, 1, range.b + i, 1);
-        } else {
-            addBlock(!range.n ? Change::Insert : (!range.m ? Change::Delete : Change::Replace),
-                     range.a, range.n, range.b, range.m);
+            continue;
+        }
+        if (!range.n) { addBlock(Change::Insert, range.a, 0, range.b, range.m); continue; }
+        if (!range.m) { addBlock(Change::Delete, range.a, range.n, range.b, 0); continue; }
+        // 两侧都有行：这一段怎么呈现由「相似行对齐」决定（TXT-005）。
+        //
+        // 关闭开关时**整段**拆成删除块 + 新增块两条独立块，不做任何逐对判断：
+        // 「有些行配上、有些行不配」是开关打开时阈值该说的话，关掉开关还留一半
+        // 配对等于开关没关。顺序固定「先删后增」——它同时也是 TXT-006
+        // 「手动对齐」要合并的那对相邻块的前置条件。
+        if (!options.alignSimilarLines) {
+            addBlock(Change::Delete, range.a, range.n, range.b, 0);
+            addBlock(Change::Insert, range.a + range.n, 0, range.b, range.m);
+            continue;
+        }
+        const SimilarityPlan plan = pairSimilarLines(left, range.a, range.n, right, range.b, range.m,
+                                                     options, options.similarityThreshold);
+        if (plan.limited) {
+            // 工作量超限：退回「整段一个替换块」，也就是这个功能出现之前的旧行为。
+            // 之所以退回旧行为而不是「干脆不配对」：规格要的是「相似的行配成一对」，
+            // 而退回成一个替换块**仍然是配对**（只是按位配），
+            // 把一个本来就很大的块拆成两半只会让界面的块数暴涨，用户完全无法归因。
+            // 这件事必须被如实报出来（`similarityPairingLimited`），不能静默。
+            result.similarityPairingLimited = true;
+            addBlock(Change::Replace, range.a, range.n, range.b, range.m);
+            continue;
+        }
+        // 按配对结果铺块。删除永远排在新增之前，且左右两侧的行下标都只增不减——
+        // 于是「块首尾相接铺满两侧」这条不变量（`Tests/Text` 的快照用例逐块断言它）
+        // 在这里是结构性成立的，不需要额外维护游标。
+        const QVector<SimilarityPair> &pairs = plan.pairs;
+        int li = 0, ri = 0, pi = 0;
+        while (li < range.n || ri < range.m) {
+            if (pi < pairs.size() && pairs[pi].left == li && pairs[pi].right == ri) {
+                // 相邻的配对被 `addBlock` 合并成一个替换块，因此「连续若干行被改写」
+                // 仍然是一块而不是 N 块——与 TXT-002 的块边界口径保持一致。
+                addBlock(Change::Replace, range.a + li, 1, range.b + ri, 1);
+                ++li; ++ri; ++pi;
+                continue;
+            }
+            if (li < range.n && (pi >= pairs.size() || pairs[pi].left > li)) {
+                addBlock(Change::Delete, range.a + li, 1, range.b + ri, 0);
+                ++li;
+                continue;
+            }
+            if (ri < range.m) {
+                addBlock(Change::Insert, range.a + li, 0, range.b + ri, 1);
+                ++ri;
+                continue;
+            }
+            // 走到这里说明 `ri == range.m` 且左侧还有行（`pi` 指向的配对左侧下标
+            // 已经落在身后，正常不会出现）。剩下的左侧行一律按删除处理，
+            // 保证循环一定前进、且不会有行被丢掉。
+            addBlock(Change::Delete, range.a + li, 1, range.b + ri, 0);
+            ++li;
         }
     }
     for (int index = 0; index < result.blocks.size(); ++index) {
@@ -373,6 +426,16 @@ Result compare(const QVector<Line> &left, const QVector<Line> &right, const Comp
                                 i < block.rightCount ? block.rightStart + i : -1, index, block.change});
     }
     return result;
+}
+
+QVector<DifferenceRun> differenceRuns(const Result &result)
+{
+    QVector<DifferenceRun> runs;
+    for (int index : result.differences) {
+        if (!runs.isEmpty() && runs.last().lastBlock + 1 == index) runs.last().lastBlock = index;
+        else runs.append({index, index});
+    }
+    return runs;
 }
 
 // -----------------------------------------------------------------------------

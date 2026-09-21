@@ -12,6 +12,7 @@ class QComboBox;
 class QPushButton;
 class QCheckBox;
 class QShortcut;
+class QSpinBox;
 
 namespace LqCompare {
 class TextCompareSession;
@@ -77,6 +78,10 @@ private:
     QCheckBox *m_ignoreEol = nullptr;
     QCheckBox *m_ignoreFinal = nullptr;
     QComboBox *m_whitespace = nullptr;
+    // TXT-005：相似行对齐的总开关与阈值。两者是一组——阈值在开关关掉时
+    // 不生效，因此界面上必须把阈值一起禁用，否则用户会以为调了没用。
+    QCheckBox *m_alignSimilar = nullptr;
+    QSpinBox *m_similarity = nullptr;
     QPushButton *m_undo = nullptr;
     QPushButton *m_redo = nullptr;
     bool m_scrolling = false;

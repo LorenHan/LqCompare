@@ -1,4 +1,5 @@
 #include "textcompareview.h"
+#include "linesimilarity.h"
 #include "textcomparesession.h"
 
 #include <QCheckBox>
@@ -17,6 +18,7 @@
 #include <QScrollBar>
 #include <QShortcut>
 #include <QSignalBlocker>
+#include <QSpinBox>
 #include <QSplitter>
 #include <QTextBlock>
 #include <QVBoxLayout>
@@ -165,6 +167,15 @@ TextCompareView::TextCompareView(TextCompareSession *session, QWidget *parent)
     m_ignoreCase->setObjectName(QStringLiteral("ignoreCase"));
     m_ignoreEol = new QCheckBox(tr("Ignore line endings"), this);
     m_ignoreFinal = new QCheckBox(tr("Ignore final newline"), this);
+    m_alignSimilar = new QCheckBox(tr("Align similar lines"), this);
+    m_alignSimilar->setObjectName(QStringLiteral("alignSimilarLines"));
+    m_similarity = new QSpinBox(this);
+    m_similarity->setObjectName(QStringLiteral("similarityThreshold"));
+    // 上界取 `MaximumSimilarity` 而不是写死 100：规格说「阈值可配置（0–100）」，
+    // 而 100 这个数在引擎里有一个名字。写死一处、改另一处就是两个答案。
+    m_similarity->setRange(0, Text::MaximumSimilarity);
+    m_similarity->setSuffix(tr("%"));
+    m_similarity->setToolTip(tr("Two lines count as a modification when they are at least this similar."));
     m_whitespace = new QComboBox(this);
     m_whitespace->setObjectName(QStringLiteral("whitespace"));
     // 下拉的内容来自模式表，不在这里写死三行文案：文案与枚举的对应关系写死过一次
@@ -175,6 +186,8 @@ TextCompareView::TextCompareView(TextCompareSession *session, QWidget *parent)
     rules->addWidget(m_whitespace);
     rules->addWidget(m_ignoreEol);
     rules->addWidget(m_ignoreFinal);
+    rules->addWidget(m_alignSimilar);
+    rules->addWidget(m_similarity);
     rules->addStretch();
     layout->addLayout(rules);
     const auto optionsChanged = [this] {
@@ -183,12 +196,16 @@ TextCompareView::TextCompareView(TextCompareSession *session, QWidget *parent)
         options.ignoreEol = m_ignoreEol->isChecked();
         options.ignoreFinalNewline = m_ignoreFinal->isChecked();
         options.whitespace = whitespaceAt(m_whitespace->currentIndex());
+        options.alignSimilarLines = m_alignSimilar->isChecked();
+        options.similarityThreshold = m_similarity->value();
         m_session->setComparisonOptions(options);
     };
     connect(m_ignoreCase, &QCheckBox::toggled, this, optionsChanged);
     connect(m_ignoreEol, &QCheckBox::toggled, this, optionsChanged);
     connect(m_ignoreFinal, &QCheckBox::toggled, this, optionsChanged);
     connect(m_whitespace, QOverload<int>::of(&QComboBox::currentIndexChanged), this, optionsChanged);
+    connect(m_alignSimilar, &QCheckBox::toggled, this, optionsChanged);
+    connect(m_similarity, QOverload<int>::of(&QSpinBox::valueChanged), this, optionsChanged);
 
     auto *splitter = new QSplitter(Qt::Horizontal, this);
     splitter->setObjectName(QStringLiteral("textSplitter"));
@@ -215,7 +232,7 @@ TextCompareView::TextCompareView(TextCompareSession *session, QWidget *parent)
             const int row = m_panes[side]->textCursor().blockNumber();
             const auto &result = m_session->comparison();
             if (row >= result.rows.size()) return;
-            const int difference = result.differences.indexOf(result.rows[row].block);
+            const int difference = m_session->differenceIndexOfBlock(result.rows[row].block);
             if (difference >= 0 && difference != m_session->currentDifference()) {
                 m_selectingText = true;
                 m_session->selectDifference(difference);
@@ -322,12 +339,18 @@ QWidget *TextCompareView::makeSide(bool left)
 
 void TextCompareView::refresh()
 {
-    const QSignalBlocker b1(m_ignoreCase), b2(m_ignoreEol), b3(m_ignoreFinal), b4(m_whitespace);
+    const QSignalBlocker b1(m_ignoreCase), b2(m_ignoreEol), b3(m_ignoreFinal), b4(m_whitespace),
+        b5(m_alignSimilar), b6(m_similarity);
     const auto options = m_session->comparisonOptions();
     m_ignoreCase->setChecked(options.ignoreCase);
     m_ignoreEol->setChecked(options.ignoreEol);
     m_ignoreFinal->setChecked(options.ignoreFinalNewline);
     m_whitespace->setCurrentIndex(whitespaceIndexOf(options.whitespace));
+    m_alignSimilar->setChecked(options.alignSimilarLines);
+    m_similarity->setValue(Text::clampSimilarityThreshold(options.similarityThreshold));
+    // 关掉总开关时阈值没有任何作用，把它一起禁用——留着可改会让人以为「调了阈值
+    // 却没反应」，而那正是这个功能最容易被误判成坏掉的方式。
+    m_similarity->setEnabled(options.alignSimilarLines);
     m_paths[0]->setText(m_session->leftPath());
     m_paths[1]->setText(m_session->rightPath());
     for (int side = 0; side < 2; ++side) {
@@ -389,8 +412,11 @@ void TextCompareView::setUseLocalShortcuts(bool enabled)
 void TextCompareView::highlight()
 {
     const auto &result = m_session->comparison();
-    const int current = m_session->currentDifference() >= 0
-        ? result.differences[m_session->currentDifference()] : -1;
+    // 「当前这一处改动」在引擎里可能是相邻的好几块（TXT-005 起不够像的行各自成块），
+    // 因此高亮要按**块区间**判断而不是比一个块下标——只比首块的话，
+    // 用户看到的会是「这一处被高亮了一半」。
+    const int currentFirst = m_session->differenceFirstBlock(m_session->currentDifference());
+    const int currentLast = m_session->differenceLastBlock(m_session->currentDifference());
     for (int side = 0; side < 2; ++side) {
         QList<QTextEdit::ExtraSelection> selections;
         for (int row = 0; row < result.rows.size(); ++row) {
@@ -400,7 +426,8 @@ void TextCompareView::highlight()
             selection.cursor = QTextCursor(m_panes[side]->document()->findBlockByNumber(row));
             selection.format.setProperty(QTextFormat::FullWidthSelection, true);
             QColor color = colorFor(entry.change, side == 0);
-            if (entry.block == current) color = color.darker(106);
+            if (currentFirst >= 0 && entry.block >= currentFirst && entry.block <= currentLast)
+                color = color.darker(106);
             selection.format.setBackground(color);
             selection.format.setForeground(QColor(28, 34, 43));
             selections.append(selection);
@@ -413,8 +440,10 @@ void TextCompareView::locate(int difference)
 {
     if (m_selectingText) { highlight(); return; }
     const auto &result = m_session->comparison();
-    if (difference < 0 || difference >= result.differences.size()) return;
-    const int row = result.blocks[result.differences[difference]].firstRow;
+    if (difference < 0 || difference >= m_session->differenceCount()) return;
+    const int first = m_session->differenceFirstBlock(difference);
+    if (first < 0 || first >= result.blocks.size()) return;
+    const int row = result.blocks[first].firstRow;
     for (TextPane *pane : m_panes) {
         const QSignalBlocker blocker(pane);
         pane->setTextCursor(QTextCursor(pane->document()->findBlockByNumber(row)));

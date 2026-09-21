@@ -63,7 +63,12 @@ private slots:
         writeFile(left, "a\nb\nc\nd\n"); writeFile(right, "a\nnew\nb\nchanged\nd\n");
         QVERIFY(session.setPaths(left, right));
         QCOMPARE(session.leftPath(), left);
-        QCOMPARE(session.comparison().differences.size(), 2);
+        // 差异**块**是 3 块（新增 `new`、删除 `c`、新增 `changed`），
+        // 而「一处改动」是 2 处（`new` 那处插入，以及 `c`→`changed` 那处改写）。
+        // 两个数都要断言：TXT-005 之后块的粒度可以比「一处改动」更细，
+        // 界面上的导航/状态栏/复制全都按后者算，只盯块数会把这条契约漏掉。
+        QCOMPARE(session.comparison().differences.size(), 3);
+        QCOMPARE(session.differenceCount(), 2);
         auto *a = widget->findChild<TextPane *>("leftTextPane");
         auto *b = widget->findChild<TextPane *>("rightTextPane");
         QCOMPARE(a->blockCount(), b->blockCount());
