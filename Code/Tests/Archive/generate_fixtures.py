@@ -16,15 +16,60 @@ import zlib
 
 STAMP = (2024, 1, 2, 3, 4, 6)
 
+# ZIP 通用位标记的第 11 位：文件名字段是 UTF-8。写成字面量而不是取
+# zipfile._MASK_UTF_FILENAME，是因为下面已经在覆盖私有方法，少依赖一个私有名字。
+UTF8_NAME_FLAG = 0x0800
+
 
 class RawName(zipfile.ZipInfo):
+    """一个可以指定**原始文件名字节**与通用位标记的成员。
+
+    用途是造出「名字不是合法 UTF-8、且没有置 UTF-8 位」这类夹具，用来验证
+    CP437 回退路径。因此这里必须能**完全控制** flag_bits 的取值。
+    """
+
     def __init__(self, raw, flags=0):
         super().__init__("placeholder", STAMP)
         self.raw = raw
         self.raw_flags = flags
 
     def _encodeFilenameFlags(self):
-        return self.raw, self.flag_bits | self.raw_flags
+        # 为什么不能直接返回 `self.flag_bits | self.raw_flags`：
+        # Python 3.14 起，zipfile 的 `_open_to_write()` 会在调用本方法**之前**
+        # 无条件执行 `zinfo.flag_bits = _MASK_UTF_FILENAME`（3.13 及更早是
+        # `zinfo.flag_bits = 0x00`）。于是同一个 `RawName(b"caf\x82.txt")` 在
+        # 3.13 上写出的成员「没有 UTF-8 位」，在 3.14 上却「置了 UTF-8 位」——
+        # 夹具的语义被悄悄换掉：它不再是「CP437 名字」，而变成
+        # 「声称是 UTF-8、字节却不是 UTF-8 的名字」，正好是另一个夹具的用途。
+        # 症状出现在很久之后、且指向别处：生成器结尾回读校验时，
+        # `zipfile` 按 UTF-8 解码抛 UnicodeDecodeError（CI 上 Python 3.14 实测）。
+        # 所以这里把 UTF-8 位**先抹掉再按 raw_flags 置回**：raw_flags 是唯一的
+        # 意图来源，数据描述符位（0x08）等其余位照常保留。
+        # 反过来，如果哪天某个 Python 版本不再置这个位，抹掉它也没有副作用。
+        flags = (self.flag_bits & ~UTF8_NAME_FLAG) | self.raw_flags
+        return self.raw, flags
+
+
+def intended_utf8_flag(raw):
+    """纯 ASCII 名字不置 UTF-8 位，其余置 —— 也就是 Python 3.13 及更早的判据。
+
+    这个判据必须写死在这里：Python 3.14 起 `zipfile` 会把**每一个**成员的
+    UTF-8 位都置上（连 `z.txt` 这种纯 ASCII 名字也置），于是同一份生成器在不同
+    解释器下产出的字节不同。夹具的全部价值在于可复现，所以显式归一。
+    """
+    try:
+        bytes(raw).decode("ascii")
+    except UnicodeDecodeError:
+        return UTF8_NAME_FLAG
+    return 0
+
+
+class PlainName(zipfile.ZipInfo):
+    """普通（字符串）文件名，按 intended_utf8_flag() 钉住 UTF-8 位。"""
+
+    def _encodeFilenameFlags(self):
+        encoded = self.filename.encode("utf-8")
+        return encoded, (self.flag_bits & ~UTF8_NAME_FLAG) | intended_utf8_flag(encoded)
 
 
 class NonSeekable(io.BytesIO):
@@ -36,7 +81,7 @@ class NonSeekable(io.BytesIO):
 
 
 def info(name, method=zipfile.ZIP_STORED, stamp=STAMP, extra=b"", attrs=None):
-    value = name if isinstance(name, zipfile.ZipInfo) else zipfile.ZipInfo(name, stamp)
+    value = name if isinstance(name, zipfile.ZipInfo) else PlainName(name, stamp)
     value.compress_type = method
     value.create_system = 3
     value.extra = extra
@@ -55,7 +100,73 @@ def archive(entries, method=zipfile.ZIP_STORED, descriptor=False, comment=b""):
             for name, payload in entries:
                 output.writestr(info(name, method) if not isinstance(name, zipfile.ZipInfo) else name,
                                 payload)
-    return bytearray(stream.getvalue())
+    data = bytearray(stream.getvalue())
+    assert_utf8_flag_as_intended(data, output)
+    return data
+
+
+def expected_raw_and_flag(entry):
+    """某个成员**意图**写出的原始名字字节与 UTF-8 位。
+
+    传进来的是刚写出去的 ZipInfo。返回 (None, None) 表示这一条不表意，跳过检查。
+    """
+    if isinstance(entry, RawName):
+        return entry.raw, entry.raw_flags & UTF8_NAME_FLAG
+    if isinstance(entry, PlainName):
+        encoded = entry.filename.encode("utf-8")
+        return encoded, intended_utf8_flag(encoded)
+    return None, None
+
+
+def central_dir_offsets(data, written):
+    """顺序走出中央目录记录的位置。
+
+    锚点用 `ZipFile` 自己记的 `start_dir`，**不要扫 EOCD**：夹具
+    `comment-signatures.zip` 的注释里故意放了一个假的 `PK\\x05\\x06` 签名，
+    `rfind` 会先找到假的，于是记录长度读成垃圾（实测 `struct.error`）。
+    `start_dir` 在可 seek 与不可 seek（数据描述符）两种写模式下都正确。
+    """
+    result = []
+    offset = written.start_dir
+    for _ in written.filelist:
+        assert data[offset:offset + 4] == b"PK\x01\x02", (
+            "中央目录记录定位失败：偏移 %d 处不是 PK\\x01\\x02" % offset)
+        result.append(offset)
+        name, extra, comment = struct.unpack_from("<HHH", data, offset + 28)
+        offset += 46 + name + extra + comment
+    return result
+
+
+def assert_utf8_flag_as_intended(data, written):
+    """刚写出来的字节里，每个成员的 UTF-8 位必须等于我们声明的意图。
+
+    这一步是**必须**的，不是可选的卫生检查：Python 3.14 把 `_open_to_write()`
+    里的 `flag_bits` 初值从 `0x00` 改成 `_MASK_UTF_FILENAME`，于是按 `raw_flags`
+    置位的写法会被覆盖、连纯 ASCII 名字也会带上 UTF-8 位，夹具的语义在写入时就
+    被换掉了——而且症状出现在很久以后、指向别的地方（生成器结尾回读校验抛
+    `UnicodeDecodeError`，CI 上实测）。把意图在这里就地断言，换版本时失败的是一句
+    能读懂的话，而不是一个目录都读不出来的异常。
+
+    查的是**字节**而不是对象上的意图：`_encodeFilenameFlags()` 的返回值与
+    `_open_to_write()` 设的初值如何相互作用，只有在写出来的记录里才看得见。
+    """
+    offsets = central_dir_offsets(data, written)
+    assert len(offsets) == len(written.filelist)
+    for offset, entry in zip(offsets, written.filelist):
+        raw, intended = expected_raw_and_flag(entry)
+        if raw is None:
+            continue
+        length = struct.unpack_from("<H", data, offset + 28)[0]
+        actual_raw = bytes(data[offset + 46:offset + 46 + length])
+        assert actual_raw == raw, (
+            "中央目录记录的名字与成员对不上：%r vs %r" % (actual_raw, raw))
+        # 只比 UTF-8 这一位：其余位（例如数据描述符位 0x08）由写入方按写模式
+        # 合法地加上去，比全字会把合法差异误报成错误。
+        actual = struct.unpack_from("<H", data, offset + 8)[0] & UTF8_NAME_FLAG
+        assert actual == intended, (
+            "成员 %r 的 UTF-8 位与声明不一致：声明=%#06x 实际=%#06x。"
+            "多半是某个 Python 版本改了 zipfile 写 flag_bits 的方式，"
+            "见 RawName / PlainName 的注释。" % (raw, intended, actual))
 
 
 def eocd(data):
