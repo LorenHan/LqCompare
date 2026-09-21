@@ -226,6 +226,12 @@ jobs:
       # 与 26 个 Windows 套件构建失败，而构建输出被丢进了 /dev/null，无从排查）。
       # `stderr.log` 是**运行期崩溃**唯一的线索（套件崩了就写不出 results.txt，
       # 而「为什么崩」只在 stderr 上；ubuntu 腿的 `Tests/Folder` 就是这么一条）。
+      # `verbose.txt` / `verbose.stderr.log` 来自运行器对**崩溃套件**的自动补跑
+      # （`-v2`）：崩溃的套件不写 `Totals:` 行，「它死在哪一条用例上」只能由
+      # 补跑回答——`-v2` 里每个用例都有一行 `INFO : … entering`，跑完再写
+      # `PASS`，于是有 entering 而没有 PASS 的那一条就是崩之前正在执行的用例。
+      # 补跑只在崩溃时发生，正常与断言失败的套件不会多出这两个文件
+      # （所以「有 verbose.txt」本身就是「这个套件崩过」的标记）。
       - name: 上传测试日志
         if: always()
         uses: actions/upload-artifact@v4
@@ -236,6 +242,8 @@ jobs:
             _test-build/**/results.xml
             _test-build/**/build.log
             _test-build/**/stderr.log
+            _test-build/**/verbose.txt
+            _test-build/**/verbose.stderr.log
           if-no-files-found: warn
 
       # ENG-004 第 4 条：可执行文件作为构建产物上传，便于手工验证。

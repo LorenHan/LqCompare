@@ -5,6 +5,8 @@
 # 职责：找出 Code/Tests/*/*.pro，逐个构建并用 offscreen 平台运行，
 # **并行**跑（默认 4 个套件同时进行），**每个套件有超时上限**，
 # 汇总通过/失败/跳过统计，并在失败时给出可直接复制的复现命令。
+# **崩溃**（没产出 `Totals:` 行）的套件会被**自动补跑一遍 `-v2`**，
+# 把「跑到哪一条用例才崩」变成日志里直接看得见的东西（见 rerun_verbosely）。
 #
 # 用法：
 #   Code/Tests/run-tests.sh                 # 全部套件
@@ -388,6 +390,37 @@ CPP
     st_contains "构建失败时贴出 qmake 的报错原文" "${out4}" 'deliberate qmake failure'
 
     echo
+    echo "── 断言：崩溃套件的自动补跑（-v2）──"
+    # 崩溃的套件不写 Totals 行，所以「它死在哪一条用例上」只能靠补跑一遍 -v2 回答。
+    st_contains "崩溃套件被自动补跑一遍 -v2" "${out4}" '自动补跑一遍 -v2'
+    # 这一条盯的是**结论**本身，不是「有没有补跑」：只断言跑过了，下一个人把
+    # 判定逻辑删掉也照样绿（照样会打出「自动补跑一遍 -v2」，只是不再点名）。
+    st_contains "补跑点名崩在哪一条用例" "${out4}" \
+        '崩在用例：ZZProbeHardExit::diesWithoutWritingResults\(\)'
+    st_expect "补跑的 -v2 输出留档（随日志产物一起上传）" \
+        "$([[ -s "${build}/ZZProbeHardExit/verbose.txt" ]] && echo 0 || echo 1)"
+    st_expect "补跑复现了同一句遗言（verbose.stderr.log 非空）" \
+        "$([[ -s "${build}/ZZProbeHardExit/verbose.stderr.log" ]] && echo 0 || echo 1)"
+    # 「**只**对崩溃的套件补跑」这句里的「只」由这一条守：通过 / 断言失败 / 超时
+    # 三个探针都不该有 verbose.txt。把范围放宽成「所有失败的套件都补跑」，或者
+    # 干脆无差别地对每个套件补跑，只有这一条会红。
+    st_expect "只有崩溃的套件才补跑（通过/失败/超时三个探针都没有 verbose.txt）" \
+        "$([[ ! -e "${build}/ZZProbePass/verbose.txt" && ! -e "${build}/ZZProbeFail/verbose.txt" \
+              && ! -e "${build}/ZZProbeHang/verbose.txt" ]] && echo 0 || echo 1)"
+    # 诊断产物与结果产物必须分开：补跑要是顺手把 `-o results.txt,txt` 也带上，
+    # 首轮那份「崩之前已经跑过的用例」记录就被 -v2 的内容盖掉了——
+    # **那等于让诊断改写证据**。
+    #
+    # 判据**不能只盯 `Loc:`**：`ZZProbeHardExit` 里一条断言都没有，`Loc:` 在它的
+    # -v2 输出里根本不出现，于是「results.txt 已被改写成 -v2 的内容」这个事实
+    # 在断言上完全看不见（实测：这条变异第一次就是这样整条漏检的）。
+    # 改用「-v2 独有的行首标记」——`INFO   : … entering` 只在 -v2 下打印，
+    # 那才是这份夹具真正会变的那个量。
+    st_expect "补跑的 -v2 没有改写首轮的 results.txt（里面不该有 -v2 独有的 INFO 行）" \
+        "$(grep -qE '^(INFO|DEBUG|QDEBUG|QWARN)[ ]*: |Loc: \[' \
+            "${build}/ZZProbeHardExit/results.txt" 2>/dev/null && echo 1 || echo 0)"
+
+    echo
     echo "── 断言：并发 ──"
     st_expect "并行 4 时同时有 ≥2 个套件在跑（实测峰值 ${peak4}）" \
         "$([[ ${peak4} -ge 2 ]] && echo 0 || echo 1)"
@@ -444,6 +477,139 @@ fi
 echo "并行度 ${JOBS}（每个套件 make -j${MAKE_JOBS}），单套件超时 ${TIMEOUT}s。"
 
 # ---------------------------------------------------------------------------
+# 启动一个套件二进制并等它结束（带超时看门狗）
+#
+# 返回它**真实的退出码**（`wait` 取回的，不是看门狗的）；超时则置全局
+# `BIN_TIMED_OUT=1`，并在给了标记文件路径时落一个 `timeout.marker`。
+#
+# **为什么抽成函数而不是在两处各写一遍**：崩溃套件的补跑（见 rerun_verbosely）
+# 必须走完全同一条路。两处各写一份轮询实现，迟早会在某一处漂移——而「超时」
+# 这条路的证据（标记文件、汇总里单独一行）正是自测断言的对象。
+#
+# 判存活用 `kill -0` 是可行的（见文件头第 8 条），并且 `wait` 仍能取回真实
+# 退出码——`--self-test` 两遍都跑到这里，「通过探针报成功」那条断言就是证据。
+# ---------------------------------------------------------------------------
+BIN_TIMED_OUT=0
+run_binary_with_timeout() {
+    local marker="$1"; shift
+    local waited=0 pid=0
+    BIN_TIMED_OUT=0
+    "$@" &
+    pid=$!
+
+    while kill -0 "${pid}" 2>/dev/null; do
+        if [[ "${waited}" -ge "${TIMEOUT}" ]]; then
+            BIN_TIMED_OUT=1
+            [[ -n "${marker}" ]] && : > "${marker}"
+            # 先 TERM 再 KILL：给套件一次写残存输出的机会，但绝不为它多等。
+            kill -TERM "${pid}" 2>/dev/null || true
+            sleep 2
+            kill -KILL "${pid}" 2>/dev/null || true
+            break
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+    wait "${pid}"
+    return $?
+}
+
+# ---------------------------------------------------------------------------
+# 崩溃套件的自动补跑（`-v2`）：回答「跑到哪一条用例才崩」
+#
+# 为什么需要它：套件被 abort 掉时**不会写出 `Totals:` 行**，于是日志里只剩
+# 「没有产出 Totals 行」——知道它死了，不知道它死在**哪一条用例**上。
+# CI 上 `Tests/Folder` 被 glibc 的 `_FORTIFY_SOURCE` 抓住
+# （stderr 只有一行 `*** buffer overflow detected ***: terminated`）就属于这类，
+# 连着若干轮能拿到的都只是「进程没了」。
+#
+# `-v2` 会为每个用例先写一行 `INFO : Class::func() entering`，跑完再写
+# `PASS : Class::func()`；每条 QVERIFY/QCOMPARE 还会带一行
+# `Loc: [文件(行号)]`。于是「**有 entering、而没有对应的 PASS/FAIL**」的那一条
+# 就是崩之前正在执行的用例，`Loc:` 就是最后执行到的那一条语句。
+#
+# 三件事是实测出来的，不是推测：
+#   1. **只用文件、不读 stdout**。`-o -,txt`（写 stdout）在 Windows（Git Bash）
+#      上实测一行都不输出，而文件产物一切正常（见文件头第 6 条）。所以补跑也是
+#      「写文件、再由脚本读回来」。
+#   2. **文件里一定留得住尾巴**，所以这条诊断不依赖任何一次 flush：Qt Test 的
+#      纯文本日志器逐条写盘，`abort()` 与连 `atexit` 都不跑的 `std::_Exit()`
+#      之下最后一行都在。实测探针 `VProbe`（`/tmp/vprobe`，不进仓库）：
+#        `std::abort()` → 文件里有 `QDEBUG : VProbe::diesByAbort() MARKER-BEFORE-ABORT`
+#        `std::_Exit(3)` → 文件里有 `QDEBUG : VProbe::diesByExit() MARKER-BEFORE-EXIT`
+#      两种死法下 `INFO : … entering` 那一行也都在。
+#   3. **补跑这一次如果能完整跑完**，那本身就是最重要的信息：说明首次崩溃是
+#      **偶发**的（依赖时序或输入），不是确定性失败——两种情况的排查方向不同，
+#      所以这一支要单独说出来，不能与「崩在某某用例」混成一句。
+#
+# **刻意只对「没产出 Totals 行的非超时失败」补跑**：
+#   - 超时的套件上面已经单独点名，再补跑一次只会白等一个 TIMEOUT；
+#   - 有 Totals 行的失败（断言失败）用例名已经在 `results.txt` 里了。
+# 补跑**不传 `-o results.txt` / `results.xml`**：诊断产物与结果产物是两件事，
+# 让诊断覆盖结果，等于让它改写证据。
+# ---------------------------------------------------------------------------
+rerun_verbosely() {
+    local binary="$1" build_dir="$2" first_status="$3"
+    local verbose_txt="${build_dir}/verbose.txt"
+    local verbose_err="${build_dir}/verbose.stderr.log"
+
+    # 补跑这件事本身不需要额外的标记文件：`verbose.txt` 存在 ⟺ 补跑发生过，
+    # 两个文件各说各的、本来就是同一件事的两份记录（上一轮刚因为「两条必然同进
+    # 同出的写入路径」踩过这个坑，见 handoff §6）。
+    run_binary_with_timeout "" \
+        "${binary}" -v2 -o "${verbose_txt},txt" >/dev/null 2>"${verbose_err}"
+    local rc=$?
+    local rerun_timed_out="${BIN_TIMED_OUT}"
+
+    echo "    自动补跑一遍 -v2（诊断用，不覆盖上面那一轮的结果产物）："
+    if [[ ${rerun_timed_out} -eq 1 ]]; then
+        echo "      补跑也超时了（超过 ${TIMEOUT}s）——首次不是「很快崩掉」而是「卡住」。"
+    else
+        echo "      补跑退出码 ${rc}，首次退出码 ${first_status}。"
+    fi
+
+    if [[ ! -s "${verbose_txt}" ]]; then
+        echo "      补跑连第一行 -v2 日志都没写下来——这种死法（例如被 SIGKILL"
+        echo "      直接带走、或死在加载期）从进程内部无迹可寻。"
+        return
+    fi
+
+    local rerun_summary
+    rerun_summary="$(grep -E '^Totals:' "${verbose_txt}" | tail -n 1)"
+    if [[ -n "${rerun_summary}" ]]; then
+        echo "      补跑这一次**完整跑完了**：${rerun_summary}"
+        echo "      ⇒ 首次崩溃是偶发的（依赖时序或输入），不是确定性失败。"
+        return
+    fi
+
+    # 「最后一条 entering」就是崩之前正在执行的用例。
+    #
+    # 为什么不需要「有 entering 却没有 PASS」这种更复杂的判定：entering 这一行是在
+    # 用例函数体**之前**写下的，所以进程无论怎么死都不会漏掉它（实测 abort 与
+    # _Exit 都留得住，见上面的注释）。而在「已写出 PASS、下一条 entering 还没写出」
+    # 那道缝里，能执行的只有 Qt 自己的记账代码，用户代码挤不进去——所以那道缝
+    # 造不出夹具，为它写分支就是没人能打红的死代码。这里刻意**不**留
+    # 「万一没找到 entering」的兜底分支：那种情形已经被上面「一行都没写下来」
+    # 拦住了；真要是假设不成立，这行会印出一个空名字，是个看得见的错信号，
+    # 而不是一个静默的错误结论。
+    local culprit
+    culprit="$(grep -E '^INFO[ ]*: .* entering$' "${verbose_txt}" | tail -n 1 \
+        | sed -e 's/^INFO[ ]*: //' -e 's/ entering$//')"
+    echo "      崩在用例：${culprit}（-v2 里最后一条 entering 的用例）"
+    echo "      -v2 结尾（完整内容见 ${verbose_txt}，随日志产物一起上传）："
+    tail -n 20 "${verbose_txt}" | sed 's/^/    | /'
+    # 这句解释必须**打印出来**、不能只写在注释里：`Loc:` 是断言求值**之后**才记的，
+    # 所以最后一行 `Loc:` 指的是最后一条**跑完**的断言，崩掉的是它后面那一条。
+    # 不写清楚的话，读日志的人会去怀疑那条明明已经跑完的断言。
+    echo "      （\`Loc:\` 那行是最后一条**跑完**的断言；崩掉的是它之后的下一条，"
+    echo "        或者就是该用例第一条断言之前的调用链里。）"
+    if [[ -s "${verbose_err}" ]]; then
+        echo "    补跑的 stderr 结尾（完整内容见 ${verbose_err}）："
+        tail -n 5 "${verbose_err}" | sed 's/^/    | /'
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # 单个套件：构建 → 运行（带超时）→ 判定 → 落盘一行结果
 #
 # **必须在子 shell 里跑**（调用处直接 `&`）。子 shell 里对全局变量的赋值不会
@@ -460,6 +626,8 @@ run_suite() {
     local build_log="${build_dir}/build.log"
     local timeout_marker="${build_dir}/timeout.marker"
     local summary_file="${build_dir}/summary.env"
+    local verbose_txt="${build_dir}/verbose.txt"
+    local verbose_err="${build_dir}/verbose.stderr.log"
 
     mkdir -p "${build_dir}"
     # 本套件的全部人读输出进自己的文件；父进程按启动顺序整块打印。
@@ -472,7 +640,8 @@ run_suite() {
     # 找不到可执行文件时会 `return` 掉，于是上一轮的产物原样留着，被当作
     # 「这一轮的输出」上传——构建失败的那一轮反而会带上一份看起来正常的旧结果。
     # 这类「旧结果冒充新结果」是 CI 里最难发现的一种假信号。
-    rm -f "${results_txt}" "${results_xml}" "${stderr_log}" "${build_log}" "${timeout_marker}" "${summary_file}"
+    rm -f "${results_txt}" "${results_xml}" "${stderr_log}" "${build_log}" "${timeout_marker}" "${summary_file}" \
+        "${verbose_txt}" "${verbose_err}"
 
     local status=255 timed_out=0 has_summary=0 pass=0 fail=0 skip=0
 
@@ -536,9 +705,6 @@ run_suite() {
     # 既没有 `Totals:` 也没有任何失败用例，只剩「哪个套件红了」，
     # 而合计还被算成 `0 passed`。改成「只写文件、再由脚本把文件读回来」之后，
     # 路径由脚本自己拼、与上传的产物**逐字一致**，也不依赖 MSYS 的参数转换。
-    "${binary}" -o "${results_txt},txt" -o "${results_xml},junitxml" >/dev/null 2>"${stderr_log}" &
-    local bin_pid=$!
-
     # 超时保护。为什么要自己做：GNU `timeout` 在 macOS 上默认不存在，
     # 而 `perl -e 'alarm'` 之类的外挂会把「跑测试」变成「跑测试 + 一个解释器」。
     #
@@ -546,25 +712,11 @@ run_suite() {
     # 而日志上只显示「上一个套件还没跑完」——比失败难查得多。
     #
     # 轮询而不是 `wait` + 看门狗子 shell：后者会在每个套件上留一个孤儿 `sleep`。
-    # 判存活用 `kill -0` 是可行的（见文件头第 8 条），并且 `wait` 仍能取回
-    # 真实退出码——`--self-test` 两遍都跑到这里，"通过探针报成功" 那条断言
-    # 就是它的证据。
-    local waited=0
-    while kill -0 "${bin_pid}" 2>/dev/null; do
-        if [[ "${waited}" -ge "${TIMEOUT}" ]]; then
-            timed_out=1
-            : > "${timeout_marker}"
-            # 先 TERM 再 KILL：给套件一次写残存输出的机会，但绝不为它多等。
-            kill -TERM "${bin_pid}" 2>/dev/null || true
-            sleep 2
-            kill -KILL "${bin_pid}" 2>/dev/null || true
-            break
-        fi
-        sleep 1
-        waited=$((waited + 1))
-    done
-    wait "${bin_pid}"
+    run_binary_with_timeout "${timeout_marker}" \
+        "${binary}" -o "${results_txt},txt" -o "${results_xml},junitxml" \
+        >/dev/null 2>"${stderr_log}"
     status=$?
+    timed_out=${BIN_TIMED_OUT}
 
     local output=""
     if [[ -f "${results_txt}" ]]; then
@@ -613,6 +765,10 @@ run_suite() {
             else
                 echo "    stderr 是空的——连一句遗言都没留下（例如被 SIGKILL 或直接段错误带走的）。"
             fi
+            # 走到这里说明「它死了，但没说死在哪一条」。补跑一遍 `-v2` 把这条
+            # 信息补上——这一步只对**崩溃**做，不与超时/断言失败共用（理由见
+            # rerun_verbosely 的注释）。
+            rerun_verbosely "${binary}" "${build_dir}" "${status}"
         fi
     else
         echo "  ✓ 通过"
