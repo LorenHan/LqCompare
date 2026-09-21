@@ -149,6 +149,25 @@ jobs:
           # nproc 是 GNU coreutils 的东西，macOS 上没有；getconf 三个平台都有。
           make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
 
+      # ENG-003 第 2、3 条的可重复证据：运行器**自己的**行为（并行、超时、
+      # 失败路径的报错文案、并发下的计数）如果错了，没有任何东西会变红——
+      # 恰恰是它本该报告的那种静默失败。`--self-test` 在临时目录里现造五个探针
+      # 套件（通过 / 失败 / 挂死 / 硬退出 / 构建失败）来验它自己，跑两遍
+      # （并行 4 与串行 1）并断言两遍的合计逐字相同；探针跑完即删、不进仓库。
+      #
+      # Windows 腿显式跳过并打出告警：超时那一支靠 POSIX 信号打断，而 Git Bash 的
+      # `kill` 能不能终止一个原生 Windows 进程没有实测过。**不做成静默跳过**——
+      # 本仓库对「降级」的约定是必须被看见（`::warning::` 会出现在 CI 的注解里）。
+      # 注意：**并行**这一半在 Windows 上是真跑了的（下面的测试步骤默认就在并行跑）。
+      - name: 运行器自测（ENG-003）
+        shell: bash
+        run: |
+          if [ "${RUNNER_OS}" = "Windows" ]; then
+            echo "::warning::已跳过 run-tests.sh --self-test：超时分支未在 Windows 上实测过"
+            exit 0
+          fi
+          bash Code/Tests/run-tests.sh --self-test
+
       # 这一步必须在没有 LqRibbon 时也跑：64 个套件是自足的（ENG-002），
       # 而「测试到底跑没跑」才是这条流水线最该回答的问题。
       # 拿不到依赖时把 2 个真正依赖它的套件排除，但排除必须**被看到**：

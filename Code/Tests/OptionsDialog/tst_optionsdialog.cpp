@@ -480,18 +480,62 @@ private slots:
         Log::setRotationPolicy(Log::RotationPolicy());
         Log::setPerformanceTimingEnabled(false);
     }
-    void saveReviewScreenshots() {
+    void screenshotsNeverLandInTheWorkingDirectory() {
+        // 这条用例原先把截图写进 `QDir::current()`，而测试运行器的工作目录就是
+        // 仓库根，于是每跑一次全量测试就在仓库里留下几个 `options-*.png`。
+        // ENG-003 第 5 条要求「测试不得写用户目录与仓库目录，全部使用临时目录
+        // 并在结束时清理」。截图本身还要留着（它是人工过一眼选项页版式的唯一
+        // 手段），所以改的是落点：进 QTemporaryDir，随用例结束一起消失。
+        //
+        // 只改落点、不检查落点，下一个人把路径改回 `QDir::current()` 时不会有
+        // 任何东西变红——那正是这条改动最容易被「修」回去的地方。所以这里把
+        // 「工作目录没有多出任何 options-*.png」本身也断言下来。
         QTemporaryDir temp;
+        QVERIFY(temp.isValid());
+        const QString screenshotDir = QDir(temp.path()).filePath(QStringLiteral("screenshots"));
+        QVERIFY(QDir().mkpath(screenshotDir));
+
+        const QStringList before = workingDirectoryScreenshotFingerprints();
+
         Settings::OptionsRepository repository({temp.path(), false});
         ProbeDialog dialog(&repository);
         dialog.show();
         for (const QString &category : {QStringLiteral("general"), QStringLiteral("display"), QStringLiteral("storage")}) {
             QVERIFY(dialog.selectCategory(category));
             QApplication::processEvents();
-            QVERIFY(dialog.grab().save(QDir::current().filePath(QStringLiteral("options-") + category + QStringLiteral(".png"))));
+            const QString path = QDir(screenshotDir).filePath(QStringLiteral("options-") + category + QStringLiteral(".png"));
+            QVERIFY2(dialog.grab().save(path), qPrintable(path));
+            QVERIFY(QFile::exists(path));
+            QVERIFY(QFileInfo(path).size() > 0);
         }
+
+        // 比对前后两份**指纹**而不是直接断言「一个都没有」：历史上真的落在仓库根
+        // 的那几个同名文件可能还躺在磁盘上（它们已在 .gitignore 里，但没被删掉），
+        // 断言「一个都没有」会因此永远红，而它其实与本轮行为无关。
+        QCOMPARE(workingDirectoryScreenshotFingerprints(), before);
     }
 private:
+    // 工作目录里的 options-*.png 指纹：名字 + 大小 + 修改时间。
+    //
+    // 用来把「测试弄脏了工作目录」变成一条会自己变红的断言，而不是一条只写在
+    // 文档里的约定。**只比名字是抓不住的**：那三个被防的文件名是固定的
+    // （`options-<分类>.png`），而仓库根历史上就躺着同名的三个文件——写回工作目录
+    // 只是**覆盖**它们，名字集合一模一样，只比名字的断言对一个真的退化仍然全绿
+    // （这一点是反向验证里实测出来的：变异 M13 第一版就是这么漏过去的）。
+    // 带上大小与修改时间之后，覆盖写也会被看见。
+    static QStringList workingDirectoryScreenshotFingerprints() {
+        const QDir directory = QDir::current();
+        const QStringList names = directory.entryList({QStringLiteral("options-*.png")}, QDir::Files, QDir::Name);
+        QStringList fingerprints;
+        fingerprints.reserve(names.size());
+        for (const QString &name : names) {
+            const QFileInfo info(directory.filePath(name));
+            fingerprints.append(name + QLatin1Char('|') + QString::number(info.size()) + QLatin1Char('|')
+                                + QString::number(info.lastModified().toMSecsSinceEpoch()));
+        }
+        return fingerprints;
+    }
+
     QFont m_font;
     QPalette m_palette;
     Log::Level m_logLevel;
