@@ -1,20 +1,30 @@
 #include <QtTest>
 
+#include "entrystatus.h"
 #include "foldercompare.h"
 #include "foldercomparesession.h"
 #include "foldercompareview.h"
 #include "sessiondocument.h"
 
-#include <QComboBox>
+#include <QAction>
 #include <QCheckBox>
+#include <QComboBox>
+#include <QCoreApplication>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
+#include <QIcon>
 #include <QLineEdit>
-#include <QPushButton>
+#include <QMenu>
+#include <QMessageBox>
 #include <QPlainTextEdit>
+#include <QPushButton>
+#include <QSet>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTreeView>
+
+#include <algorithm>
 
 using namespace LqCompare;
 
@@ -192,7 +202,7 @@ private slots:
         const auto full = Folder::compare(pair.left, pair.right);
         QCOMPARE(full.entries.first().status, Folder::Status::Different);
         QCOMPARE(full.entries.first().firstDifference, qint64(5));
-        QVERIFY(!full.entries.first().partialComparison);
+        QVERIFY(!full.entries.first().partialComparison());
         QVERIFY(full.complete);
 
         // 限 = 4：差异（偏移 5）落在限外。
@@ -201,7 +211,7 @@ private slots:
         const auto limited = Folder::compare(pair.left, pair.right, options);
         const auto &entry = limited.entries.first();
         QCOMPARE(entry.status, Folder::Status::Unknown);
-        QVERIFY(entry.partialComparison);
+        QVERIFY(entry.partialComparison());
         QCOMPARE(entry.firstDifference, qint64(-1)); // 没有结论，就不该有「首个差异」。
         // 文案「部分比较」出自 DIR-008 的验收用语，不是实现细节，因此可以断言它；
         // 但真正的判据是上面那个 partialComparison 标志——文字可以改，含义不能。
@@ -224,7 +234,7 @@ private slots:
         auto result = Folder::compare(pair.left, pair.right, inside);
         QCOMPARE(result.entries.first().status, Folder::Status::Different);
         QCOMPARE(result.entries.first().firstDifference, qint64(2));
-        QVERIFY(!result.entries.first().partialComparison);
+        QVERIFY(!result.entries.first().partialComparison());
         QVERIFY(result.complete); // 差异已证明，结果并不「不完整」。
 
         // 差异正好落在限外一个字节：一个字节都不许多读。
@@ -232,7 +242,7 @@ private slots:
         outside.compareFirstBytes = 2;
         result = Folder::compare(pair.left, pair.right, outside);
         QCOMPARE(result.entries.first().status, Folder::Status::Unknown);
-        QVERIFY(result.entries.first().partialComparison);
+        QVERIFY(result.entries.first().partialComparison());
         QVERIFY(!result.complete);
     }
 
@@ -261,7 +271,7 @@ private slots:
         options.compareFirstBytes = block + 1;
         result = Folder::compare(pair.left, pair.right, options);
         QCOMPARE(result.entries.first().status, Folder::Status::Unknown);
-        QVERIFY(result.entries.first().partialComparison);
+        QVERIFY(result.entries.first().partialComparison());
         QCOMPARE(result.entries.first().firstDifference, qint64(-1));
 
         // 限 = 块 + 2：差异进入射程，必须被发现。
@@ -290,7 +300,7 @@ private slots:
             const auto &entry = result.entries.first();
             QCOMPARE(entry.status, Folder::Status::Error);
             QVERIFY(entry.explanation.contains(QStringLiteral("变化")));
-            QVERIFY2(!entry.partialComparison, "读失败时连「比较了前 N 字节」都不成立");
+            QVERIFY2(!entry.partialComparison(), "读失败时连「比较了前 N 字节」都不成立");
             QCOMPARE(entry.firstDifference, qint64(-1));
             QVERIFY(!result.complete);
         }
@@ -306,7 +316,7 @@ private slots:
             const auto &entry = result.entries.first();
             QCOMPARE(entry.status, Folder::Status::Error);
             QCOMPARE(entry.firstDifference, qint64(-1));
-            QVERIFY(!entry.partialComparison);
+            QVERIFY(!entry.partialComparison());
         }
     }
 
@@ -348,7 +358,7 @@ private slots:
         QVERIFY2(session.open(&error), qPrintable(error));
         QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 5000);
         QCOMPARE(session.result().entries.first().status, Folder::Status::Unknown);
-        QVERIFY(session.result().entries.first().partialComparison);
+        QVERIFY(session.result().entries.first().partialComparison());
         QVERIFY(!session.result().complete);
 
         // 负数走的是另一条路（optionsError，不是设置反序列化）：也必须被拒绝，
@@ -394,7 +404,7 @@ private slots:
         QCOMPARE(entry.status, Folder::Status::Different);
         QCOMPARE(entry.firstDifference, qint64(100));
         QVERIFY2(entry.explanation.contains(QStringLiteral("100")), qPrintable(entry.explanation));
-        QVERIFY(!entry.partialComparison);
+        QVERIFY(!entry.partialComparison());
     }
 
     void emptyDirectoriesAndEmptyFiles()
@@ -1039,6 +1049,386 @@ private slots:
         session.sessionSettings()->clear();
         QVERIFY(sameOptions(session.comparisonOptions(), Folder::Options()));
         QVERIFY(sameOptions(session.view()->options(), Folder::Options()));
+    }
+
+    // -------------------------------------------------------------------------
+    // DIR-011 条目状态判定与语义
+    //
+    // 这一族用例刻意**不**复述 `Tests/EntryStatus` 里那张纯函数真值表，
+    // 而是回答另一个问题：表里的每一条，在**真的目录树**、真的引擎、
+    // 真的视图上是不是也成立。两边的用例数不重要，重要的是同一条判据
+    // 既有脱离文件系统的部分，也有穿过文件系统的部分。
+    // -------------------------------------------------------------------------
+
+    // DIR-011 第 1 条：内容证据与主状态是两维。
+    // 判据不是「字段存不存在」，而是**主状态相同的两个条目可以带着不同的证据**：
+    // 同为「不同」的两对文件，一对是逐字节读出来的，另一对只要大小不等就定案，
+    // 后者一个字节都没读过。压成一维（哪怕只是压成一个布尔）迟早会让某个
+    // 消费点把「没读」当成「读过」。
+    void contentEvidenceSeparatesProofFromNeverReading()
+    {
+        Pair pair;
+        QVERIFY(writeFile(pair.left + "/size.bin", "abc"));
+        QVERIFY(writeFile(pair.right + "/size.bin", "abcdef"));
+        QVERIFY(writeFile(pair.left + "/bytes.bin", "abc"));
+        QVERIFY(writeFile(pair.right + "/bytes.bin", "abd"));
+        QVERIFY(writeFile(pair.left + "/same.bin", "abc"));
+        QVERIFY(writeFile(pair.right + "/same.bin", "abc"));
+
+        const auto result = Folder::compare(pair.left, pair.right);
+        QVERIFY2(result.error.isEmpty(), qPrintable(result.error));
+        const auto *size = findEntry(result, "size.bin");
+        const auto *bytes = findEntry(result, "bytes.bin");
+        const auto *same = findEntry(result, "same.bin");
+        QVERIFY(size && bytes && same);
+
+        // 大小不同就足以定案：内容这一维因此停在「未比较」。
+        // 如果这里被写成「字节不同」，报表就会声称读过内容——而它没有。
+        QCOMPARE(size->status, Folder::Status::Different);
+        QCOMPARE(size->contentEvidence, Folder::ContentEvidence::NotCompared);
+        QCOMPARE(bytes->status, Folder::Status::Different);
+        QCOMPARE(bytes->contentEvidence, Folder::ContentEvidence::ByteDifferent);
+        QCOMPARE(same->status, Folder::Status::Same);
+        QCOMPARE(same->contentEvidence, Folder::ContentEvidence::ByteIdentical);
+
+        // 「这份证据能不能证明内容相同」必须由证据自己回答。主状态为「不同」的
+        // 条目也带着一份证据——靠主状态去反推就把两维重新粘回一维了。
+        QVERIFY(Folder::contentEvidenceProvesIdentity(Folder::ContentEvidence::ByteIdentical));
+        QVERIFY(!Folder::contentEvidenceProvesIdentity(Folder::ContentEvidence::ByteDifferent));
+        QVERIFY(!Folder::contentEvidenceProvesIdentity(Folder::ContentEvidence::NotCompared));
+    }
+
+    // DIR-011 第 1 条：部分比较是**第三种**证据，既不是「相同」也不是「未比较」。
+    // 「一个字节都没读」和「读了前 N 个字节、后面不知道」在同步场景里
+    // 触发的动作完全不同，所以证据这一维必须能把它们分开。
+    void partialComparisonIsItsOwnEvidence()
+    {
+        Pair pair;
+        QVERIFY(writeFile(pair.left + "/tail.bin", "ABCD-one"));
+        QVERIFY(writeFile(pair.right + "/tail.bin", "ABCD-two"));
+
+        Folder::Options options;
+        options.compareFirstBytes = 4;
+        const auto result = Folder::compare(pair.left, pair.right, options);
+        const auto *entry = findEntry(result, "tail.bin");
+        QVERIFY(entry);
+        QCOMPARE(entry->contentEvidence, Folder::ContentEvidence::Partial);
+        QVERIFY(entry->partialComparison());
+        QVERIFY(entry->contentEvidence != Folder::ContentEvidence::NotCompared);
+        QVERIFY(!Folder::contentEvidenceProvesIdentity(entry->contentEvidence));
+        QVERIFY(!Folder::contentEvidenceCoversWholeContent(entry->contentEvidence));
+        QVERIFY(!result.complete);
+    }
+
+    // DIR-011 第 1 条：内容比对被关掉时，证据是「未比较」而不是「相同」。
+    // 这是第 3 条那句「内容未读完不得归为相同」在开关上的样子。
+    void disabledContentComparisonReportsNotCompared()
+    {
+        Pair pair;
+        QVERIFY(writeFile(pair.left + "/same.txt", "same"));
+        QVERIFY(writeFile(pair.right + "/same.txt", "same"));
+        Folder::Options options;
+        options.compareContent = false;
+        const auto result = Folder::compare(pair.left, pair.right, options);
+        const auto *entry = findEntry(result, "same.txt");
+        QVERIFY(entry);
+        QVERIFY(entry->status != Folder::Status::Same);
+        QCOMPARE(entry->contentEvidence, Folder::ContentEvidence::NotCompared);
+        QVERIFY(!result.complete);
+    }
+
+    // DIR-011 第 2 条：时间关系是**独立**的一维，不参与主状态。
+    // 两侧内容完全相同的两个文件只因为修改时间不同，主状态必须仍是「相同」；
+    // 同时「哪一侧较新」也要说得出来。做成第四种主状态就得在两者之间二选一，
+    // 而它们其实同时成立。
+    void timeRelationIsSeparateFromMainStatus()
+    {
+        Pair pair;
+        QVERIFY(writeFile(pair.left + "/left-newer.txt", "same"));
+        QVERIFY(writeFile(pair.right + "/left-newer.txt", "same"));
+        QVERIFY(writeFile(pair.left + "/right-newer.txt", "same"));
+        QVERIFY(writeFile(pair.right + "/right-newer.txt", "same"));
+        QVERIFY(writeFile(pair.left + "/orphan.txt", "same"));
+
+        std::unique_ptr<Files::FileSystem> fs(Files::createNativeFileSystem());
+        Files::ErrorCode error;
+        const qint64 base = 1600000000; // 固定时刻：结论不随运行时间漂移。
+        const auto stamp = [&](const QString &path, qint64 seconds) {
+            return fs->setTimes(path, Files::FileTime::fromUnixTime(seconds, 0), {}, &error);
+        };
+        QVERIFY(stamp(pair.left + "/left-newer.txt", base + 600));
+        QVERIFY(stamp(pair.right + "/left-newer.txt", base));
+        QVERIFY(stamp(pair.left + "/right-newer.txt", base));
+        QVERIFY(stamp(pair.right + "/right-newer.txt", base + 600));
+        QVERIFY(stamp(pair.left + "/orphan.txt", base));
+
+        const auto result = Folder::compare(pair.left, pair.right);
+        QVERIFY2(result.error.isEmpty(), qPrintable(result.error));
+        const auto *leftNewer = findEntry(result, "left-newer.txt");
+        const auto *rightNewer = findEntry(result, "right-newer.txt");
+        const auto *orphan = findEntry(result, "orphan.txt");
+        QVERIFY(leftNewer && rightNewer && orphan);
+
+        QCOMPARE(leftNewer->status, Folder::Status::Same);
+        QCOMPARE(leftNewer->timeRelation, Folder::TimeRelation::LeftNewer);
+        QCOMPARE(rightNewer->status, Folder::Status::Same);
+        QCOMPARE(rightNewer->timeRelation, Folder::TimeRelation::RightNewer);
+        // 孤儿项没有对侧时间可比：这里必须是「未知」。塌成「两侧相同」是错的，
+        // 把缺失读成「零纳秒」再和真实时间比出「右侧较新」更是错的——
+        // 后者会凭空给出一个方向，而方向是同步动作的依据。
+        QCOMPARE(orphan->status, Folder::Status::LeftOnly);
+        QCOMPARE(orphan->timeRelation, Folder::TimeRelation::Unknown);
+    }
+
+    // DIR-011 第 3 条：内容未读完不得归为相同。
+    // 「没展开」和「展开后确实是空的」在结果上长得一模一样（都是「没有子条目」），
+    // 而结论相反：前者什么都不能说，后者是货真价实的「相同」。
+    void unreadDirectoryIsNeverSummarisedAsSame()
+    {
+        Pair pair;
+        QVERIFY(writeFile(pair.left + "/sub/same.txt", "same"));
+        QVERIFY(writeFile(pair.right + "/sub/same.txt", "same"));
+        QVERIFY(QDir().mkpath(pair.left + "/blank"));
+        QVERIFY(QDir().mkpath(pair.right + "/blank"));
+
+        // 先证明这两个目录真的读过之后是「相同」——否则下面那条
+        //「未读 ≠ 相同」可能只是因为它们本来就是不同的东西。
+        const auto deep = Folder::compare(pair.left, pair.right);
+        QVERIFY2(deep.error.isEmpty(), qPrintable(deep.error));
+        QCOMPARE(findEntry(deep, "sub")->status, Folder::Status::Same);
+        QCOMPARE(findEntry(deep, "blank")->status, Folder::Status::Same);
+        QVERIFY(deep.complete);
+
+        Folder::Options shallow;
+        shallow.recursive = false;
+        const auto notRead = Folder::compare(pair.left, pair.right, shallow);
+        for (const char *name : {"sub", "blank"}) {
+            const auto *entry = findEntry(notRead, QString::fromLatin1(name));
+            QVERIFY2(entry, name);
+            QCOMPARE(entry->status, Folder::Status::Unknown);
+            // 未知不等于被排除：它仍在比较范围内，只是没读完。
+            QVERIFY(entry->inComparison());
+        }
+        QVERIFY(findEntry(notRead, "blank")->explanation.contains(QStringLiteral("未展开")));
+        QVERIFY(!notRead.complete);
+    }
+
+    // DIR-011 第 3 条：两侧均改 / 冲突只能由**有效基线**推导。
+    // 两份当前文件永远推不出「谁先动的手」，所以没有基线时这两档一个都不许出现；
+    // 传进来一份坏基线也不能凑合着用——那会让「无效」和「没有」得出不同结论。
+    void baselineDerivedStatesNeedAValidBaseline()
+    {
+        Pair pair;
+        QVERIFY(writeFile(pair.left + "/retyped.txt", "SAME-V2"));
+        QVERIFY(writeFile(pair.right + "/retyped.txt", "SAME-V2"));
+        QVERIFY(writeFile(pair.left + "/clash.txt", "LEFT"));
+        QVERIFY(writeFile(pair.right + "/clash.txt", "RIGHT"));
+
+        const auto withoutBaseline = Folder::compare(pair.left, pair.right);
+        QVERIFY(!withoutBaseline.baselineApplied);
+        for (const auto &entry : withoutBaseline.entries) {
+            QVERIFY(entry.status != Folder::Status::BothChanged);
+            QVERIFY(entry.status != Folder::Status::Conflict);
+        }
+
+        const auto ancestor = [] {
+            Folder::AncestorRecord record;
+            // 尺寸与时间都和两侧当前值不同 →「这一侧相对祖先动过」成立。
+            record.size = 1;
+            record.modified = Files::FileTime::fromUnixTime(1000, 0);
+            return record;
+        };
+        Folder::BaselineView baseline;
+        baseline.valid = true;
+        baseline.leftRoot = pair.left;
+        baseline.rightRoot = pair.right;
+        baseline.ancestors.insert(QStringLiteral("retyped.txt"), ancestor());
+        baseline.ancestors.insert(QStringLiteral("clash.txt"), ancestor());
+        QVERIFY(Folder::validateBaselineView(baseline).isEmpty());
+
+        const auto withBaseline = Folder::compare(pair.left, pair.right, Folder::Options(),
+                                                  nullptr, Folder::Progress(), nullptr, &baseline);
+        QVERIFY(withBaseline.baselineApplied);
+        // 两侧都动过、且改法一致（当前内容仍然相同）→ 同步无害。
+        QCOMPARE(findEntry(withBaseline, "retyped.txt")->status, Folder::Status::BothChanged);
+        // 两侧都动过、但改出了不同内容 → 必须由人决定。
+        QCOMPARE(findEntry(withBaseline, "clash.txt")->status, Folder::Status::Conflict);
+
+        Folder::BaselineView broken = baseline;
+        broken.rightRoot.clear();
+        QVERIFY(!Folder::validateBaselineView(broken).isEmpty());
+        const auto rejected = Folder::compare(pair.left, pair.right, Folder::Options(),
+                                             nullptr, Folder::Progress(), nullptr, &broken);
+        QVERIFY(!rejected.baselineApplied);
+        for (const auto &entry : rejected.entries) {
+            QVERIFY(entry.status != Folder::Status::BothChanged);
+            QVERIFY(entry.status != Folder::Status::Conflict);
+        }
+        // 基线只**细化**结论，不推翻结论：同一对文件在坏基线下仍是「不同」，
+        // 不该退化成一团「未知」。
+        QCOMPARE(findEntry(rejected, "clash.txt")->status, Folder::Status::Different);
+    }
+
+    // DIR-011 第 5 条：父子一致。父目录的结论**就是**子条目汇总结论本身，
+    // 不是「两套口径今天碰巧相同」。所以这里把引擎产出的子条目喂回同一个
+    // 汇总函数，再和引擎写在父目录上的那一格逐字比对。
+    void parentConclusionIsTheSharedAggregateOfItsChildren()
+    {
+        Pair pair;
+        QVERIFY(writeFile(pair.left + "/mixed/same.txt", "same"));
+        QVERIFY(writeFile(pair.right + "/mixed/same.txt", "same"));
+        QVERIFY(writeFile(pair.left + "/mixed/only-left.txt", "x"));
+        QVERIFY(writeFile(pair.left + "/mixed/nested/inner.txt", "same"));
+        QVERIFY(writeFile(pair.right + "/mixed/nested/inner.txt", "same"));
+        QVERIFY(writeFile(pair.left + "/identical/a.txt", "same"));
+        QVERIFY(writeFile(pair.right + "/identical/a.txt", "same"));
+        QVERIFY(QDir().mkpath(pair.left + "/void"));
+        QVERIFY(QDir().mkpath(pair.right + "/void"));
+
+        const auto result = Folder::compare(pair.left, pair.right);
+        QVERIFY2(result.error.isEmpty(), qPrintable(result.error));
+        QVERIFY(result.complete);
+        QCOMPARE(findEntry(result, "mixed")->status, Folder::Status::Different);
+        QCOMPARE(findEntry(result, "mixed/nested")->status, Folder::Status::Same);
+        QCOMPARE(findEntry(result, "identical")->status, Folder::Status::Same);
+        QCOMPARE(findEntry(result, "void")->status, Folder::Status::Same);
+
+        for (const char *name : {"mixed", "mixed/nested", "identical", "void"}) {
+            const QString parentPath = QString::fromLatin1(name);
+            const auto *parentEntry = findEntry(result, parentPath);
+            QVERIFY2(parentEntry, name);
+            QVector<Folder::ChildStatus> children;
+            for (const auto &entry : result.entries) {
+                if (entry.relativePath.startsWith(parentPath + QLatin1Char('/')))
+                    children.append({entry.status, entry.inComparison()});
+            }
+            const auto aggregate = Folder::aggregateChildren(children);
+            QCOMPARE(aggregate.status, parentEntry->status);
+            QCOMPARE(aggregate.hasIncludedDescendants, parentEntry->hasIncludedDescendants);
+            // 汇总不许依赖遍历顺序：把子条目反过来喂一遍必须还是同一个结论。
+            // （真值表里「错误压过不同」「未知不压过不同」这两条最容易写成
+            //   依赖顺序的短路，而目录的枚举顺序来自文件系统，不归我们决定。）
+            std::reverse(children.begin(), children.end());
+            QCOMPARE(Folder::aggregateChildren(children).status, parentEntry->status);
+        }
+    }
+
+    // DIR-011 第 4 条：颜色之外还要有图标与文字，且「为什么是这个状态」够得着。
+    // 灰度打印与色觉障碍下颜色是第一个失效的信息，所以三者缺一不可。
+    void everyStatusRowCarriesAnIconAndExplainsItself()
+    {
+        Pair pair;
+        QVERIFY(writeFile(pair.left + "/same.txt", "same"));
+        QVERIFY(writeFile(pair.right + "/same.txt", "same"));
+        QVERIFY(writeFile(pair.left + "/diff.txt", "aaa"));
+        QVERIFY(writeFile(pair.right + "/diff.txt", "bbb"));
+        QVERIFY(writeFile(pair.left + "/only-left.txt", "x"));
+
+        FolderCompareSession session(pair.left, pair.right);
+        std::unique_ptr<QWidget> widget(session.createWidget());
+        QSignalSpy finished(&session, &FolderCompareSession::scanFinished);
+        QVERIFY(session.open());
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 5000);
+        auto *view = session.view();
+        QVERIFY(view);
+        auto *model = view->leftTree()->model();
+        QVERIFY(model);
+
+        const int stateColumn = 3; // FolderTreeModel::State
+        for (const char *name : {"same.txt", "diff.txt", "only-left.txt"}) {
+            const QString fileName = QString::fromLatin1(name);
+            const QModelIndex name0 = indexNamed(model, fileName);
+            QVERIFY2(name0.isValid(), name);
+            const QModelIndex state = name0.sibling(name0.row(), stateColumn);
+            QVERIFY(state.isValid());
+            QVERIFY(!state.data(Qt::DisplayRole).toString().isEmpty());
+            const QVariant decoration = state.data(Qt::DecorationRole);
+            QVERIFY(decoration.isValid());
+            QVERIFY(!decoration.value<QIcon>().isNull());
+
+            std::unique_ptr<QMenu> menu(view->createStatusMenu(name0));
+            QVERIFY(menu);
+            auto *why = menu->findChild<QAction *>(QStringLiteral("folderWhyStatusAction"));
+            QVERIFY(why);
+            QVERIFY(why->isEnabled());
+            const QStringList sections = {QStringLiteral("准则"), QStringLiteral("覆盖策略"),
+                                         QStringLiteral("最终结论")};
+            const QString reason = view->statusExplanation(name0);
+            for (const QString &section : sections)
+                QVERIFY2(reason.contains(section), qPrintable(reason));
+            const auto *entry = findEntry(session.result(), fileName);
+            QVERIFY(entry);
+            QVERIFY2(reason.contains(Folder::statusLabel(entry->status)), qPrintable(reason));
+
+            // 点开之后不许卡住：弹窗必须是**非模态**的，否则它会在 exec() 里
+            // 开一个嵌套事件循环，离屏测试与自动化会一起僵在这一行。
+            why->trigger();
+            auto *box = view->findChild<QMessageBox *>(QStringLiteral("folderStatusReasonBox"));
+            QVERIFY(box);
+            QVERIFY(!box->isModal());
+            QVERIFY(box->text().contains(Folder::statusLabel(entry->status)));
+            box->close();
+            box->deleteLater();
+            // 逐个删干净再进下一轮：`findChild` 返回第一个同名对象，
+            // 留着上一轮的弹窗会让下一轮的断言读到上一轮的文本。
+            QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        }
+
+        // 图标键必须九档各不相同：全部指向同一个文件等于没有图标。
+        QSet<QString> keys;
+        for (const auto &row : Folder::mainStatusTable())
+            keys.insert(Folder::statusIconKey(row.value));
+        QCOMPARE(keys.size(), Folder::mainStatusTable().size());
+        session.close();
+    }
+
+    // DIR-011 第 1 条的消费点守卫。状态整数要经「模型角色 → 下拉数据 → 筛选」三跳，
+    // 任一跳拿到越界值都不许把列表清空——「一整屏空白」是最难归因的一种失败，
+    // 用户会以为自己选中的是某个状态。
+    void statusFilterRejectsIntegersOutsideTheMainStatusTable()
+    {
+        Pair pair;
+        QVERIFY(writeFile(pair.left + "/same.txt", "same"));
+        QVERIFY(writeFile(pair.right + "/same.txt", "same"));
+        QVERIFY(writeFile(pair.left + "/diff.txt", "aaa"));
+        QVERIFY(writeFile(pair.right + "/diff.txt", "bbb"));
+
+        FolderCompareSession session(pair.left, pair.right);
+        std::unique_ptr<QWidget> widget(session.createWidget());
+        QSignalSpy finished(&session, &FolderCompareSession::scanFinished);
+        QVERIFY(session.open());
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 5000);
+        auto *view = session.view();
+        QVERIFY(view);
+        auto *model = view->leftTree()->model();
+        auto *filter = view->findChild<QComboBox *>(QStringLiteral("folderStatusFilter"));
+        QVERIFY(filter);
+        const int all = model->rowCount();
+        QCOMPARE(all, 2);
+
+        // 下拉里的每一档都来自主状态表：界面不另写一份清单，
+        // 否则新增一档状态时界面会静默落后一格。
+        for (const auto &row : Folder::mainStatusTable())
+            QVERIFY2(filter->findData(int(row.value)) >= 0, row.identifier);
+        QVERIFY(filter->findData(-1) >= 0);
+        QVERIFY(filter->findData(-2) >= 0);
+
+        view->setStatusFilter(9999);
+        QCOMPARE(model->rowCount(), all);
+        QCOMPARE(filter->currentData().toInt(), -1);
+        view->setStatusFilter(-7);
+        QCOMPARE(model->rowCount(), all);
+        QCOMPARE(filter->currentData().toInt(), -1);
+
+        view->setStatusFilter(int(Folder::Status::Different));
+        QCOMPARE(model->rowCount(), 1);
+        QCOMPARE(model->index(0, 0).data().toString(), QStringLiteral("diff.txt"));
+        // 两个哨兵值是本类自己的语义，不能被「越界就回落到全部」这条规则顺手吃掉。
+        view->setStatusFilter(-2);
+        QCOMPARE(model->rowCount(), 1);
+        view->setStatusFilter(-1);
+        QCOMPARE(model->rowCount(), all);
+        session.close();
     }
 };
 

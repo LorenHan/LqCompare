@@ -243,6 +243,9 @@ Model fromFolder(const Folder::Result &result, const Folder::Options &compareOpt
         case Folder::Status::TypeConflict: row.state = State::Conflict; break;
         case Folder::Status::Error: row.state = State::Error; break;
         case Folder::Status::Unknown: row.state = State::Unknown; break;
+        // 两侧均改在同步的意义上仍是「内容不同」，冲突已经是报表里既有的那一档。
+        case Folder::Status::BothChanged: row.state = State::Changed; break;
+        case Folder::Status::Conflict: row.state = State::Conflict; break;
         }
         model.rows.append(row);
     }

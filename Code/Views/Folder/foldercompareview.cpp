@@ -1,4 +1,5 @@
 #include "foldercompareview.h"
+#include "entrystatus.h"
 #include "maskfilter.h"
 
 #include <QAbstractItemModel>
@@ -11,10 +12,13 @@
 #include <QFileDialog>
 #include <QHeaderView>
 #include <QHBoxLayout>
+#include <QIcon>
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
 #include <QLocale>
+#include <QMenu>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QPlainTextEdit>
 #include <QScrollBar>
@@ -66,6 +70,9 @@ public:
     }
     int totalCount() const { return m_result.entries.size(); }
     int excludedCount() const { return m_result.excludedCount; }
+    // 本次比较有没有用上有效基线（DIR-011 第 3 条）。「为什么是这个状态」
+    // 要如实回答这一条，不能靠猜。
+    bool baselineApplied() const { return m_result.baselineApplied; }
 
     QModelIndex index(int row, int column, const QModelIndex &parent = {}) const override
     {
@@ -142,8 +149,19 @@ public:
             case Folder::Status::RightOnly: return QBrush(QColor(dark ? "#99dcb6" : "#236c44"));
             case Folder::Status::Error: case Folder::Status::TypeConflict:
                 return QBrush(QColor(dark ? "#ff9696" : "#aa2424"));
-            default: return {};
+            // 「两侧均改」是同步安全的（改法一致），因此中性偏暖而不是红；
+            // 「冲突」必须由人决定，用最重的红。着色口径本身归 DIR-012。
+            case Folder::Status::BothChanged: return QBrush(QColor(dark ? "#c9b3ff" : "#5a3fa0"));
+            case Folder::Status::Conflict: return QBrush(QColor(dark ? "#ff9ad2" : "#8a1f6a"));
+            case Folder::Status::Same: case Folder::Status::Unknown: break;
             }
+            return {};
+        }
+        // 状态图标（DIR-011 第 4 条）：颜色之外必须同时有图标和文本。
+        // 图标与颜色都只是「辅助」，真正不可省略的是状态列的文字。
+        if (role == Qt::DecorationRole && index.column() == State) {
+            const QString iconKey = Folder::statusIconKey(item->status);
+            return iconKey.isEmpty() ? QVariant() : QVariant(QIcon(iconKey));
         }
         if (role == Qt::DecorationRole && nameColumn && side.exists()) {
             return QApplication::style()->standardIcon(side.kind == Folder::Kind::Directory
@@ -342,10 +360,10 @@ FolderCompareView::FolderCompareView(QWidget *parent) : QWidget(parent)
     m_filter->setObjectName(QStringLiteral("folderStatusFilter"));
     m_filter->addItem(tr("全部条目"), -1);
     m_filter->addItem(tr("差异与未确认"), -2);
-    for (Folder::Status status : {Folder::Status::Same, Folder::Status::Different,
-             Folder::Status::LeftOnly, Folder::Status::RightOnly, Folder::Status::TypeConflict,
-             Folder::Status::Error, Folder::Status::Unknown})
-        m_filter->addItem(Folder::statusLabel(status), int(status));
+    // 铺法直接来自主状态表的顺序，不在界面里另写一份清单：
+    // 另写一份就不会随表增长（新增「两侧均改 / 冲突」时界面会静默落后一格）。
+    for (const auto &row : Folder::mainStatusTable())
+        m_filter->addItem(Folder::statusLabel(row.value), int(row.value));
     displayToolbar->addWidget(m_filter);
     m_hideExcluded = new QCheckBox(tr("隐藏扫描排除项"), this);
     m_hideExcluded->setObjectName(QStringLiteral("folderHideExcluded"));
@@ -388,6 +406,17 @@ FolderCompareView::FolderCompareView(QWidget *parent) : QWidget(parent)
         connect(tree, &QTreeView::activated, this, &FolderCompareView::activate);
         connect(tree->selectionModel(), &QItemSelectionModel::selectionChanged,
                 this, [this] { updateCount(); });
+        // 右键「为什么是这个状态」（DIR-011 第 4 条）。菜单的构造走一个
+        // 独立函数而不是埋在 lambda 里：埋在 lambda 里就没法在不弹菜单的情况下
+        // 验证「菜单里确实有这一项」。
+        tree->setContextMenuPolicy(Qt::CustomContextMenu);
+        connect(tree, &QWidget::customContextMenuRequested, this, [this, tree](const QPoint &pos) {
+            const QModelIndex index = tree->indexAt(pos);
+            if (!index.isValid())
+                return;
+            std::unique_ptr<QMenu> menu(createStatusMenu(index));
+            menu->exec(tree->viewport()->mapToGlobal(pos));
+        });
     }
     for (int column : {FolderTreeModel::RightName, FolderTreeModel::RightSize, FolderTreeModel::RightModified})
         m_leftTree->hideColumn(column);
@@ -430,8 +459,7 @@ FolderCompareView::FolderCompareView(QWidget *parent) : QWidget(parent)
     connect(selectDifferences, &QPushButton::clicked, this, &FolderCompareView::selectAllDifferences);
     connect(resetDisplay, &QPushButton::clicked, this, &FolderCompareView::resetDisplayFilters);
     connect(m_filter, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
-        m_filterModel->setStatusFilter(m_filter->currentData().toInt());
-        updateCount();
+        setStatusFilter(m_filter->currentData().toInt());
     });
     connect(m_hideExcluded, &QCheckBox::toggled, this, [this](bool hide) {
         m_filterModel->setHideExcluded(hide);
@@ -560,6 +588,85 @@ bool FolderCompareView::eventFilter(QObject *watched, QEvent *event)
 QTreeView *FolderCompareView::activeTree() const
 {
     return m_rightActive ? m_rightTree : m_leftTree;
+}
+
+const Folder::Entry *FolderCompareView::entryForIndex(const QModelIndex &index) const
+{
+    if (!index.isValid())
+        return nullptr;
+    return m_model->entry(m_filterModel->mapToSource(index));
+}
+
+void FolderCompareView::setStatusFilter(int status)
+{
+    // -1 / -2 是本类自己的哨兵值；其余只接受主状态表里的取值。
+    // 越界值不能直接喂进筛选：它会让列表一条都不显示，而用户以为自己
+    // 选中的是某个状态——状态整数要经过模型角色与下拉数据两跳，任一跳出错
+    // 都会走到这里，而「一整屏空白」是最难归因的一种失败。
+    const bool sentinel = status == -1 || status == -2;
+    const int target = sentinel || Folder::isKnownStatus(status) ? status : -1;
+    const int row = m_filter->findData(target);
+    if (row >= 0)
+        m_filter->setCurrentIndex(row);
+    m_filterModel->setStatusFilter(target);
+    updateCount();
+}
+
+QString FolderCompareView::statusExplanation(const QModelIndex &index) const
+{
+    const auto *entry = entryForIndex(index);
+    if (!entry)
+        return {};
+    const auto lines = Folder::statusReasonLines(*entry, options(), m_model->baselineApplied());
+    // 三节**恒定**出现，哪怕某一节没有内容。规格要求这一栏「列出各准则、
+    // 覆盖策略与最终结论」；按需省略空小节会让读者分不清「这一节没有内容」
+    // 和「这一节根本没实现」，而排查一个诡异状态时最要紧的恰恰是这一区分。
+    static const QVector<Folder::ReasonKind> sections = {
+        Folder::ReasonKind::Criterion, Folder::ReasonKind::Override,
+        Folder::ReasonKind::Conclusion};
+    QStringList text;
+    for (Folder::ReasonKind kind : sections) {
+        text << QStringLiteral("%1：").arg(Folder::reasonKindLabel(kind));
+        bool any = false;
+        for (const auto &line : lines) {
+            if (line.kind != kind)
+                continue;
+            text << QStringLiteral("    ") + line.text;
+            any = true;
+        }
+        if (!any)
+            text << QStringLiteral("    （无）");
+    }
+    return text.join(QLatin1Char('\n'));
+}
+
+QMenu *FolderCompareView::createStatusMenu(const QModelIndex &index)
+{
+    auto *menu = new QMenu(this);
+    menu->setObjectName(QStringLiteral("folderStatusMenu"));
+    QAction *why = menu->addAction(tr("为什么是这个状态…"));
+    why->setObjectName(QStringLiteral("folderWhyStatusAction"));
+    why->setEnabled(entryForIndex(index) != nullptr);
+    const QModelIndex captured = index;
+    connect(why, &QAction::triggered, this, [this, captured] { showStatusReason(captured); });
+    return menu;
+}
+
+void FolderCompareView::showStatusReason(const QModelIndex &index)
+{
+    const auto *entry = entryForIndex(index);
+    if (!entry)
+        return;
+    // 连点两次右键不留一叠窗口。
+    if (auto *previous = findChild<QMessageBox *>(QStringLiteral("folderStatusReasonBox")))
+        previous->deleteLater();
+    auto *box = new QMessageBox(QMessageBox::NoIcon, tr("为什么是这个状态：%1").arg(entry->relativePath),
+                                statusExplanation(index), QMessageBox::Close, this);
+    box->setObjectName(QStringLiteral("folderStatusReasonBox"));
+    // 刻意不用 exec()：模态对话框会在这里开一个嵌套事件循环，
+    // 右键之后视图只能靠人去点掉——离屏测试与自动化会一起卡在这一行。
+    box->setModal(false);
+    box->show();
 }
 
 QVector<QModelIndex> FolderCompareView::differenceIndexes() const

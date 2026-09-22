@@ -1,5 +1,6 @@
 #include "cliexecution.h"
 #include "foldercompare.h"
+#include "entrystatus.h"
 #include "textdocument.h"
 #include <QDateTime>
 #include <QDir>
@@ -111,16 +112,12 @@ ExecutionResult compareInputs(const Request &r)
                 return errorResult(DataError, QStringLiteral("Unable to compare '%1': %2").arg(entry.relativePath, entry.explanation), r.json);
             if (entry.status != Folder::Status::Same && !excludedSubdirectory) ++differences;
             // Machine status is deliberately independent of translated labels.
-            QString status;
-            switch (entry.status) {
-            case Folder::Status::Same: status = QStringLiteral("equal"); break;
-            case Folder::Status::Different: status = QStringLiteral("different"); break;
-            case Folder::Status::LeftOnly: status = QStringLiteral("left-only"); break;
-            case Folder::Status::RightOnly: status = QStringLiteral("right-only"); break;
-            case Folder::Status::TypeConflict: status = QStringLiteral("type-conflict"); break;
-            case Folder::Status::Unknown: status = QStringLiteral("not-compared"); break;
-            default: break;
-            }
+            // 标识符取自主状态表（唯一的事实来源）：此前这里是一个自带
+            // `default: break;` 的 switch，新增状态会静默输出空串，
+            // 而那正是「机器契约里最贵的一种错」——调用方看到的是合法 JSON。
+            const QString status = Folder::statusIdentifier(entry.status);
+            if (status.isEmpty())
+                return errorResult(DataError, QStringLiteral("Unknown folder status for '%1'.").arg(entry.relativePath), r.json);
             entries.append(QJsonObject{{"path", entry.relativePath}, {"status", status}, {"directory", entry.isDirectory()}});
         }
         if (!compared.complete && r.recursive)

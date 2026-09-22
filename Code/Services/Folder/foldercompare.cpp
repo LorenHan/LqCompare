@@ -1,4 +1,5 @@
 #include "foldercompare.h"
+#include "entrystatus.h"
 #include "maskfilter.h"
 
 #include <QDir>
@@ -22,6 +23,9 @@ QString statusLabel(Status status)
     case Status::TypeConflict: return QObject::tr("类型冲突");
     case Status::Error: return QObject::tr("读取错误");
     case Status::Unknown: return QObject::tr("未知 / 未完整比较");
+    // 这两档只在提供有效基线时出现（DIR-011 第 3 条）。
+    case Status::BothChanged: return QObject::tr("两侧均改");
+    case Status::Conflict: return QObject::tr("冲突");
     }
     return {};
 }
@@ -57,14 +61,17 @@ class Comparison
 {
 public:
     Comparison(const Options &options, const std::atomic_bool *cancelled,
-               const Progress &progress, const Files::FileSystem &fs)
-        : options(options), cancelled(cancelled), progress(progress), fs(fs) {}
+               const Progress &progress, const Files::FileSystem &fs,
+               const BaselineView *baseline)
+        : options(options), cancelled(cancelled), progress(progress), fs(fs), baseline(baseline) {}
 
     Result run(const QString &leftRoot, const QString &rightRoot)
     {
         result.leftRoot = cleanRoot(leftRoot);
         result.rightRoot = cleanRoot(rightRoot);
         result.scanMaskDeclaration = options.scanMaskDeclaration;
+        // 有效基线才置位：界面与报表靠这一位解释「为什么这一条不是两侧均改」。
+        result.baselineApplied = baseline != nullptr && validateBaselineView(*baseline).isEmpty();
         const auto parsed = Filter::MaskFilter::parse(options.scanMaskDeclaration);
         if (!parsed.ok()) {
             result.error = QObject::tr("扫描掩码无效：\n%1").arg(parsed.describeErrors());
@@ -170,6 +177,10 @@ private:
 
     void compareFile(Entry &entry)
     {
+        // 内容证据与主状态一起写：它是「结论建立在什么上」的那一维，
+        // 任何一条早退分支都必须把它落到与环境相符的档上，否则会留下
+        // 「判成相同、证据却是未比较」这种组合（由 statusModelViolations 抓）。
+        entry.contentEvidence = ContentEvidence::NotCompared;
         if (entry.left.info.size != entry.right.info.size) {
             entry.status = Status::Different;
             entry.explanation = QObject::tr("文件大小不同，字节内容必然不同。");
@@ -198,10 +209,12 @@ private:
             qint64 offset = 0;
             bool budgetReached = false;
             entry.status = Status::Same;
+            entry.contentEvidence = ContentEvidence::ByteIdentical;
             entry.explanation = QObject::tr("逐字节比较，内容完全相同。");
             while (!left.atEnd() || !right.atEnd()) {
                 if (stopped()) {
                     entry.status = Status::Unknown;
+                    entry.contentEvidence = ContentEvidence::NotCompared;
                     entry.explanation = QObject::tr("扫描已取消，内容比较不完整。");
                     break;
                 }
@@ -219,6 +232,7 @@ private:
                 const QByteArray b = right.read(want);
                 if (left.error() != QFileDevice::NoError || right.error() != QFileDevice::NoError) {
                     entry.status = Status::Error;
+                    entry.contentEvidence = ContentEvidence::NotCompared;
                     entry.explanation = QObject::tr("读取内容失败：%1 / %2")
                                             .arg(left.errorString(), right.errorString());
                     break;
@@ -228,6 +242,7 @@ private:
                     while (first < qMin(a.size(), b.size()) && a.at(first) == b.at(first))
                         ++first;
                     entry.status = Status::Different;
+                    entry.contentEvidence = ContentEvidence::ByteDifferent;
                     entry.firstDifference = offset + first;
                     entry.explanation = QObject::tr("字节内容不同；首个差异偏移：%1。")
                                             .arg(entry.firstDifference);
@@ -240,8 +255,8 @@ private:
             // 这里复用 Status::Unknown 而不是新加一个 Status::Partial：
             // 主状态分类法（相同/不同/仅左/仅右/错误/未知）归 DIR-011，
             // 而它已经把「未完整比较」定义为 Unknown，并要求「部分比较」放在
-            // **内容证据**这一维上而不是主状态里。本字段 partialComparison
-            // 就是那一维的最小实现；另起一个主状态会在同一件事上留下两套说法。
+            // **内容证据**这一维上而不是主状态里。`ContentEvidence::Partial`
+            // 就是那一维；`Entry::partialComparison()` 只是它的一个视图。
             //
             // 副作用是有意的：run() 已经把 Unknown 映射成 complete=false，
             // 于是开了这个开关的整体结果必然标注为「不完整」——正合
@@ -249,7 +264,7 @@ private:
             // 两种例外不覆盖 explanation：取消（已写自己的原因）与错误。
             if (budgetReached && entry.status == Status::Same) {
                 entry.status = Status::Unknown;
-                entry.partialComparison = true;
+                entry.contentEvidence = ContentEvidence::Partial;
                 entry.explanation = QObject::tr("只比较了前 %1 字节，剩余内容未比较（部分比较；不足以判定相同）。")
                                         .arg(budget);
             }
@@ -257,7 +272,7 @@ private:
         if (!unchanged(entry.left) || !unchanged(entry.right)) {
             entry.status = Status::Error;
             entry.firstDifference = -1;
-            entry.partialComparison = false;
+            entry.contentEvidence = ContentEvidence::NotCompared;
             entry.explanation = QObject::tr("比较期间文件发生变化，请刷新后重试。");
         }
     }
@@ -293,6 +308,10 @@ private:
                                         .arg(Files::errorReport(leftError), Files::errorReport(rightError));
             } else {
                 entry.status = a == b ? Status::Same : Status::Different;
+                // 比较的是链接目标字符串本身，因此这是「字节」档的证据：
+                // 链接没有内容可言，目标字符串相等就是全部事实。
+                entry.contentEvidence = a == b ? ContentEvidence::ByteIdentical
+                                               : ContentEvidence::ByteDifferent;
                 entry.explanation = QObject::tr("比较链接本身的目标路径，未跟随链接：%1 / %2").arg(a, b);
             }
         } else {
@@ -409,6 +428,12 @@ private:
                 entry.status = Status::Unknown;
                 entry.explanation = QObject::tr("对侧目录读取失败，无法确定是否仅在一侧存在。");
             }
+            // 三个维度的补齐顺序是刻意的：先让主状态定稿（上面全部早退分支都跑完），
+            // 再补时间关系与基线细化。基线细化会改写主状态，因此它必须在最后；
+            // 而它又只作用在叶子上（目录的结论由子条目汇总，见第 5 条）。
+            entry.timeRelation = timeRelationFor(entry);
+            if (baseline && !entry.isDirectory())
+                applyBaselineStatus(entry, *baseline);
             const int index = result.entries.size();
             result.entries.append(entry);
             if (progress)
@@ -440,32 +465,21 @@ private:
         }
 
         if (parent >= 0 && !listFailed) {
-            Status aggregate = Status::Same;
-            bool includedDescendants = false;
-            bool excludedDescendants = false;
+            // 父目录的结论走 `aggregateChildren()`——引擎与用例调用的是**同一份**
+            // 实现，否则「固定数据源与准则下父子视图结论一致」这条标准就变成了
+            // 「两套口径碰巧今天结果相同」。
+            QVector<ChildStatus> children;
+            children.reserve(result.entries.size() - childrenStart);
             for (int i = childrenStart; i < result.entries.size(); ++i) {
-                if (!result.entries.at(i).inComparison()) {
-                    excludedDescendants = true;
-                    continue;
-                }
-                includedDescendants = true;
-                const auto status = result.entries.at(i).status;
-                if (status == Status::Error) {
-                    aggregate = Status::Error;
-                    break;
-                }
-                if (status != Status::Same && status != Status::Unknown)
-                    aggregate = Status::Different;
-                else if (status == Status::Unknown && aggregate == Status::Same)
-                    aggregate = Status::Unknown;
+                const auto &child = result.entries.at(i);
+                children.append({child.status, child.inComparison()});
             }
-            result.entries[parent].hasIncludedDescendants = includedDescendants;
+            const ParentAggregate aggregate = aggregateChildren(children, stopped());
+            result.entries[parent].hasIncludedDescendants = aggregate.hasIncludedDescendants;
             // A masked-out directory is still traversed: an include such as
             // src/**/*.cpp can match descendants even if src itself is excluded.
-            if (result.entries[parent].excludedByMask && !includedDescendants)
+            if (result.entries[parent].excludedByMask && !aggregate.hasIncludedDescendants)
                 return;
-            if (stopped() && aggregate == Status::Same)
-                aggregate = Status::Unknown;
             if (result.entries[parent].left.exists() && result.entries[parent].right.exists()
                 && result.entries[parent].left.kind != result.entries[parent].right.kind) {
                 result.entries[parent].status = Status::TypeConflict;
@@ -477,10 +491,11 @@ private:
                     ? Status::LeftOnly : Status::RightOnly;
                 return;
             }
-            result.entries[parent].status = aggregate;
-            result.entries[parent].explanation = aggregate == Status::Same
-                ? excludedDescendants ? QObject::tr("扫描掩码范围内的条目相同；被排除的内容未比较。")
-                                      : QObject::tr("目录中的全部条目相同。")
+            result.entries[parent].status = aggregate.status;
+            result.entries[parent].explanation = aggregate.status == Status::Same
+                ? aggregate.hasExcludedDescendants
+                    ? QObject::tr("扫描掩码范围内的条目相同；被排除的内容未比较。")
+                    : QObject::tr("目录中的全部条目相同。")
                 : QObject::tr("目录状态由已扫描的子条目汇总；详情请展开查看。");
         }
     }
@@ -489,6 +504,7 @@ private:
     const std::atomic_bool *cancelled;
     const Progress &progress;
     const Files::FileSystem &fs;
+    const BaselineView *baseline;
     Filter::MaskFilter mask;
     Result result;
 };
@@ -497,10 +513,10 @@ private:
 
 Result compare(const QString &leftRoot, const QString &rightRoot, const Options &options,
                const std::atomic_bool *cancelled, const Progress &progress,
-               const Files::FileSystem *fileSystem)
+               const Files::FileSystem *fileSystem, const BaselineView *baseline)
 {
     std::unique_ptr<Files::FileSystem> native(fileSystem ? nullptr : Files::createNativeFileSystem());
-    return Comparison(options, cancelled, progress, fileSystem ? *fileSystem : *native)
+    return Comparison(options, cancelled, progress, fileSystem ? *fileSystem : *native, baseline)
         .run(leftRoot, rightRoot);
 }
 

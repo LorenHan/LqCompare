@@ -10,6 +10,7 @@ class QCheckBox;
 class QComboBox;
 class QLabel;
 class QLineEdit;
+class QMenu;
 class QPushButton;
 class QPlainTextEdit;
 class QTreeView;
@@ -33,6 +34,12 @@ public:
     QTreeView *leftTree() const { return m_leftTree; }
     QTreeView *rightTree() const { return m_rightTree; }
     int visibleDifferenceCount() const;
+    // 「为什么是这个状态」的正文（DIR-011 第 4 条）：按「准则 / 覆盖策略 /
+    // 最终结论」分组的逐行说明。做成公开查询而不是只藏在弹出框里，是为了
+    // 让「各准则与最终结论都被列出来了」这件事可以被断言，而不是靠眼睛看。
+    QString statusExplanation(const QModelIndex &index) const;
+    // 右键菜单的构造。同样公开：测试要在不 exec() 的前提下检查菜单内容。
+    QMenu *createStatusMenu(const QModelIndex &index);
 
 public slots:
     void nextDifference();
@@ -41,6 +48,9 @@ public slots:
     void lastDifference();
     void selectAllDifferences();
     void resetDisplayFilters();
+    // 显示筛选。`-1`（全部条目）与 `-2`（差异与未确认）是本类的哨兵值；
+    // 其余只接受主状态表里的取值，越界值退到「全部条目」。
+    void setStatusFilter(int status);
 
 signals:
     void compareRequested(const QString &leftPath, const QString &rightPath);
@@ -58,6 +68,8 @@ private:
     QVector<QModelIndex> differenceIndexes() const;
     void reveal(const QModelIndex &index);
     QTreeView *activeTree() const;
+    const Folder::Entry *entryForIndex(const QModelIndex &index) const;
+    void showStatusReason(const QModelIndex &index);
 
     QLineEdit *m_leftPath;
     QLineEdit *m_rightPath;

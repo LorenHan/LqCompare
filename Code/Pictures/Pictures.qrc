@@ -32,5 +32,14 @@
     <file>ribbon_shortcuts.svg</file>
     <file>ribbon_undo.svg</file>
     <file>ribbon_validate.svg</file>
+    <file>status_both_changed.svg</file>
+    <file>status_conflict.svg</file>
+    <file>status_different.svg</file>
+    <file>status_error.svg</file>
+    <file>status_left_only.svg</file>
+    <file>status_right_only.svg</file>
+    <file>status_same.svg</file>
+    <file>status_type_conflict.svg</file>
+    <file>status_unknown.svg</file>
   </qresource>
 </RCC>
