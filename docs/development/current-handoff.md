@@ -314,6 +314,7 @@ Y Repository checks in 13s
 | `Services/Text/`（替换规则链） | TXT-012 | **部分完成**（第 1、3、4 条已勾；第 2 条只落了服务层那一半——四条规则都能单独开关，且「正则 / 说明」都是服务层的可测数据，**画到界面上的那一半**要等设置页 `OPT-*`，见 §1.32） | **新套件** `Tests/TextRules`（19 个用例函数，**纯 QtCore**） |
 | `Services/Folder/`（二进制逐字节比对） | DIR-008 | **部分完成**（第 1、3、4、5 条已落；第 2 条落了「只比较前 N 字节」的引擎、设置键与视图往返，**缺的是画到界面上的那个输入框**——`FolderCompareView` 目前用与 `maximumDepth` 同样的办法原样保留该值而不显示它。见 §1.33） | `Tests/Folder`（45 个用例函数；DIR-008 那一轮 30 → 35，DIR-011 那一轮 35 → 45，链接 QtWidgets）+ `Tests/Report`（37，36 → 37） |
 | `Services/Folder/`（条目状态模型与判据） | DIR-011 | **已完成**（五条标准全落；新模块 `entrystatus.{h,cpp}`：9 档主状态表 + 内容证据 / 时间关系两维 + 存在性派生视图 + 基线校验与「只在叶子上细化」+ 引擎与用例共用的父子汇总 + 「为什么是这个状态」三节理由 + 不可能组合自检；视图侧新增状态图标列与右键菜单、报表与命令行改用同一张表；9 个中性灰描边状态图标。**一处必须说清的边界**：`RuleIdentical` / `CrcIdentical` 两档已进类型模型、证据表与理由链，但引擎暂时只产得出字节档——规则比对与 CRC 比对分别属 DIR-009 / DIR-007，尚未开工；第 1 条要求的是证据这一维**能区分**这些档，不是要求兄弟条目先落地。见 §1.37） | **新套件** `Tests/EntryStatus`（27 个用例函数，**纯 QtCore**）+ `Tests/Folder`（45，35 → 45） |
+| `Services/Folder/`（递归子目录策略） | DIR-003 | **已完成**（五条标准全落；新模块 `recursionstrategy.{h,cpp}`：三档表 + 表自检、档位 ↔ `Options` 双向映射（反查**按行为**归类，不新增字段）、深度边界唯一一份解释文案、循环符号链接判据与文案；视图侧把两态复选框换成档位下拉 + 深度上限数字框，换档即 `rescanRequested()` → 会话重扫。**一处必须说清的边界**：`applyTierToControls` 原先带一个 `fromUser` 参数，实测是**遮蔽防线**（程序性路径下那条写入恒被覆盖或恒等），删掉它没有任何用例变红，本轮收成「深度控件只有两个写入者」并让变异能单独打红。见 §1.38） | `Tests/Folder`（51 个用例函数，本轮 45 → 51；链接 QtWidgets） |
 | `Services/Files/`（文件系统） | PLAT-002 | **部分完成**（Windows 实现未编译验证） | `Tests/FileSystem`（50 用例） |
 | `Services/Files/`（回收站） | PLAT-003 | **部分完成**（Windows 实现未编译验证） | `Tests/Trash`（35 用例） |
 | `Services/Files/`（名称与 Unicode） | PLAT-007 | **部分完成**（长路径只写在 Windows 侧，未编译验证） | `Tests/PathName`（40 用例 + 1 个仅 Linux 执行） |
@@ -353,7 +354,8 @@ FILT-003 见 [issue #230](https://github.com/LorenHan/LqCompare/issues/230)；
 FILT-002 见 [issue #229](https://github.com/LorenHan/LqCompare/issues/229)；
 FILT-004 见 [issue #231](https://github.com/LorenHan/LqCompare/issues/231)；
 OPT-005 见 [issue #317](https://github.com/LorenHan/LqCompare/issues/317)；
-OPT-010 见 [issue #365](https://github.com/LorenHan/LqCompare/issues/365)。
+OPT-010 见 [issue #365](https://github.com/LorenHan/LqCompare/issues/365)；
+DIR-003 见 [issue #111](https://github.com/LorenHan/LqCompare/issues/111)。
 
 ### 1.2 回收站（PLAT-003）落地到了什么程度
 
@@ -2504,12 +2506,97 @@ issue [#120](https://github.com/LorenHan/LqCompare/issues/120)。五条完成标
 - 状态着色口径（「两侧均改」用中性偏暖、「冲突」用最重的红）**只落了颜色值**，
   系统性的配色规则归 DIR-012。
 
-## 2. 已验证的事实（不用再花时间确认）
+### 1.38 DIR-003 递归子目录策略：三档本来就可达，缺的是「谁在守它」（2026-09-22 15:2x）
+
+**issue #111 的五条标准**：① 三档（根目录直属条目 / 递归深度 1 / 完全递归）；
+② 深度边界上的子目录仍显示且标记未扫描，内部未枚举内容不得计为相同或不存在；
+③ 切换档位触发重新扫描；④ 递归深度可另设上限、达到上限时明确提示；
+⑤ 循环符号链接导致的无限递归被检测并终止，记为错误条目。
+
+**先核对，再动手**（DIR-008 的教训）：`Services/Folder/foldercompare.{h,cpp}` 里的
+`Options::recursive` 与 `Options::maximumDepth` **早就在**，`walk()` 也早就在
+`depth < qBound(0, maximumDepth, …)` 上做递归判定。也就是说第 1、2、4 条在**引擎**里
+是可达的，缺的是：
+
+- 三档**没有名字**，界面里是一个两态复选框 `递归子目录`，用户表达不出「深度 1」；
+- 深度上限**没有任何控件**，只能靠改 `.lqc` 或命令行；
+- 边界上的解释文案**写在引擎里一句 hard-coded 的中文**，用例够不着；
+- 第 5 条**从来没实现**——符号链接在 `classify()` 里只比较目标串。
+
+**新模块 `Code/Services/Folder/recursionstrategy.{h,cpp}`**：
+
+| 能力 | 接口 |
+| --- | --- |
+| 三档表 + 自检 | `recursionTierTable()`、`validateRecursionTierTable(table)`（七项检查） |
+| 档位 ↔ `Options` | `applyRecursionTier()`、`recursionTierOf()`（反查**按行为**归类） |
+| 文案 | `recursionTierLabel/Description()`、`recursionBoundaryExplanation(options)`、`linkCycleExplanation()` |
+| 循环判据 | `linkTargetReentersAncestor(root, relative, target, cs)` |
+| 常量 | `kDirectChildrenDepth = 0`、`kDefaultFullDepth = 128`、`kMaximumRecursionDepth = 256` |
+
+**本轮最值钱的一条设计取舍：不给 `Options` 加第三个字段。** 三档在引擎里已经全部
+可达（`(recursive, maximumDepth)` 的三种组合），再存一个 `RecursionTier` 就会让同一件事
+有两份说法。代价必须说清：`recursive == false` 配 `maximumDepth == 7` 是一个**合法存档值**
+（引擎里与「不递归」同行为），所以反查**按行为归类**（`!recursive || maximumDepth <= 0`
+是第一档），而 `setOptions()` **一个值都不归一化**——否则 `.lqc` 里那个 7 会在一次
+往返里静默变成 0，`savedFolderOptionsRoundTripThroughLqcAndActuallyScan` 会红。
+
+**两处「谁在守它」的追问各换来一条真防线**（这是 §6 那条纪律的直接收益）：
+
+1. **`recursionBoundaryExplanation()` 印的是 `qBound(0, maximumDepth, 256)`，不是原值。**
+   问「谁在守这个 `qBound`」→ 没有任何用例。补一条：传 300 进去，文案必须含 `256`、
+   不含 `300`。不补的话，把 `qBound` 换成原值**全绿**（变异 M10 已验证它会红）。
+2. **`isStrictAncestor()` 里那个 `ancestor.endsWith('/')` 的三元。** 问「谁在守根目录
+   作上级这一支」→ 也没有。补一行纯函数表格行（`root = "/scan"`、`target = "/"`）。
+   不补的话，把前缀写成 `ancestor + '/'`（于是 `/` 变成 `//`）**全绿**（变异 M09 已验证）。
+
+**踩到的另一个坑：`applyTierToControls(tier, bool fromUser)` 是一道遮蔽防线。**
+原来的写法把「深度控件写入」放在 `if (fromUser)` 里，理由是「恢复存档时一个值都不动」。
+听起来是纵深防御，实测**删掉它没有任何用例变红**（变异 M13 第一次跑就是 green）：
+程序性路径（`setOptions()`）里那条写入紧跟着就被 `setValue(qBound(options.maximumDepth))`
+覆盖；而深度控件自己的处理器那条路上，由档位反推出来的深度**恒等于**控件当前值
+（`probe` 的 `recursive` 默认是 `true`，所以 `Full/4 → Full`、`OneLevel/1 → OneLevel`、
+`DirectChildren/0 → DirectChildren`，都是恒等写入）。处置与 TXT-010 那条**同一个判据**：
+「删掉之后没有任何用例变红的分支不是纵深防御，是没人知道的死代码」。收成
+「深度控件只有两个写入者」（用户换档处理器 / `setOptions()`）之后，M13 变红。
+
+**界面侧（`Code/Views/Folder/foldercompareview.{h,cpp}`）**：两态复选框换成按
+`recursionTierTable()` 铺的 `QComboBox`（`objectName = folderRecursionTier`，每项带
+`Qt::ToolTipRole`）+ 一个 `QSpinBox`（`objectName = folderMaximumDepth`，
+`setRange(0, kMaximumRecursionDepth)`）。新增**公开**访问器 `Folder::RecursionTier recursionTier() const`，
+好让「控件选中的」与「实际生效的」两条链都能被断言；新增信号 `rescanRequested()`
+**刻意不带路径参数**（路径的唯一来源是会话）。深度上限只在「完全递归」档下可改，
+不可改时**保留**数值（清成 0 会让「换个档试一下再换回来」把用户设好的上限丢掉）。
+
+**会话侧（`foldercomparesession.cpp`）**：`rescanRequested` → 已打开就 `reload()`，
+未打开就只记档位（不许弹「请选择文件夹」）。两个写 256 的地方换成 `kMaximumRecursionDepth`。
+
+**测试**：`Tests/Folder` **45 → 51 个用例函数**（+6），套件合计 **45 → 51**；
+`run-tests.sh Folder` 合计 **100 passed**（Folder 51 + FolderMerge 31 + FolderMergeView 18）。
+全量 **3730 passed, 0 failed, 2 skipped**（本轮 +6）。
+
+**变异测试：15 处改动，15 处全部被检出**，无一处「删掉之后没有任何用例变红」。其中 4 处
+（M02 / M08 / M12 / M15）额外多红了别的用例，属同一判据被多条用例同时守着（多点覆盖），
+不是漏检——但值得记下来：M08（关掉 `linkTargetReentersAncestor` 的「相等」分支）**没有**
+打红 `linksAreComparedWithoutFollowing`，因为那条用例里 `cycle` 的链接目标是**绝对路径
+恰好是扫描根**，走的是「严格上级」那一支。即两条分支各有各的用例，互不代劳。
+
+**还没做的 / 有意留空的**：
+- **入口没接**：档位下拉只在**文件夹比对页**的工具条上，设置页（`OPT-*`）里还没有
+  对应的设置项——「谁在哪里配置递归策略」属于设置页那一族条目。
+- `Code/Services/Snapshot/snapshot.{h,cpp}` 里另有一份 `maximumDepth = 128` /
+  `qBound(0..256)`，那是**快照捕获**的独立模块，不属于 DIR-003 的射程（本轮**未动**），
+  两处常量目前是两个来源；真要合并得等快照也接入同一张档位表。
+- `entrystatus.cpp` 的 `statusReasonLines()` 里已有一句「递归已关闭：子目录不展开比较。」
+  与 `recursionBoundaryExplanation()` 说同一件事。两者受众不同（一个进「为什么是这个状态」
+  的理由链、一个是条目 explanation），文案也不逐字相同，本轮**未合并**——记在这里，
+  免得下次有人把它当新发现的重复。
+
+
 | 项目 | 结论 | 验证方式 |
 | --- | --- | --- |
 | 构建 | Qt 5.15.2 clang_64 上 qmake + make 通过，产出 `dist/macos/LqCompare.app` | `qmake && make -j8` |
 | 运行 | 主程序离屏启动正常，日志显示「Ribbon 构建完成：10 页 / 45 组 / 169 个按钮」 | `QT_QPA_PLATFORM=offscreen ./LqCompare --log-level info` |
-| 测试（全量） | **3724 passed / 0 failed / 2 skipped，70 个套件**（2026-09-22 14:4x 实测，并行 4 时约 1 分 50 秒，EXIT=0）。3724 = 3688（DIR-008 那一轮，见 §1.33）+ 36（DIR-011 本轮：**新套件** `Tests/EntryStatus` 27 + `Tests/Folder` 35 → 45）；此前的 3688 = 3681（TXT-012 那一轮，见 §1.32）+ 7（`Tests/Folder` 30 → 36、`Tests/Report` 36 → 37），**没有删改任何既有用例**。2 条跳过分别来自 `PathName`（40/0/1）与 `Registry`（61/0/1），都是按平台条件跳过的用例 | `Code/Tests/run-tests.sh` |
+| 测试（全量） | **3730 passed / 0 failed / 2 skipped，70 个套件**（2026-09-22 15:1x 实测，并行 4 时约 2 分 10 秒，EXIT=0）。3730 = 3724（DIR-011 那一轮，见 §1.37）+ 6（DIR-003 本轮：`Tests/Folder` 45 → 51，**没有新增套件**）；3724 = 3688（DIR-008 那一轮，见 §1.33）+ 36（DIR-011：**新套件** `Tests/EntryStatus` 27 + `Tests/Folder` 35 → 45）；此前的 3688 = 3681（TXT-012 那一轮，见 §1.32）+ 7（`Tests/Folder` 30 → 36、`Tests/Report` 36 → 37），**没有删改任何既有用例**。2 条跳过分别来自 `PathName`（40/0/1）与 `Registry`（61/0/1），都是按平台条件跳过的用例 | `Code/Tests/run-tests.sh` |
 | 运行器自己也有红有绿（ENG-003 第 2、3 条，§1.34 从 24 涨到 30，**§1.35 起是 32**） | `run-tests.sh --self-test` 在**临时目录**里现造五个探针套件（通过 / 失败 / 挂死 / 硬退出 / 构建期失败），用同一个运行器跑两遍（并行 4 与串行 1），**32 条断言全绿**；并发度实测**并行峰值 3 / 串行峰值 1**。挂死探针**自己先写一份统计行再挂死**（否则「超时不计入合计」这条边界在 macOS 上根本不可观察，见 §1.35），两遍的 `合计：6 passed, 1 failed, 0 skipped` 逐字相同。**证据在每一遍结束时立刻按遍快照**（`evidence-jobs4.txt` / `evidence-jobs1.txt`）——两遍共用一个构建目录，不快照就只剩第二遍的。探针跑完即删、不进仓库（`LQCOMPARE_SELFTEST_KEEP=1` 可留现场）。自测同时是超时保护与「产物必须先删」两条规则的**唯一可重复证据**（这两条只在失败路径上才看得出来） | `Code/Tests/run-tests.sh --self-test` |
 | ubuntu 腿自测连续 13 次红的真因（§1.35，本轮修，**以后不用再猜**） | 红点固定是 `合计把各套件的用例数累加起来了`。真因不是 `Tests/Folder` 那条崩溃线，而是**累加那一步没排除超时套件**：Linux 的 Qt Test 接住 `SIGTERM` 后会**自己补写一份统计行**再以 `SIGABRT` 收尾（`status=134` + `has_summary=1`），macOS 则直接被 `TERM` 带走、`has_summary=0` —— 于是「有没有统计行」这个判据在两个平台上是**两种形状**，挂死探针的 `1 passed, 1 failed` 在 ubuntu 上被算进了合计。修法：`if [[ ${hs} -eq 1 && ${to} -eq 0 ]]`。连带效应值得记住：自测步骤一红，后面的「运行测试套件」会被 **skipped** ⇒ ubuntu 腿**一个套件都没跑过** | CI run `35612212537`（scratch 分支）的证据块 + 本机 5 处变异 |
 | ENG-003 能反向验证 | **13 处变异 13 处检出、0 处漏检**（其中有**两处第一次是真漏检**：M4「盯错了量」、M13「只比文件名，覆盖写看不出差异」——两处都是**验证本身有洞**而不是实现有 bug，补强断言后才抓住；成因见 §1.24 第四、七节） | 变异测试（结论写在 issue #335 的落地说明里），驱动 `/tmp/lqcompare-mutate-eng003.py`，**不进仓库** |
@@ -2527,6 +2614,9 @@ issue [#120](https://github.com/LorenHan/LqCompare/issues/120)。五条完成标
 | 替换规则的命中走 `Change::Ignored` 而不是 `Equal`（TXT-012，本轮新增） | 两行的键相同、原文不同 → 收尾循环（`textdiff.cpp`）判成 `Change::Ignored`。因此「启用替换规则后两份文件只在被替换的那两行上不同」的结果是 `[Ignored(左2/右2), Equal(左1/右1)]`，而不是「一个大的 `Equal` 块」；`ignoredBlocks` 数的是**块**不是行 | `Tests/TextRules` 的集成用例（断言块的构成而不只是个数） |
 | 「只比较前 N 字节」的三条边界（DIR-008，本轮新增，**以后不用再猜**） | ① 限 == 文件长度 → **完整**（两侧都读完，`budgetReached` 为假）；② 差异在限内 → **完整**（差异已被证明，`partialComparison == false`、`complete == true`）；③ 差异刚好在限外一个字节 → **不完整**（`Unknown` + `partialComparison == true` + `complete == false`），再宽一个字节就必须被发现。字节预算卡在「大小不等」短路**之后**：大小不同时直接判 `Different`，不看预算也不读字节 | `Code/Tests/run-tests.sh Folder`（`partialByteLimitIsExactAcrossBlockBoundaries` 用 `kMaximumCompareBlockSize` 造了跨块夹具，`b[block + 1] = 'b'`） |
 | 二进制逐字节比对**现在真的被守住了**（DIR-008，本轮） | 第 3 条的块大小上界原来**只能靠匹配源码字面量**（常量藏在 `.cpp` 里），第 4 条的偏移量进报表**从来没有被断言过**，第 2 条完全不存在，第 1 条的**「提前」**那一半也没有守（`break` 删掉不红）。本轮把上界提成公开常量、补 6 个用例函数（`Tests/Folder` 30 → 36）+ 1 个（`Tests/Report` 36 → 37）。**15 处变异 15 处检出、0 处漏检**——M1 默认关失效打红 45 项、M2 不夹逼预算打红 4 项、M7 把上界放大到 4 MiB 被 `block <= 1024 * 1024` 当场拦下。**M15（删掉「命中即 `break`」）只打红 `comparisonStopsAtTheFirstDifferingByte()` 这一条**，其余 3687 条纹丝不动——这是「该处此前没有任何用例守着」的量化形式；M5 / M6 打在「文件变化时收回 `partialComparison` / `firstDifference`」上时原本也都是漏检 | `Code/Tests/run-tests.sh Folder` + `/tmp/mutate_dir008.py`（**不进仓库**，相比上一轮多一道「哨兵 `.o` 的 mtime 必须变了」的校验，专防「构建失败被读成漏检」） |
+| 递归子目录三档**现在真的被守住了**（DIR-003，本轮） | 三档在引擎里**早就可达**（`recursive` + `maximumDepth` 的组合），但没有任何名字、没有深度控件、边界文案是引擎里一句 hard-coded 中文、第 5 条（循环符号链接）**从来没实现**。本轮新增 `recursionstrategy.{h,cpp}` 并以**行为归类**反查档位（因此不新增 `Options` 字段，「不递归 + 深度 7」这种合法存档值既不被归一化、也不会显示成错档）。补 **6 个**用例函数（`Tests/Folder` 45 → 51）。**15 处变异 15 处检出、0 处漏检**；其中两处是「先问谁在守它」当场补出来的新防线——**M10**（把 `recursionBoundaryExplanation` 里的 `qBound` 换成原值）与 **M09**（`isStrictAncestor` 的前缀写成 `ancestor + '/'`，于是根目录 `/` 变成 `//`）在补断言之前**全绿**。另有一处**遮蔽防线**被删掉：`applyTierToControls(tier, bool fromUser)` 的 `if (fromUser)` 分支在程序性路径上恒被覆盖或恒等，删掉它没有任何用例变红（M13 第一次跑就是 green），收成「深度控件只有两个写入者」后 M13 变红 | `Code/Tests/run-tests.sh Folder` + `/tmp/dir003_mutation.py`（**不进仓库**） |
+| 递归三档的「不该被改动的」那一半（DIR-003，本轮新增） | ① `setOptions()` **不做归一化**：`recursive == false` 配 `maximumDepth == 7` 原样落到控件上（`savedFolderOptionsRoundTripThroughLqcAndActuallyScan` 钉住）；② 深度上限在非「完全递归」档下**保留数值**而不是清 0（清 0 会让「换个档试一下再换回来」丢掉用户设好的上限）；③ `Full` 档写回**只碰 `recursive`**，仅当上限 `<= 1` 才提到缺省。三条都是「反查按行为归类」的配套约束，缺任何一条都会让存档往返静默丢值 | `Tests/Folder` 的 `recursionTierKeepsAUserSetDepthLimit` / `recursionControlsDriveOptionsAndRescan` |
+| 循环符号链接的两条判据分支各归各的用例（DIR-003，本轮新增） | `linkTargetReentersAncestor` 里「**解析目标 == 链接自身**」与「**解析目标是链接的严格上级**」是两支。变异 M08（关掉相等分支）**没有**打红 `linksAreComparedWithoutFollowing`——那条用例里的链接目标恰好是**扫描根的绝对路径**，走的是「严格上级」那一支。所以两支**互不代劳**：等支由纯函数表的 `{"a/cycle","."}` / `{"cycle","."}` 两行守，「绝对目标是扫描根 / 其上级 / 文件系统根」三行守另一支 | `Tests/Folder` 的 `cyclicLinkTargetsAreDetected`（13 行纯函数表 + 引擎侧真链接） |
 | `tools/check_spec.py` 的「文档条目数」护栏扫的是哪几行（本轮新增） | 它把 `（N 条）` / `（N 条，` / `N 个条目` / `N 条规格` 一律当成「手写的规格条目数」，要求等于 369。**只扫手写文档**（`README.md` / `CHANGELOG.md` / `docs/**`），排除生成物与两份竞品测绘文档。因此**测试用例数绝不能用「（N 条）」这种写法**——用仓库既有的「（N 个用例函数）」。CI **不**跑这五道护栏，所以护栏红了不会让三条腿变红，只会让本机自查失效 | `python3 tools/check_spec.py`（`exit=1` 即红） |
 | 套件崩溃的原因现在看得见（本轮新增） | 每个套件跑完都会留下 `<套件>/stderr.log`：**通过时是 0 字节**（Qt 正常跑完不写 stderr），崩溃时有内容且失败日志里直接贴出末尾 15 行；「stderr 是空的」单独成句（被 SIGKILL/段错误直接带走的情形本身也是信息）。用三个临时探针套件端到端验过（配方见 §1.23）：`ZZProbeStderr`（stderr 有内容 + stdout 不泄漏）、`ZZProbeSilent`（空 stderr）、`ZZProbeBadBuild`（qmake 失败 → 陈旧产物必须已删）。**5 处变异 5 处检出**，其中 M4 连漏两次的原因（真等价 vs 观测点选错）见 §6 | `Code/Tests/run-tests.sh ZZProbe`（探针跑完即删，不进仓库）+ `/tmp/lqcompare-mutate-stderr.py` |
 | 崩溃的套件**现在会自己说死在哪一条用例**（§1.34，本轮新增） | 运行器对「没产出 `Totals:` 行的非超时失败」自动补跑一遍 `-v2`，日志里直接打出「崩在用例：`Class::func()`」+ `-v2` 结尾 20 行；产物里留 `verbose.txt` 与 `verbose.stderr.log`，CI 一并上传。**两个实测前提**：① `-v2` 只写文件（stdout 是 **0 字节**）；② `abort()` 与连 `atexit` 都不跑的 `std::_Exit()` 之下文件里**仍留着最后一行**（探针 `/tmp/vprobe`，不进仓库）⇒ 判定不依赖任何一次 flush。**边界**：只对崩溃补跑（超时与断言失败不补）、不传 `-o results.txt`（诊断不许改写证据） | 探针 `ZZProbeHardExit` + 自测的 6 条新断言；`/tmp/lqcompare-mutate-rerun.py` **7 处变异 7 处检出、0 漏检** |
@@ -2901,14 +2991,16 @@ docs/
 | `f809ff4` | **超时套件的用例数不该计入合计，并让这条边界在每个平台上都被验到**（§1.35，真 bug）：ubuntu 腿的自测**连续 13 次**红在 `合计把各套件的用例数累加起来了`，真因是累加那一步只看「有没有统计行」而没排除超时——**Linux 的 Qt Test 接住 `SIGTERM` 后会自己补写一份统计行再以 `SIGABRT` 收尾**（`status=134`、`has_summary=1`），macOS 则直接被 `TERM` 带走、什么也不写（`has_summary=0`），于是同一条判据在两个平台上是**两种形状**，挂死探针的 `1 passed, 1 failed` 在 ubuntu 上被算进了合计；连带效应是自测红了之后「运行测试套件」被 skip，ubuntu 腿**一个套件都没跑过**。修成 `if [[ ${hs} -eq 1 && ${to} -eq 0 ]]`（与运行器自己打印的承诺一致），并让挂死探针**自己先写一份统计行再挂死**——否则这条边界在 macOS 上恒不可达，**任何本地变异都 redden不了它**。自测 30 → **32 条断言**；**5 处变异 5 处检出、0 处漏检**。**未勾掉任何完成标准** | ENG-003 / ENG-004 |
 | `446bdcc` | **DIR-011 条目状态判定与语义**：新模块 `Services/Folder/entrystatus.{h,cpp}`（9 档主状态表 + 内容证据 8 档 / 时间关系 4 档各一张表，**三张表都带一个把表当参数的校验函数**——自己读内部表的自检喂坏表进去也永远绿；`Entry::partialComparison` 由独立布尔字段改成 `contentEvidence == Partial` 的只读视图，把 DIR-008 留下的两份说法并成一份；存在性做成派生视图；`BaselineView` 要过 `validateBaselineView` 且细化只作用在叶子；`aggregateChildren()` 是引擎与用例**共用**的唯一父子汇总，否则「父子视图结论一致」会退化成「两套口径碰巧今天结果相同」；`statusReasonLines()` 三节 + `statusModelViolations()` 九类不可能组合）+ 视图侧状态图标列 / 按表铺的筛选下拉 / 越界整数回落 / 右键「为什么是这个状态」（三节恒定出现）+ 报表与命令行改用同一张表 + 9 个中性灰描边状态图标。**新套件** `Tests/EntryStatus`（27 个用例函数，纯 QtCore），`Tests/Folder` 35 → 45；全量 3688 → **3724**；**15 处变异 15 处检出**，其中 2 处必须一次改两个地方（同一判据在仓库里写了两遍、两道防线互相遮蔽，见 §6） | DIR-011 |
 
+| `5d672b5` | **DIR-003 递归子目录策略**：新模块 `Services/Folder/recursionstrategy.{h,cpp}`（三档表 + 七项自检 `validateRecursionTierTable(table)`；档位 ↔ `Options` 双向映射——**不新增第三个字段**，`recursionTierOf()` 按**行为**归类（`!recursive \|\| maximumDepth <= 0` 是第一档），`applyRecursionTier()` 在 `Full` 档只碰 `recursive`、仅当上限 `<= 1` 才提到缺省；深度边界上**唯一一份**解释文案 `recursionBoundaryExplanation()`，印的是 `qBound` 之后**实际生效**的上限；循环符号链接判据 `linkTargetReentersAncestor()`（解析目标 == 链接自身**或**是它的严格上级，相对目标按**链接所在目录**解析，指向兄弟 / 下级子树的刻意放过）+ 文案 `linkCycleExplanation()`，引擎在符号链接分支记 `Status::Error` + `ContentEvidence::NotCompared`）+ 视图侧两态复选框 → 按表铺的档位下拉（`folderRecursionTier`，带 `ToolTipRole`）+ 深度数字框（`folderMaximumDepth`，只在完全递归档可改）+ `rescanRequested()` 信号（**刻意不带路径参数**）→ 会话 `reload()`。**顺带删掉一处遮蔽防线**：`applyTierToControls(tier, bool fromUser)` 的 `if (fromUser)` 在程序性路径上恒被覆盖或恒等，删掉它没有任何用例变红（M13 第一次跑就是 green）。`Tests/Folder` 45 → 51；全量 3724 → **3730**；**15 处变异 15 处检出**，其中两处（越界深度必须印 256、根目录作上级不能拼成 `//`）是补断言之后才抓得住的，见 §1.38 与 §6 | DIR-003 |
+
 > 这张表里**从 `a693346` 起的行**都由**紧随其后的纯文档提交**补写提交号，原因见下——
 > 会因为 `--amend` 每次都改变提交号而永远对不上。
 > 补写链**只到代码提交为止**：补写这些行的那个纯文档提交自身不再上表，否则每轮都会多出一行
 > 永远指不到自己的记录（`bf05600`、TXT-003 与 TXT-008 那两轮的补写提交都是这样未被记录的）。
-> 本轮走的是同一条路：`446bdcc` 一条代码提交先定稿，再由紧随其后的纯文档提交
+> 本轮走的是同一条路：`5d672b5` 一条代码提交先定稿，再由紧随其后的纯文档提交
 > 把它的提交号写进本表（**那个补写提交自己不上表**，理由同上）。
-> 更早一轮的写法同此：`3417c59` / `f809ff4` 两条代码提交先定稿，再由紧随其后的纯文档提交
-> 把它们的提交号与 §1.35 / §1.36 / §4.0.14 一起写进本文档。
+> 更早一轮的写法同此：`446bdcc` 一条代码提交先定稿，再由紧随其后的纯文档提交
+> 把它的提交号与 §1.37 / §4.0.15 一起写进本文档。
 
 远端：369 个 issue 全部创建，标签为 `需求 / 待实现 / <模块> / <优先级>`，
 其中 P0 59 条。反查入口是 `docs/github/prd-issues.json`。
@@ -3887,6 +3979,35 @@ Windows 腿 26 个套件、`actions/*@v4` → v5）都还没有结论或还没�
 `timeRelationFor()` / `compareTimes()` 已经就位，缺的只是「比较时间戳」这个开关
 与容差的界面入口——那条的完成标准里第 4、5 条要的是列与排序，属界面，可独立闭环。
 
+### 4.0.16 本轮（2026-09-22 15:2x）：DIR-003 递归子目录策略（issue #111，**已完成**）
+
+新模块 `Code/Services/Folder/recursionstrategy.{h,cpp}` + `Tests/Folder` 45 → 51，
+无新套件，详见 §1.38。要点：
+
+- **不新增 `Options` 字段**：三档（仅根目录直属条目 / 递归深度 1 / 完全递归）在引擎里
+  已经全部可达（`recursive` + `maximumDepth` 的组合），反查**按行为归类**、
+  `setOptions()` **不做归一化**——`.lqc` 里「不递归 + 深度 7」这种合法存档值原样保住。
+- 档位表 + 七项自检（顺序 / 标识符机器可读 / 唯一 / 「不递归当且仅当上限为 0」/
+  递归档范围 / **反查穷尽性** / `Full` 缺省值必须等于 `Options::maximumDepth` 初值）。
+- 深度边界上的解释**只有一份实现**，印的是**实际生效**的上限（`qBound` 之后那个数）。
+- 循环符号链接判据：解析目标 == 链接自身 **或** 是它的**严格**上级；相对目标按
+  **链接所在目录**解析；指向兄弟 / 下级子树的链接刻意放过。
+- 视图：两态复选框 → 档位下拉（按表铺，`objectName = folderRecursionTier`）+
+  深度数字框（`folderMaximumDepth`，只在「完全递归」档可改）；换档 `rescanRequested()`
+  → 会话重扫（未开始的会话只记档位、不弹提示）。
+- **删掉一处遮蔽防线**：`applyTierToControls(tier, bool fromUser)` 的 `if (fromUser)`
+  在程序性路径上恒被覆盖或恒等，删掉它没有任何用例变红 → 收成「深度控件只有两个写入者」。
+- **验证**：全量 **3730 / 0 / 2**（70 个套件）、五道护栏全绿（`check_winapi` 扫 347 个源
+  文件 / `check_spec` 369 条 P0 59 / 41 个图标 / 16 个 shell 脚本）、主程序 0 warning +
+  `codesign -f -s -` + 离屏启动正常、**15 处变异 15 处检出**（两处是补断言之后才抓得住的，
+  见 §1.38 与 §6）。
+
+**下一轮从哪里接**：`DIR-003` 划掉之后，`DIR-002` ~ `DIR-012` 还剩八条
+（`DIR-002` / `004` / `005` / `006` / `007` / `009` / `010` / `012`）。注意 **`DIR-005`
+（时间戳判定与容差）现在只需要界面入口**——`timeRelationFor()` / `compareTimes()`
+已在 `entrystatus` 里，第 1、2、3 条要的是 `Options` 新字段 + 设置入口，第 4、5 条要视图列。
+`Tests/Folder` 的 ubuntu 崩溃线（§1.36）**仍未修好**，它一直排在第一位。
+
 ### 4.1 选下一步之前先看这一节：哪些条目被谁阻塞
 
 **为什么单独写一节**：本项目的推进方式是「一次闭环一条 issue」，
@@ -4290,3 +4411,5 @@ Windows 腿 26 个套件、`actions/*@v4` → v5）都还没有结论或还没�
 | **「两遍跑同一个目录」的验证：证据必须按遍当场快照** | 自测的两遍（并行 4 / 串行 1）共用同一个构建目录，第二遍会把第一遍的 `results.txt` / `stderr.log` / `results.xml` 全部覆盖。于是「第一遍到底产出了什么」在断言阶段**已经拿不到了**——上一轮那条偶发红点（`ZZProbePass` 的产物与合计对不上）就是因为这个而无法定位 | 每一遍结束**立刻**快照证据到 `evidence-jobs4.txt` / `evidence-jobs1.txt`（合计行、运行器自己报的异常清单、每个探针的 `summary.env` 字段与 `Totals:` 行），断言与排查都读快照。**验证「两遍的差异」之前，先确保两遍的产物不会互相覆盖** |
 | **`QTEST_APPLESS_MAIN` 的探针里没有 application 对象** | 新挂死探针第一版要读命令行参数（`-o <file>,junitxml` 的落点），于是 `QCoreApplication::arguments()` 报 `Please instantiate the QApplication object first`，**三个探针同时失败**、一个字都没写出来 | 改用 `QTEST_MAIN`（本工程 `QT -= gui`，于是创建的是 `QCoreApplication`）。**探针一旦要用 `QCoreApplication` 的任何静态设施，`QTEST_APPLESS_MAIN` 就不成立** |
 | **同一判据在仓库里写了两遍时，单摘一道是「等价变异」，会被误报成漏检** | DIR-011 的变异 M1 只摘掉 `applyBaselineStatus()` 的 `entry.isDirectory()`，全套 27 条用例**一条都不红**——因为 `sideDiffersFromAncestor()` 里还有一道 `side.kind == Kind::Directory → return false`。M4 同形：只摘掉 `timeRelationFor()` 的 `exists()` 判断也不红，因为 `compareTimes()` 开头还有一道 `!isValid()`（不存在的侧时间戳本来就是无效的）。两道防线互相遮蔽，**任何一道单独消失都不可观察** | 这**不是缺口**（行为确实被守着），但报「漏检」会把方向指反。判据：**先问「这个行为是不是有第二个实现处」，有就一次改多处**——驱动因此支持 `edits` 列表（M1 / M4 各改 2 处，改完立刻红）。**代价要一并记下**：两道防线里有一道是冗余的，冗余本身有维护成本；这里选择保留，因为两道守的不是同一件事（一道守「目录不适用基线」，一道守「目录自身的时间戳不算内容证据」），只是在这一条上重合 |
+| **参数化的分支（`bool fromUser` 之类）在「程序性路径」上可能恒被覆盖或恒等，于是它是一段没人知道的死代码** | DIR-003 的 `applyTierToControls(tier, bool fromUser)` 把「写深度控件」放在 `if (fromUser)` 里，注释写着「恢复存档时一个值都不动」，读起来是纵深防御。实测把它整段删掉**没有任何用例变红**（变异 M13 第一次跑就是 green）：程序性路径（`setOptions()`）里那条写入紧跟着就被 `setValue(qBound(options.maximumDepth, …))` 覆盖；而深度控件自己的处理器那条路上，由档位反推出来的深度**恒等于**控件当前值（`probe.recursive` 默认 `true`，于是 `Full/4→Full`、`OneLevel/1→OneLevel`、`DirectChildren/0→DirectChildren` 都是恒等写入） | 与上一条**同一个判据**：**一个「删掉之后没有任何用例变红」的分支不是纵深防御，是没人知道的死代码**。这里的处置与 TXT-010 那条一致——**收敛成一个写入点**（深度控件的写入者只剩「用户换档处理器」与 `setOptions()`），收敛之后 M13 立刻变红。**参数化布尔开关尤其要怀疑**：它把「两种调用者」编码进同一个函数，而其中一种调用者的行为往往恰好是恒等或恒被覆盖 |
+| **「实现里明明正确处理了某个边界，但没有任何输入会走到那条路」——这类正确需要一行表格才能守住** | DIR-003 里两处都中了这个形态。① `recursionBoundaryExplanation()` 印的是 `qBound(0, maximumDepth, kMaximumRecursionDepth)` 而不是原值，写得对；但所有既有输入都是界内值（2 / 4 / 128），把 `qBound` 换成原值**全绿**。② `isStrictAncestor()` 里 `ancestor.endsWith('/') ? ancestor : ancestor + '/'` 这个三元专门处理「上级是文件系统根」——不写它的话 `/` 会拼成 `//`；但表格里所有用例的上级都是普通目录，把三元换成 `ancestor + '/'` 也**全绿** | 判据还是那句「**把那个词反过来写，谁变红？**」，只是这次要问的是「**这条处理有没有输入能走到**」。补法极便宜：纯函数各加一行——文案那条断言「传 300 进去必须含 256、不含 300」；路径那条加一行 `{"cycle", "/", true}`。加完之后两处变异（M10 / M09）双双被检出。**一般规律：凡是「写了条件分支来兜一个少见输入」的地方，那个输入必须在表格里出现一次**，否则那条分支是替未来的某个 bug 提前写好的注释，而不是防线（DIR-003） |
