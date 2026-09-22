@@ -1,6 +1,7 @@
 #include "foldercomparesession.h"
 #include "foldercompareview.h"
 #include "maskfilter.h"
+#include "recursionstrategy.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -23,8 +24,11 @@ QString optionsError(const Folder::Options &options)
     if (options.nameCaseSensitivity != Qt::CaseSensitive
         && options.nameCaseSensitivity != Qt::CaseInsensitive)
         return QObject::tr("名称大小写策略无效；必须选择区分或忽略大小写。");
-    if (options.maximumDepth < 0 || options.maximumDepth > 256)
-        return QObject::tr("递归深度上限必须是 0 到 256 之间的整数。");
+    // 上界与引擎的 `qBound`、界面控件的取值范围共用同一个常量：三处各写一个
+    // 256 就是三份说法，改一处漏两处。
+    if (options.maximumDepth < 0 || options.maximumDepth > Folder::kMaximumRecursionDepth)
+        return QObject::tr("递归深度上限必须是 0 到 %1 之间的整数。")
+            .arg(Folder::kMaximumRecursionDepth);
     if (options.compareFirstBytes < 0)
         return QObject::tr("「只比较前 N 字节」必须是 0（关闭）或正整数。");
     const auto parsed = Filter::MaskFilter::parse(options.scanMaskDeclaration);
@@ -91,8 +95,8 @@ QString settingsOptions(SessionSettings *settings, Folder::Options *options)
                       int(Qt::CaseSensitive), &caseValue))
         return invalid(caseKey);
     restored.nameCaseSensitivity = static_cast<Qt::CaseSensitivity>(caseValue);
-    if (!exactInteger(settings->value(depthKey, restored.maximumDepth), 0, 256,
-                      &restored.maximumDepth))
+    if (!exactInteger(settings->value(depthKey, restored.maximumDepth), 0,
+                      Folder::kMaximumRecursionDepth, &restored.maximumDepth))
         return invalid(depthKey);
     if (!exactByteCount(settings->value(bytesKey, restored.compareFirstBytes),
                         &restored.compareFirstBytes))
@@ -243,6 +247,20 @@ QWidget *FolderCompareSession::createView(QWidget *parent)
             updateStatus(error);
     });
     connect(view, &FolderCompareView::cancelRequested, this, &FolderCompareSession::cancelScan);
+    // 递归档位与深度上限改动即重扫（DIR-003 第 3 条）。
+    //
+    // 这里刻意**不带路径参数**：会话的 `m_leftPath` / `m_rightPath` 才是来源的
+    // 唯一权威，视图里还没提交的路径编辑不该因为换了个档就被当成来源
+    // （`unsubmittedPathEditsDoNotChangeSessionSource` 钉住这条）。
+    // 还没开始过比较的会话（`Closed`）只把新档位记在视图上，不报错——
+    // 用户一般在选路径之前就会先调档位，那时弹一句「请选择文件夹」纯属噪音。
+    connect(view, &FolderCompareView::rescanRequested, this, [this] {
+        if (state() != State::Open)
+            return;
+        QString error;
+        if (!reload(&error))
+            updateStatus(error);
+    });
     connect(view, &FolderCompareView::compareFilesRequested, this, &FolderCompareSession::compareFilesRequested);
     connect(view, &FolderCompareView::navigationStatus, this, &FolderCompareSession::updateStatus);
     return view;

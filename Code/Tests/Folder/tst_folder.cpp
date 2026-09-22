@@ -21,6 +21,7 @@
 #include <QPushButton>
 #include <QSet>
 #include <QSignalSpy>
+#include <QSpinBox>
 #include <QTemporaryDir>
 #include <QTreeView>
 
@@ -477,13 +478,414 @@ private slots:
         QVERIFY(QFile::link(pair.right, pair.right + "/cycle"));
         QVERIFY(QFile::link(pair.temp.path() + "/missing", pair.left + "/dangling"));
         QVERIFY(QFile::link(pair.temp.path() + "/missing", pair.right + "/dangling"));
+        // 指向自己所在子树内部的链接：不是循环，两侧目标串相同，照常判相同。
+        QVERIFY(QFile::link(QStringLiteral("sub/nested"), pair.left + "/inward"));
+        QVERIFY(QFile::link(QStringLiteral("sub/nested"), pair.right + "/inward"));
         const auto result = Folder::compare(pair.left, pair.right);
-        QCOMPARE(result.entries.size(), 2);
+        QCOMPARE(result.entries.size(), 3);
+        // 「不跟随」是终止递归的**手段**，DIR-003 第 5 条要的是「检测到并记下来」：
+        // 指向扫描根（也就是自己的上级）的链接必须是一条错误条目，而不是一条
+        // 看起来只是「目标字符串不同」的普通条目。少了这一档，用户得到的信息是
+        // 「这两个链接不一样」，而真正的事实是「这棵树没被走下去」。
         QCOMPARE(findEntry(result, "cycle")->left.kind, Folder::Kind::SymbolicLink);
-        QCOMPARE(findEntry(result, "cycle")->status, Folder::Status::Different);
-        QCOMPARE(findEntry(result, "dangling")->status, Folder::Status::Same);
+        QCOMPARE(findEntry(result, "cycle")->status, Folder::Status::Error);
+        QVERIFY2(findEntry(result, "cycle")->explanation.contains(QStringLiteral("循环符号链接")),
+                 qPrintable(findEntry(result, "cycle")->explanation));
         QVERIFY(!findEntry(result, "cycle")->canCompareAsText());
+        QCOMPARE(findEntry(result, "dangling")->status, Folder::Status::Same);
+        QCOMPARE(findEntry(result, "inward")->status, Folder::Status::Same);
+        // 结构性错误必须自报：整次比较不能声称自己完整。
+        QVERIFY(!result.complete);
 #endif
+    }
+
+    void recursionTierTableAndMappingStayConsistent()
+    {
+        // 表自检在真表上必须是空的；而自检本身不是恒真的——下面拿五份**故意
+        // 写坏**的表跑同一个判定，逐份断言它报出了对应的那一条。
+        const QStringList problems =
+            Folder::validateRecursionTierTable(Folder::recursionTierTable());
+        QVERIFY2(problems.isEmpty(), qPrintable(problems.join(QStringLiteral(" / "))));
+        QCOMPARE(Folder::recursionTierTable().size(), 3);
+        // 「完全递归」档的缺省上限与 `Options::maximumDepth` 的初值必须是同一个数。
+        // 漂开之后「缺省选项」反查出来的档位就不是完全递归，下拉一打开就显示错档，
+        // 而运行期没有任何别的现象。两个头文件互相 include，`static_assert` 写不出来。
+        QCOMPARE(Folder::kDefaultFullDepth, Folder::Options().maximumDepth);
+        QCOMPARE(Folder::recursionTierIdentifier(Folder::recursionTierOf(Folder::Options())),
+                 Folder::recursionTierIdentifier(Folder::RecursionTier::Full));
+
+        // 规格点名的三档各写回什么字段。
+        Folder::Options options;
+        Folder::applyRecursionTier(options, Folder::RecursionTier::DirectChildren);
+        QVERIFY(!options.recursive);
+        QCOMPARE(options.maximumDepth, 0);
+        Folder::applyRecursionTier(options, Folder::RecursionTier::OneLevel);
+        QVERIFY(options.recursive);
+        QCOMPARE(options.maximumDepth, 1);
+        Folder::applyRecursionTier(options, Folder::RecursionTier::Full);
+        QVERIFY(options.recursive);
+        QCOMPARE(options.maximumDepth, Folder::kDefaultFullDepth);
+
+        // 档位 → 字段 → 档位：三档各自往返，标识符与文案都不是空的。
+        for (const auto &row : Folder::recursionTierTable()) {
+            Folder::Options roundTrip;
+            Folder::applyRecursionTier(roundTrip, row.tier);
+            QCOMPARE(Folder::recursionTierIdentifier(Folder::recursionTierOf(roundTrip)),
+                     Folder::recursionTierIdentifier(row.tier));
+            QCOMPARE(Folder::recursionTierRecurses(row.tier), row.recursive);
+            QVERIFY(!Folder::recursionTierIdentifier(row.tier).isEmpty());
+            QVERIFY(!Folder::recursionTierLabel(row.tier).isEmpty());
+            QVERIFY(!Folder::recursionTierDescription(row.tier).isEmpty());
+        }
+
+        const auto describe = [](const QVector<Folder::RecursionTierDescriptor> &table) {
+            return Folder::validateRecursionTierTable(table).join(QStringLiteral(" / "));
+        };
+        // ① 只写一边：「不递归」却给了非零上限，档位与行为就成了两份说法。
+        auto contradictory = Folder::recursionTierTable();
+        contradictory[0].recursive = true;
+        QVERIFY2(describe(contradictory).contains(QStringLiteral("互相矛盾")),
+                 qPrintable(describe(contradictory)));
+        // ② 标识符不是机器可读的（它要进设置文件、日志与命令行）。
+        auto humanReadable = Folder::recursionTierTable();
+        humanReadable[1].identifier = "One Level";
+        QVERIFY2(describe(humanReadable).contains(QStringLiteral("机器可读")),
+                 qPrintable(describe(humanReadable)));
+        // ③ 标识符重复：两档在设置里写成同一个词，读回来只能落到一个上。
+        auto duplicated = Folder::recursionTierTable();
+        duplicated[1].identifier = duplicated[0].identifier;
+        QVERIFY2(describe(duplicated).contains(QStringLiteral("重复")),
+                 qPrintable(describe(duplicated)));
+        // ④ 顺序不是规格顺序（界面下拉直接按表铺，顺序就是契约）。
+        auto reversed = Folder::recursionTierTable();
+        std::swap(reversed[0], reversed[2]);
+        QVERIFY2(describe(reversed).contains(QStringLiteral("应为档位")),
+                 qPrintable(describe(reversed)));
+        // ⑤ 表改了、反查没跟上：这一档在下拉里永远选不中，报的是反查那一条。
+        auto unreachable = Folder::recursionTierTable();
+        unreachable[1].depthLimit = 4;
+        QVERIFY2(describe(unreachable).contains(QStringLiteral("反查回档位")),
+                 qPrintable(describe(unreachable)));
+        // ⑥ 少了「完全递归」的缺省值被改小：缺省选项再也反查不回这一档。
+        auto drifted = Folder::recursionTierTable();
+        drifted[2].depthLimit = 2;
+        QVERIFY2(describe(drifted).contains(QStringLiteral("缺省深度上限")),
+                 qPrintable(describe(drifted)));
+        // ⑦ 少一行本身就是问题（三档是规格的完整集合）。
+        auto shortened = Folder::recursionTierTable();
+        shortened.removeLast();
+        QVERIFY2(describe(shortened).contains(QStringLiteral("应有")),
+                 qPrintable(describe(shortened)));
+    }
+
+    void recursionTierKeepsAUserSetDepthLimit()
+    {
+        // 反查按**行为**归类，不按字段原值：`recursive == false` 配 `maximumDepth == 7`
+        // 在引擎里与「不递归」完全同行为，因此报第一档。这一点必须写实——
+        // 照原值报成「完全递归」时，下拉一打开就显示错档。
+        Folder::Options stored;
+        stored.recursive = false;
+        stored.maximumDepth = 7;
+        QCOMPARE(Folder::recursionTierIdentifier(Folder::recursionTierOf(stored)),
+                 Folder::recursionTierIdentifier(Folder::RecursionTier::DirectChildren));
+        // 而档位写回时**只碰 recursive**：那个 7 是用户另设的，必须留着，
+        // 否则 `.lqc` 存档里的「不递归 + 深度 7」会在一次档位往返里静默变成 0。
+        Folder::applyRecursionTier(stored, Folder::RecursionTier::Full);
+        QVERIFY(stored.recursive);
+        QCOMPARE(stored.maximumDepth, 7);
+        QCOMPARE(Folder::recursionTierIdentifier(Folder::recursionTierOf(stored)),
+                 Folder::recursionTierIdentifier(Folder::RecursionTier::Full));
+
+        // `recursive == true` 配 `maximumDepth == 0` 与「不递归」同行为，也是第一档。
+        Folder::Options zeroDepth;
+        zeroDepth.recursive = true;
+        zeroDepth.maximumDepth = 0;
+        QCOMPARE(Folder::recursionTierIdentifier(Folder::recursionTierOf(zeroDepth)),
+                 Folder::recursionTierIdentifier(Folder::RecursionTier::DirectChildren));
+        // 与档位自相矛盾的值（<= 1）才被提到缺省：少了这一提，一次
+        // 「设定为完全递归」的操作会得到「不递归」，而两处都在说自己是完全递归。
+        Folder::applyRecursionTier(zeroDepth, Folder::RecursionTier::Full);
+        QCOMPARE(zeroDepth.maximumDepth, Folder::kDefaultFullDepth);
+        QCOMPARE(Folder::recursionTierIdentifier(Folder::recursionTierOf(zeroDepth)),
+                 Folder::recursionTierIdentifier(Folder::RecursionTier::Full));
+    }
+
+    void eachRecursionTierScansExactlyItsOwnDepth()
+    {
+        Pair pair;
+        QVERIFY(writeFile(pair.left + "/top.txt", "top"));
+        QVERIFY(writeFile(pair.right + "/top.txt", "top"));
+        QVERIFY(writeFile(pair.left + "/a/inner.txt", "inner"));
+        QVERIFY(writeFile(pair.right + "/a/inner.txt", "inner"));
+        QVERIFY(writeFile(pair.left + "/a/b/c/leaf.txt", "leaf"));
+        QVERIFY(writeFile(pair.right + "/a/b/c/leaf.txt", "leaf"));
+
+        const auto paths = [](const Folder::Result &result) {
+            QStringList names;
+            for (const auto &entry : result.entries)
+                names << entry.relativePath;
+            return names;
+        };
+        const auto optionsFor = [](Folder::RecursionTier tier) {
+            Folder::Options options;
+            Folder::applyRecursionTier(options, tier);
+            return options;
+        };
+
+        // 三档**真的**扫了不同的东西——不是只在显示上不同。逐条列出条目集合，
+        // 因为「最外层少了三个」这种差异在只断言个数时是看不出来的。
+        const auto direct = Folder::compare(pair.left, pair.right,
+                                            optionsFor(Folder::RecursionTier::DirectChildren));
+        QCOMPARE(paths(direct), QStringList({QStringLiteral("a"), QStringLiteral("top.txt")}));
+        const auto oneLevel = Folder::compare(pair.left, pair.right,
+                                              optionsFor(Folder::RecursionTier::OneLevel));
+        QCOMPARE(paths(oneLevel),
+                 QStringList({QStringLiteral("a"), QStringLiteral("a/b"),
+                              QStringLiteral("a/inner.txt"), QStringLiteral("top.txt")}));
+        const auto full = Folder::compare(pair.left, pair.right,
+                                          optionsFor(Folder::RecursionTier::Full));
+        QCOMPARE(paths(full),
+                 QStringList({QStringLiteral("a"), QStringLiteral("a/b"), QStringLiteral("a/b/c"),
+                              QStringLiteral("a/b/c/leaf.txt"), QStringLiteral("a/inner.txt"),
+                              QStringLiteral("top.txt")}));
+        QVERIFY(full.complete);
+
+        // 深度边界上的子目录节点仍然**在结果里**，状态既不可能是「相同」，
+        // 也不可能是两个「只有一侧存在」——它两侧都在，只是没被枚举。
+        const Folder::Entry *boundary = findEntry(direct, QStringLiteral("a"));
+        QVERIFY(boundary);
+        QCOMPARE(boundary->status, Folder::Status::Unknown);
+        QVERIFY(boundary->left.exists());
+        QVERIFY(boundary->right.exists());
+        QVERIFY(boundary->isDirectory());
+        QVERIFY(boundary->status != Folder::Status::Same);
+        QVERIFY(boundary->status != Folder::Status::LeftOnly);
+        QVERIFY(boundary->status != Folder::Status::RightOnly);
+        // 第 1 条那条「不得仅改变显示」的另一半：没被枚举的层次不许出现在结果里。
+        QVERIFY(!findEntry(direct, QStringLiteral("a/inner.txt")));
+        QVERIFY(!findEntry(oneLevel, QStringLiteral("a/b/c/leaf.txt")));
+        QVERIFY(!oneLevel.complete);
+        QVERIFY(!direct.complete);
+
+        // 第 2、4 条的「明确提示」：档位不递归时点出是**档位**决定的；
+        // 达到上限时印出**实际生效的上限数值**。文案只有一份实现，
+        // 引擎写的必须逐字等于共用函数给的那一句。
+        QVERIFY2(boundary->explanation
+                     == Folder::recursionBoundaryExplanation(optionsFor(Folder::RecursionTier::DirectChildren)),
+                 qPrintable(boundary->explanation));
+        QVERIFY2(boundary->explanation.contains(
+                     Folder::recursionTierLabel(Folder::RecursionTier::DirectChildren)),
+                 qPrintable(boundary->explanation));
+        Folder::Options shallow;
+        shallow.recursive = true;
+        shallow.maximumDepth = 2;
+        const auto limited = Folder::compare(pair.left, pair.right, shallow);
+        const Folder::Entry *depthBoundary = findEntry(limited, QStringLiteral("a/b/c"));
+        QVERIFY(depthBoundary);
+        QCOMPARE(depthBoundary->status, Folder::Status::Unknown);
+        QCOMPARE(depthBoundary->explanation, Folder::recursionBoundaryExplanation(shallow));
+        QVERIFY2(depthBoundary->explanation.contains(QStringLiteral("2")),
+                 qPrintable(depthBoundary->explanation));
+        QVERIFY(!limited.complete);
+
+        // 提示里印的必须是**实际生效**的上限：调用方传一个超界值（300）时引擎夹到
+        // 256，照着原值印会让提示里的数字与真正拦住扫描的那个数不是一回事。
+        Folder::Options over;
+        over.recursive = true;
+        over.maximumDepth = 300;
+        const QString overText = Folder::recursionBoundaryExplanation(over);
+        QVERIFY2(overText.contains(QString::number(Folder::kMaximumRecursionDepth)),
+                 qPrintable(overText));
+        QVERIFY2(!overText.contains(QStringLiteral("300")), qPrintable(overText));
+
+        // 完全递归下同一个节点真的被读过了：状态变成「相同」而不是「未知」。
+        QCOMPARE(findEntry(full, QStringLiteral("a/b/c"))->status, Folder::Status::Same);
+    }
+
+    void cyclicLinkTargetsAreDetected()
+    {
+        // 纯函数先按形状铺一张表：判据是「解析出来的目标等于链接自身、
+        // 或是链接自身的严格上级」——它同时覆盖三种表面不同、实质相同的情形。
+        const QString root = QStringLiteral("/scan/root");
+        struct Row
+        {
+            const char *relative;
+            const char *target;
+            bool cycle;
+            const char *why;
+        };
+        const QVector<Row> rows = {
+            {"a/cycle", ".", true, "指向自己所在目录"},
+            {"cycle", ".", true, "根目录下的链接指向自己所在目录"},
+            {"a/cycle", "..", true, "指向上级（扫描根）"},
+            {"a/b/cycle", "../..", true, "指向上两级"},
+            {"a/cycle", "../..", true, "越过扫描根：根的上级仍然含这个链接"},
+            {"a/cycle", "self/../cycle", true, "绕一圈回到自己"},
+            {"cycle", "/scan/root", true, "绝对目标恰好是扫描根"},
+            {"cycle", "/scan", true, "绝对目标是扫描根的上级"},
+            {"cycle", "/", true, "绝对目标恰好是文件系统根"},
+            {"a/cycle", "sibling", false, "指向自己的下级子树，不构成环"},
+            {"a/cycle", "../sibling", false, "指向兄弟子树，不构成环"},
+            {"a/cycle", "/elsewhere", false, "指向扫描范围之外且互不相干的位置"},
+            {"a/cycle", "missing", false, "悬空目标"},
+            {"a/cycle", "", false, "空目标（读不到就是读不到，不是循环）"},
+        };
+        QStringList failures;
+        for (const auto &row : rows) {
+            const bool detected = Folder::linkTargetReentersAncestor(
+                root, QString::fromUtf8(row.relative), QString::fromUtf8(row.target));
+            if (detected != row.cycle) {
+                failures << QStringLiteral("%1 → 「%2」（%3）：期望 %4，实际 %5")
+                                .arg(QString::fromUtf8(row.relative),
+                                     QString::fromUtf8(row.target),
+                                     QString::fromUtf8(row.why),
+                                     row.cycle ? QStringLiteral("循环") : QStringLiteral("不循环"),
+                                     detected ? QStringLiteral("循环") : QStringLiteral("不循环"));
+            }
+        }
+        QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QStringLiteral("\n"))));
+
+#ifndef Q_OS_WIN
+        // 引擎侧：真的造出循环链接，它必须是一条**错误条目**，而且整次比较
+        // 自报不完整；而指向自己下级子树的链接必须照常比较、不被误伤。
+        Pair pair;
+        // 先把目录建出来，再建链接：`QFile::link` 不会替你造父目录。
+        QVERIFY(writeFile(pair.left + "/a/keep.txt", "keep"));
+        QVERIFY(writeFile(pair.right + "/a/keep.txt", "keep"));
+        QVERIFY(writeFile(pair.left + "/sub/file.txt", "x"));
+        QVERIFY(writeFile(pair.right + "/sub/file.txt", "x"));
+        QVERIFY(QFile::link(QStringLiteral("."), pair.left + "/self"));
+        QVERIFY(QFile::link(QStringLiteral("."), pair.right + "/self"));
+        QVERIFY(QFile::link(QStringLiteral(".."), pair.left + "/a/up"));
+        QVERIFY(QFile::link(QStringLiteral(".."), pair.right + "/a/up"));
+        QVERIFY(QFile::link(QStringLiteral("sub"), pair.left + "/down"));
+        QVERIFY(QFile::link(QStringLiteral("sub"), pair.right + "/down"));
+        const auto result = Folder::compare(pair.left, pair.right);
+        QCOMPARE(findEntry(result, "self")->status, Folder::Status::Error);
+        QCOMPARE(findEntry(result, "a/up")->status, Folder::Status::Error);
+        QVERIFY2(findEntry(result, "a/up")->explanation
+                     == Folder::linkCycleExplanation(QStringLiteral("a/up"), QStringLiteral("..")),
+                 qPrintable(findEntry(result, "a/up")->explanation));
+        QCOMPARE(findEntry(result, "down")->status, Folder::Status::Same);
+        QCOMPARE(findEntry(result, "a/keep.txt")->status, Folder::Status::Same);
+        QVERIFY(!result.complete);
+#endif
+    }
+
+    void recursionControlsDriveOptionsAndRescan()
+    {
+        FolderCompareView view;
+        auto *tier = view.findChild<QComboBox *>(QStringLiteral("folderRecursionTier"));
+        auto *depth = view.findChild<QSpinBox *>(QStringLiteral("folderMaximumDepth"));
+        QVERIFY(tier);
+        QVERIFY(depth);
+
+        // 第一条链（用户看到的）：下拉的铺法**逐行**来自档位表，顺序也一样。
+        // 只钉「选中项 → options() 的值」时，「把下拉铺法改成倒序」这种变异全绿
+        // （handoff §6 里记过这条），所以显示这一侧必须单独断言。
+        QCOMPARE(tier->count(), Folder::recursionTierTable().size());
+        for (int i = 0; i < tier->count(); ++i) {
+            const auto &row = Folder::recursionTierTable().at(i);
+            QCOMPARE(tier->itemText(i), Folder::recursionTierLabel(row.tier));
+            QCOMPARE(tier->itemData(i).toInt(), int(row.tier));
+            QCOMPARE(tier->itemData(i, Qt::ToolTipRole).toString(),
+                     Folder::recursionTierDescription(row.tier));
+        }
+        // 出厂状态就是缺省选项，不是另写一份初值。
+        QCOMPARE(Folder::recursionTierIdentifier(view.recursionTier()),
+                 Folder::recursionTierIdentifier(Folder::recursionTierOf(Folder::Options())));
+        QCOMPARE(depth->value(), Folder::Options().maximumDepth);
+        QVERIFY(depth->isEnabled());
+
+        // 第二条链（实际生效的）：档位选「递归深度 1」时那两个字段就是它。
+        tier->setCurrentIndex(tier->findData(int(Folder::RecursionTier::OneLevel)));
+        QVERIFY(view.options().recursive);
+        QCOMPARE(view.options().maximumDepth, 1);
+        QCOMPARE(depth->value(), 1);
+        QVERIFY(!depth->isEnabled()); // 这一档的深度由档位决定，不该可改
+        tier->setCurrentIndex(tier->findData(int(Folder::RecursionTier::DirectChildren)));
+        QVERIFY(!view.options().recursive);
+        QCOMPARE(view.options().maximumDepth, 0);
+
+        // 第三条链（第 3 条）：换档必须**请求重扫**，而不是只改显示。
+        QSignalSpy rescan(&view, &FolderCompareView::rescanRequested);
+        tier->setCurrentIndex(tier->findData(int(Folder::RecursionTier::Full)));
+        QCOMPARE(rescan.count(), 1);
+        QCOMPARE(depth->value(), Folder::kDefaultFullDepth);
+        QVERIFY(depth->isEnabled());
+        // 第 4 条：完全递归档下深度上限可另设，改它也请求重扫。
+        depth->setValue(4);
+        QCOMPARE(rescan.count(), 2);
+        QVERIFY(view.options().recursive);
+        QCOMPARE(view.options().maximumDepth, 4);
+        // 把上限改成 1：档位自己落到「递归深度 1」——在引擎里那正是它的含义。
+        // 于是控件与档位永远不会同时给出两个互相矛盾的档。
+        depth->setValue(1);
+        QCOMPARE(rescan.count(), 3);
+        QCOMPARE(Folder::recursionTierIdentifier(view.recursionTier()),
+                 Folder::recursionTierIdentifier(Folder::RecursionTier::OneLevel));
+        QVERIFY(view.options().recursive);
+        QCOMPARE(view.options().maximumDepth, 1);
+
+        // 程序性回填**不得**触发重扫：恢复存档或会话里改设置时用户什么都没做。
+        Folder::Options restored;
+        restored.recursive = false;
+        restored.maximumDepth = 7;
+        view.setOptions(restored);
+        QCOMPARE(rescan.count(), 3);
+        // 而「不递归 + 深度 7」必须原样留在 options() 里：归一化成 0 会让
+        // `.lqc` 存档的往返静默丢值（`savedFolderOptionsRoundTripThroughLqcAndActuallyScan`
+        // 断言的就是这件事，这里把它单独钉一次，好让失败点直接指到档位重写）。
+        QVERIFY(!view.options().recursive);
+        QCOMPARE(view.options().maximumDepth, 7);
+        QCOMPARE(Folder::recursionTierIdentifier(view.recursionTier()),
+                 Folder::recursionTierIdentifier(Folder::RecursionTier::DirectChildren));
+    }
+
+    void switchingTheRecursionTierRescansWithTheNewScope()
+    {
+        Pair pair;
+        QVERIFY(writeFile(pair.left + "/a/b/deep.txt", "same"));
+        QVERIFY(writeFile(pair.right + "/a/b/deep.txt", "same"));
+        FolderCompareSession session(pair.left, pair.right);
+        std::unique_ptr<QWidget> widget(session.createWidget());
+        auto *tier = session.view()->findChild<QComboBox *>(QStringLiteral("folderRecursionTier"));
+        QVERIFY(tier);
+        // 出厂档位是「完全递归」，先降到「仅根目录直属条目」再开始比较——
+        // 该信号在 `Closed` 的会话上只是把档位记下来，不会开始扫描。
+        tier->setCurrentIndex(tier->findData(int(Folder::RecursionTier::DirectChildren)));
+        QSignalSpy finished(&session, &FolderCompareSession::scanFinished);
+        QVERIFY(session.open());
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 5000);
+        QVERIFY(!findEntry(session.result(), QStringLiteral("a/b/deep.txt")));
+        QCOMPARE(findEntry(session.result(), QStringLiteral("a"))->status, Folder::Status::Unknown);
+        QVERIFY(!session.result().complete);
+
+        // 换档改的是**扫描范围**，因此会话必须用新范围重扫一次——不能只改显示。
+        tier->setCurrentIndex(tier->findData(int(Folder::RecursionTier::Full)));
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 2, 5000);
+        QVERIFY(findEntry(session.result(), QStringLiteral("a/b/deep.txt")));
+        QCOMPARE(findEntry(session.result(), QStringLiteral("a/b/deep.txt"))->status,
+                 Folder::Status::Same);
+        QCOMPARE(findEntry(session.result(), QStringLiteral("a"))->status, Folder::Status::Same);
+        QVERIFY(session.result().complete);
+        // 重扫用的是新档位，且新档位已被写进会话设置（下一次打开也是它）。
+        QVERIFY(session.comparisonOptions().recursive);
+        QCOMPARE(session.comparisonOptions().maximumDepth, Folder::kDefaultFullDepth);
+
+        // 档位在**没有开始过比较**的会话里只是被记下来：不该弹一句「请选择文件夹」。
+        FolderCompareSession pending;
+        std::unique_ptr<QWidget> pendingWidget(pending.createWidget());
+        auto *pendingTier = pending.view()->findChild<QComboBox *>(QStringLiteral("folderRecursionTier"));
+        QVERIFY(pendingTier);
+        QSignalSpy pendingFinished(&pending, &FolderCompareSession::scanFinished);
+        pendingTier->setCurrentIndex(pendingTier->findData(int(Folder::RecursionTier::OneLevel)));
+        QCoreApplication::processEvents();
+        QCOMPARE(pendingFinished.count(), 0);
+        // 档位被记下来了，但既没开始扫描，也没弹一句「请选择文件夹」。
+        QCOMPARE(Folder::recursionTierIdentifier(pending.view()->recursionTier()),
+                 Folder::recursionTierIdentifier(Folder::RecursionTier::OneLevel));
+        QVERIFY(!pending.statusText().contains(QStringLiteral("请选择")));
     }
 
     void cancellationRetainsCompletedEntries()

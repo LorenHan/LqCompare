@@ -1,6 +1,7 @@
 #include "foldercompare.h"
 #include "entrystatus.h"
 #include "maskfilter.h"
+#include "recursionstrategy.h"
 
 #include <QDir>
 #include <QElapsedTimer>
@@ -306,6 +307,19 @@ private:
                 entry.status = Status::Error;
                 entry.explanation = QObject::tr("无法读取符号链接：%1 %2")
                                         .arg(Files::errorReport(leftError), Files::errorReport(rightError));
+            } else if (linkTargetReentersAncestor(result.leftRoot, entry.relativePath, a,
+                                                  fs.caseSensitivity())
+                       || linkTargetReentersAncestor(result.rightRoot, entry.relativePath, b,
+                                                     fs.caseSensitivity())) {
+                // DIR-003 第 5 条：循环符号链接。跟随它会回到自己的上级（或扫描根），
+                // 因此它不是一条「内容相同 / 不同」的普通条目——把它记成错误条目，
+                // 用户才知道这棵子树没有被走下去。两侧都查：循环只可能出现在一侧，
+                // 而这一条标准要的是「检测到并终止」，不是「两侧都循环才算」。
+                entry.status = Status::Error;
+                entry.contentEvidence = ContentEvidence::NotCompared;
+                entry.explanation = linkCycleExplanation(entry.relativePath,
+                                                         a == b ? a
+                                                                : a + QStringLiteral(" / ") + b);
             } else {
                 entry.status = a == b ? Status::Same : Status::Different;
                 // 比较的是链接目标字符串本身，因此这是「字节」档的证据：
@@ -442,16 +456,17 @@ private:
                 && entry.status != Status::Error
                 && it.value().ambiguity.isEmpty()
                 && !(listFailed && (!entry.left.exists() || !entry.right.exists()))) {
-                if (options.recursive && depth < qBound(0, options.maximumDepth, 256)) {
+                if (options.recursive && depth < qBound(0, options.maximumDepth, kMaximumRecursionDepth)) {
                     walk(entry.left.kind == Kind::Directory ? entry.left.info.path : QString(),
                          entry.right.kind == Kind::Directory ? entry.right.info.path : QString(),
                          entry.relativePath, depth + 1, index);
                 } else {
                     if (entry.left.exists() && entry.right.exists())
                         result.entries[index].status = Status::Unknown;
-                    result.entries[index].explanation = options.recursive
-                        ? QObject::tr("已达到递归深度上限，目录内容未比较。")
-                        : QObject::tr("子目录未展开比较。");
+                    // 边界节点的解释只有一份实现（第 2、4 条）：档位不递归时是**档位**
+                    // 决定的，达到上限时把实际生效的上限数值印出来。判定与文案同源，
+                    // 免得界面与报表各抄一句、三份迟早分叉。
+                    result.entries[index].explanation = recursionBoundaryExplanation(options);
                     if (options.recursive) {
                         // A masked directory at the safety limit may contain
                         // included descendants we could not inspect.

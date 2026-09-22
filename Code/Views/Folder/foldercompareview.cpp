@@ -23,7 +23,9 @@
 #include <QPlainTextEdit>
 #include <QScrollBar>
 #include <QSet>
+#include <QSignalBlocker>
 #include <QSortFilterProxyModel>
+#include <QSpinBox>
 #include <QSplitter>
 #include <QStyle>
 #include <QTreeView>
@@ -297,9 +299,22 @@ FolderCompareView::FolderCompareView(QWidget *parent) : QWidget(parent)
     m_cancel->setObjectName(QStringLiteral("folderCancel"));
     m_cancel->setEnabled(false);
     toolbar->addWidget(m_cancel);
-    m_recursive = new QCheckBox(tr("递归子目录"), this);
-    m_recursive->setChecked(true);
-    toolbar->addWidget(m_recursive);
+    auto *recursionLabel = new QLabel(tr("子目录："), this);
+    toolbar->addWidget(recursionLabel);
+    m_recursionTier = new QComboBox(this);
+    m_recursionTier->setObjectName(QStringLiteral("folderRecursionTier"));
+    // 铺法直接来自档位表的顺序，不在界面里另写一份清单：
+    // 另写一份就不会随表增长（新增档位时下拉会静默落后一格）。
+    for (const auto &row : Folder::recursionTierTable()) {
+        m_recursionTier->addItem(Folder::recursionTierLabel(row.tier), int(row.tier));
+        m_recursionTier->setItemData(m_recursionTier->count() - 1,
+                                     Folder::recursionTierDescription(row.tier), Qt::ToolTipRole);
+    }
+    toolbar->addWidget(m_recursionTier);
+    m_maximumDepth = new QSpinBox(this);
+    m_maximumDepth->setObjectName(QStringLiteral("folderMaximumDepth"));
+    m_maximumDepth->setRange(0, Folder::kMaximumRecursionDepth);
+    toolbar->addWidget(m_maximumDepth);
     m_content = new QCheckBox(tr("逐字节比较内容"), this);
     m_content->setChecked(true);
     m_content->setToolTip(tr("关闭后仅比较大小；大小相同会显示未知。符号链接只比较链接本身。"));
@@ -473,6 +488,67 @@ FolderCompareView::FolderCompareView(QWidget *parent) : QWidget(parent)
     connect(expand, &QPushButton::clicked, m_rightTree, &QTreeView::expandAll);
     connect(collapse, &QPushButton::clicked, m_leftTree, &QTreeView::collapseAll);
     connect(collapse, &QPushButton::clicked, m_rightTree, &QTreeView::collapseAll);
+
+    // 递归子目录策略（DIR-003 第 3 条）：两个控件都改**扫描范围**，所以改动即重扫。
+    // 「重扫」而不是「对已扫描结果重新过滤」：档位与深度上限决定哪些条目进结果，
+    // 不在结果里的条目根本没有行可以过滤。
+    connect(m_recursionTier, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
+        const Folder::RecursionTier tier = recursionTier();
+        applyTierToControls(tier);
+        // 深度控件在用户换档时由这里写一次（它在程序性路径上的写入者是
+        // `setOptions()`）。写的是**档位决定的深度**，不是控件里那个旧值：
+        // 切到「递归深度 1」之后控件上还留着 128 的话，显示与实际生效的
+        // 就是两回事了。这里必须挡住信号——写值本身不是一次用户操作。
+        Folder::Options staged;
+        staged.maximumDepth = m_maximumDepth->value();
+        Folder::applyRecursionTier(staged, tier);
+        {
+            const QSignalBlocker blocker(m_maximumDepth);
+            m_maximumDepth->setValue(staged.maximumDepth);
+        }
+        emit rescanRequested();
+    });
+    // 深度上限是档位的细化：把它改成 0 或 1，档位自己落到前两档——在引擎里
+    // 那正是它们的含义。于是控件与档位永远不会同时给出两个互相矛盾的档。
+    connect(m_maximumDepth, qOverload<int>(&QSpinBox::valueChanged), this, [this](int depth) {
+        Folder::Options probe;
+        probe.maximumDepth = depth;
+        applyTierToControls(Folder::recursionTierOf(probe));
+        emit rescanRequested();
+    });
+    // 出厂状态就是缺省选项：控件初值不各写一个字面量，免得默认值长出第二份。
+    setOptions(Folder::Options());
+}
+
+Folder::RecursionTier FolderCompareView::recursionTier() const
+{
+    const int raw = m_recursionTier->currentData().toInt();
+    for (const auto &row : Folder::recursionTierTable()) {
+        if (int(row.tier) == raw)
+            return row.tier;
+    }
+    // 下拉里认不出来的整数不能直接 `static_cast`：越界值会凭空造出第四种档位，
+    // 而它进了 `options()` 之后没有任何一处认得出来。
+    return Folder::recursionTierOf(Folder::Options());
+}
+
+void FolderCompareView::applyTierToControls(Folder::RecursionTier tier)
+{
+    const int index = m_recursionTier->findData(int(tier));
+    // 程序性回填不发信号：否则 setOptions()（恢复存档、会话里改设置）会顺带
+    // 触发一次重扫，而那时用户什么都没做。
+    // 这里**不碰深度控件**：档位对深度的写入只发生在用户换档那一条路上，
+    // 放在这里就会在恢复存档时把「不递归 + 深度 7」改写成 0。
+    const QSignalBlocker blocker(m_recursionTier);
+    m_recursionTier->setCurrentIndex(index < 0 ? 0 : index);
+    // 深度上限只在「完全递归」档下可改：另两档的深度就是档位本身。
+    // 不可改时**保留**已有数值并在提示里说明它本次不生效——把它清成 0 会让
+    // 「换个档试一下再换回来」把用户设好的上限悄悄丢掉。
+    const bool editable = tier == Folder::RecursionTier::Full;
+    m_maximumDepth->setEnabled(editable);
+    m_maximumDepth->setToolTip(editable
+        ? tr("递归深度上限：超过该层数的目录只显示、不展开。改成 0 或 1 时档位会随之落到前两档。")
+        : tr("当前档位已经决定了递归深度；此值会被保留，但本次比较不生效。"));
 }
 
 void FolderCompareView::setPaths(const QString &leftPath, const QString &rightPath)
@@ -538,9 +614,12 @@ void FolderCompareView::setStatus(const QString &status)
 Folder::Options FolderCompareView::options() const
 {
     Folder::Options options;
-    options.recursive = m_recursive->isChecked();
+    // 一个字段一个写入者：`recursive` 归档位下拉，`maximumDepth` 归深度控件。
+    // 档位**不在这里**碰深度——用户另设的上限必须活过一次档位往返，否则
+    // `.lqc` 存档里的「不递归 + 深度 7」会被静默改写成 0。
+    options.recursive = Folder::recursionTierRecurses(recursionTier());
+    options.maximumDepth = m_maximumDepth->value();
     options.compareContent = m_content->isChecked();
-    options.maximumDepth = m_maximumDepth;
     options.scanMaskDeclaration = m_scanMask->toPlainText();
     options.nameCaseSensitivity = m_caseSensitive->isChecked() ? Qt::CaseSensitive : Qt::CaseInsensitive;
     options.compareFirstBytes = m_compareFirstBytes;
@@ -549,9 +628,17 @@ Folder::Options FolderCompareView::options() const
 
 void FolderCompareView::setOptions(const Folder::Options &options)
 {
-    m_recursive->setChecked(options.recursive);
+    // 程序性回填，**不做任何归一化**：恢复存档时「不递归 + 深度 7」必须原样落到
+    // 控件上（`savedFolderOptionsRoundTripThroughLqcAndActuallyScan` 钉住这一点）；
+    // 归一化会把它改写成 0，用户的设置就静默丢了。
+    applyTierToControls(Folder::recursionTierOf(options));
+    {
+        // 落盘值来自会话文件（可能被人手改过），越界整数直接喂进控件会被它
+        // 悄悄夹到边界上；这里按引擎的上界显式夹一次，让「值被改掉」发生在一处。
+        const QSignalBlocker blocker(m_maximumDepth);
+        m_maximumDepth->setValue(qBound(0, options.maximumDepth, Folder::kMaximumRecursionDepth));
+    }
     m_content->setChecked(options.compareContent);
-    m_maximumDepth = options.maximumDepth;
     m_scanMask->setPlainText(options.scanMaskDeclaration);
     m_caseSensitive->setChecked(options.nameCaseSensitivity == Qt::CaseSensitive);
     m_compareFirstBytes = options.compareFirstBytes;

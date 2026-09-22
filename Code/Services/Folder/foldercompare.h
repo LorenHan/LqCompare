@@ -131,6 +131,14 @@ struct Entry
 
 struct Options
 {
+    // `recursive` 与 `maximumDepth` 这两个字段就是 DIR-003 的「三档递归策略」
+    // 的全部存储——「不进子目录 / 只进一层 / 一路递归」都由它们的组合表达，
+    // **不另存第三个字段**。档位到这两个字段的映射（以及反查）在
+    // `recursionstrategy.h`；要改三档的行为请改那一处，不要在这里加字段。
+    //
+    // 注意 `maximumDepth` 的初值必须等于 `recursionstrategy.h` 的
+    // `kDefaultFullDepth`，否则「缺省选项」反查出来的档位不是「完全递归」，
+    // 界面下拉一打开就显示错档。`Tests/Folder` 有一条用例钉住这个等式。
     bool recursive = true;
     bool compareContent = true;
     int maximumDepth = 128;
