@@ -10,6 +10,8 @@
 #include "tablecomparesession.h"
 #include "textcomparesession.h"
 #include "textcompareview.h"
+#include "vcsavailability.h"
+#include "vcsbackend.h"
 
 #include <QAction>
 #include <QApplication>
@@ -451,6 +453,59 @@ private slots:
         QVERIFY(area->closeAllSessions());
         QCoreApplication::processEvents();
         QVERIFY(!icon->isVisible());
+    }
+
+    // VCS-001 第 3 条：主窗口把「这台机器上能不能做 VCS 查询」落到版本控制命令上。
+    void vcsCommandsFollowTheInjectedBackendAvailability()
+    {
+        MainWindow window;
+        auto &registry = CommandRegistry::instance();
+        // 哪些命令属于版本控制，判据取自**服务层那一个**（不是在这里另写一遍前缀比较）：
+        // 界面上「哪些命令要跟着置灰」与这里「哪些命令该被检查」必须是同一句话，
+        // 否则两边各写一份，改了一处另一处会静默地不再覆盖新加的命令。
+        const auto vcsIds = [&registry] {
+            QStringList ids;
+            for (const Command &command : registry.all())
+                if (Vcs::isVcsActionId(command.actionId)) ids << command.id;
+            return ids;
+        };
+        const QStringList ids = vcsIds();
+        // 空清单会让下面每一条断言都平凡成立——而「一条都没覆盖到」正是降级没接上
+        // 的样子（护栏自己也会变成绿灯）。所以先把清单本身钉住。
+        QCOMPARE(ids.size(), 3);
+        QVERIFY(ids.contains(QStringLiteral("vcs.diffhead")));
+        QVERIFY(ids.contains(QStringLiteral("vcs.tworevisions")));
+        QVERIFY(ids.contains(QStringLiteral("vcs.log")));
+
+        // ① 没有 git：全部置灰，且原因里说得出「未检测到 git」。
+        QTemporaryDir temporary;
+        QVERIFY(temporary.isValid());
+        Vcs::Options missingOptions;
+        missingOptions.gitExecutable = temporary.filePath(QStringLiteral("no-such-git/git"));
+        Vcs::GitBackend missing(missingOptions);
+        window.setVcsBackend(&missing);
+        for (const QString &id : vcsIds()) {
+            const Command *command = registry.find(id);
+            QVERIFY2(command, qPrintable(id));
+            QVERIFY2(!command->enabled, qPrintable(id));
+            QVERIFY2(command->disabledReason.contains(QStringLiteral("未检测到 git")),
+                     qPrintable(command->disabledReason));
+        }
+
+        // ② 传 nullptr 回到构造时自建的那个后端。期望值由**同一个后端重新算一遍**
+        //    得到，因此这条断言在有没有 git 的机器上都是真的，而不是「本机恰好有」。
+        window.setVcsBackend(nullptr);
+        Vcs::GitBackend sameAsBuiltIn;
+        const auto expected = Vcs::probeAvailability(&sameAsBuiltIn);
+        for (const QString &id : vcsIds()) {
+            const Command *command = registry.find(id);
+            QVERIFY2(command, qPrintable(id));
+            QCOMPARE(command->enabled, expected.available);
+            QCOMPARE(command->disabledReason, expected.reason);
+        }
+        // 本机有 git 时必须真的是「可用」，否则「可用」这一支就只在假后端上成立。
+        QCOMPARE(registry.find(QStringLiteral("vcs.diffhead"))->enabled,
+                 !QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty());
     }
 };
 

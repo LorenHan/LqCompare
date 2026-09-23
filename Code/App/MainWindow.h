@@ -6,6 +6,7 @@
 #include "sessiontype.h"
 #include <QHash>
 #include <QJsonArray>
+#include <memory>
 
 class QDockWidget;
 class QLabel;
@@ -18,6 +19,7 @@ class CompareSession;
 namespace Cli { struct Request; }
 namespace Settings { class OptionsRepository; }
 namespace Options { class OptionsRuntime; }
+namespace Vcs { class Backend; }
 
 ///
 /// \brief The MainWindow class
@@ -38,6 +40,17 @@ public:
     bool openSessionFile(const QString &path);
     bool openRequest(const Cli::Request &request, const QString &workingDirectory = QString());
     void setOptions(Settings::OptionsRepository *repository, Options::OptionsRuntime *runtime);
+    /// 注入版本控制后端（VCS-001 第 3 条）。
+    ///
+    /// 主窗口用它回答一个问题：「这台机器上现在能不能做版本控制查询」，答不出来就把
+    /// 版本控制命令全部置灰。后端本身**不归主窗口所有**（`VcsView` 自己造一个），
+    /// 这里只要能问一句可用性。传 `nullptr` 表示恢复构造时自建的那个。
+    ///
+    /// 注入之后**立即**重新探测并刷新命令状态，调用方不必再找别的方式触发一次刷新；
+    /// 生产路径上这条入口对应的是「用户配好了 git 路径」那类设置变更。
+    ///
+    /// 生命周期由调用方负责：传进来的对象必须活到主窗口析构或下一次注入。
+    void setVcsBackend(const Vcs::Backend *backend);
     void configureWaitMode(bool merge);
 
 protected:
@@ -73,6 +86,12 @@ private:
     /// 按当前会话的 `CompareSession::StatusSeverity` 开关状态栏警告图标（TXT-010）。
     void updateStatusWarning(CompareSession *session);
     void updateCommandState();
+    /// 重新探测版本控制后端并按结论刷新命令状态（VCS-001 第 3 条）。
+    ///
+    /// 探测结果落在 `m_vcsAvailability*` 上，`updateCommandState()` 只**读**它。
+    /// 分开的理由是代价：探测要问后端（真实后端上是一次 `findExecutable`，
+    /// 换后端时可能更贵），而 `updateCommandState()` 每切一次会话就会被调用一次。
+    void refreshVcsAvailability();
     void appendOutput(const QString &line);
 
     /// 新建一个会话并返回其标签索引；标题按序号自动生成。
@@ -91,6 +110,14 @@ private:
     SessionTypeRegistry m_sessionTypes;
     Settings::OptionsRepository *m_options = nullptr;
     Options::OptionsRuntime *m_optionsRuntime = nullptr;
+    // 自建的版本控制后端（`setVcsBackend(nullptr)` 之后回到它）。
+    // 用 `unique_ptr` 是为了让头文件只需前置声明 `Vcs::Backend`。
+    std::unique_ptr<Vcs::Backend> m_ownedVcsBackend;
+    /// 当前用于回答「VCS 能不能用」的后端；不持有所有权，见 `setVcsBackend()`。
+    const Vcs::Backend *m_vcsBackend = nullptr;
+    /// 上一次探测的结论。`updateCommandState()` 只读这两个字段，不重新探测。
+    bool m_vcsAvailable = true;
+    QString m_vcsReason;
     bool m_waitMode = false;
     bool m_waitForMerge = false;
     bool m_waitMergeSaved = false;

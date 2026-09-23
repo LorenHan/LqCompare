@@ -1,4 +1,5 @@
 #include "vcsbackend.h"
+#include "vcsavailability.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -13,6 +14,7 @@
 #include <QTest>
 #include <QThread>
 #include <cstdio>
+#include <functional>
 #include <thread>
 
 using namespace LqCompare::Vcs;
@@ -141,6 +143,44 @@ public:
     }
 };
 
+// 记账替身：`RepositoryCache` 的判据全是「问了几次」「答案属于谁」，
+// 所以它要能逐次计数、按需给不同结论，并允许在探测**进行中**回调一次
+// （用它造「探测期间后端被换掉」那种形状）。
+class ScriptedBackend final : public Backend {
+public:
+    Error availability() const override { return availabilityError; }
+    Result<Repository> detectRepo(const QString &path, const std::atomic_bool *) const override
+    {
+        ++detectCalls;
+        lastPath = path;
+        if (duringDetect)
+            duringDetect();
+        if (tailError.isError())
+            return {{}, tailError};
+        Repository repo;
+        repo.root = rootOverride.isEmpty() ? path : rootOverride;
+        repo.gitDirectory = repo.root + QStringLiteral("/.git");
+        repo.commonDirectory = repo.gitDirectory;
+        repo.hasHead = true;
+        repo.head = QString(40, 'a');
+        repo.branch = QStringLiteral("main");
+        return {repo, {}};
+    }
+    Result<QVector<Change>> status(const Repository &, const std::atomic_bool *) const override { return {}; }
+    Result<QVector<Commit>> log(const Repository &, const LogQuery &, const std::atomic_bool *) const override { return {}; }
+    Result<QVector<Change>> diff(const Repository &, const Source &, const Source &, const std::atomic_bool *) const override { return {}; }
+    Result<QVector<Reference>> references(const Repository &, const std::atomic_bool *) const override { return {}; }
+    Result<QVector<BlameLine>> blame(const Repository &, const QString &, const QString &, const std::atomic_bool *) const override { return {}; }
+    Result<FileContent> catFile(const Repository &, const QString &, const Source &, const std::atomic_bool *) const override { return {}; }
+
+    mutable int detectCalls = 0;
+    mutable QString lastPath;
+    Error availabilityError;
+    Error tailError;
+    QString rootOverride;
+    mutable std::function<void()> duringDetect;
+};
+
 class EnvironmentGuard {
 public:
     EnvironmentGuard(const char *name, const QByteArray &value)
@@ -236,6 +276,18 @@ private slots:
     void blameProtocolValid();
     void blameRejectsMalformedOutput_data();
     void blameRejectsMalformedOutput();
+
+    // VCS-001 第 3 条（无 git 时优雅降级）与第 4 条（仓库探测按路径缓存）。
+    void repositoryCacheServesRepeatedQueriesForTheSamePath();
+    void repositoryCacheNeverAnswersForADifferentPath();
+    void repositoryCacheNormalisesEquivalentPaths();
+    void repositoryCacheCachesOnlyConclusiveAnswers();
+    void repositoryCacheInvalidationAndBackendReplacement();
+    void repositoryCacheDropsResultsFromAReplacedBackendMidProbe();
+    void repositoryCacheRejectsAnEmptyPathWithoutProbing();
+    void missingGitDisablesEveryVcsCommand();
+    void availableBackendLeavesVcsCommandsEnabled();
+    void vcsActionIdRecognition();
 };
 
 #define REQUIRE_GIT() do { if (QStandardPaths::findExecutable("git").isEmpty()) QSKIP("Real Git fixture skipped: git executable unavailable"); } while (false)
@@ -1141,6 +1193,280 @@ void VcsTests::blameRejectsMalformedOutput()
     QCOMPARE(result.error.code, ErrorCode::Process);
     QVERIFY(!result.error.message.isEmpty());
     QVERIFY(result.value.isEmpty());
+}
+
+// ── VCS-001 第 4 条：仓库探测结果的路径缓存 ────────────────────────────────
+
+void VcsTests::repositoryCacheServesRepeatedQueriesForTheSamePath()
+{
+    auto backend = QSharedPointer<ScriptedBackend>::create();
+    RepositoryCache cache(backend);
+    for (int i = 0; i < 3; ++i) {
+        const auto result = cache.detect(QStringLiteral("/tree/repository"));
+        QVERIFY(result.ok());
+        QCOMPARE(result.value.root, QStringLiteral("/tree/repository"));
+    }
+    QCOMPARE(backend->detectCalls, 1);
+    QCOMPARE(cache.probeCount(), 1);
+    QCOMPARE(cache.cachedPathCount(), 1);
+}
+
+void VcsTests::repositoryCacheNeverAnswersForADifferentPath()
+{
+    auto backend = QSharedPointer<ScriptedBackend>::create();
+    RepositoryCache cache(backend);
+    const auto first = cache.detect(QStringLiteral("/tree/one"));
+    const auto second = cache.detect(QStringLiteral("/tree/two"));
+    QVERIFY(first.ok());
+    QVERIFY(second.ok());
+    QCOMPARE(first.value.root, QStringLiteral("/tree/one"));
+    // 这条断言钉的是「换路径不会拿到上一条路径的答案」，不是「第二次没起进程」——
+    // 单槽缓存（只记上一次的路径与答案）在后一种写法下同样是绿的，而它的实际行为是
+    // 「换路径就给错答案」，错得一点声音都没有。
+    QCOMPARE(second.value.root, QStringLiteral("/tree/two"));
+    QCOMPARE(backend->detectCalls, 2);
+    QCOMPARE(cache.cachedPathCount(), 2);
+    const auto again = cache.detect(QStringLiteral("/tree/one"));
+    QCOMPARE(again.value.root, QStringLiteral("/tree/one"));
+    QCOMPARE(backend->detectCalls, 2);
+    QCOMPARE(cache.probeCount(), 2);
+}
+
+void VcsTests::repositoryCacheNormalisesEquivalentPaths()
+{
+    QTemporaryDir temporary;
+    QVERIFY(temporary.isValid());
+    const QString base = temporary.path() + QStringLiteral("/tree");
+    QVERIFY(QDir().mkpath(base));
+    auto backend = QSharedPointer<ScriptedBackend>::create();
+    RepositoryCache cache(backend);
+    cache.detect(base);
+    cache.detect(base + QStringLiteral("/"));
+    cache.detect(base + QStringLiteral("/./"));
+    cache.detect(base + QStringLiteral("/sub/.."));
+    QCOMPARE(backend->detectCalls, 1);
+    QCOMPARE(cache.cachedPathCount(), 1);
+    // 键是归一化之后的形状：传给后端的是干净路径，而不是用户恰好敲进来的那一种写法。
+    QCOMPARE(backend->lastPath, QDir::cleanPath(base));
+
+    // 相对路径也要归一化成绝对路径。少了这一步，缓存会按「用户敲进来的字符串」分桶，
+    // 而相对路径只有在同一个工作目录下才指同一处——工作目录一变，命中的就是另一处的结论。
+    cache.detect(QStringLiteral("lqcompare-relative-probe"));
+    QCOMPARE(backend->detectCalls, 2);
+    QCOMPARE(backend->lastPath,
+             QDir::cleanPath(QDir::current().absoluteFilePath(QStringLiteral("lqcompare-relative-probe"))));
+    QVERIFY(QDir::isAbsolutePath(backend->lastPath));
+}
+
+void VcsTests::repositoryCacheCachesOnlyConclusiveAnswers()
+{
+    // 结论性的两档：「确实在仓库里」与「确实不在任何仓库里」。后者尤其值得缓存——
+    // 用户在非仓库目录里反复刷新是最常见的用法。
+    const QVector<ErrorCode> conclusive{ErrorCode::None, ErrorCode::NotRepository};
+    for (ErrorCode code : conclusive) {
+        auto backend = QSharedPointer<ScriptedBackend>::create();
+        if (code != ErrorCode::None)
+            backend->tailError = Error{code, QStringLiteral("不是仓库"), {}};
+        RepositoryCache cache(backend);
+        const auto first = cache.detect(QStringLiteral("/repo/a"));
+        const auto second = cache.detect(QStringLiteral("/repo/a"));
+        QCOMPARE(backend->detectCalls, 1);
+        QCOMPARE(cache.probeCount(), 1);
+        QCOMPARE(cache.cachedPathCount(), 1);
+        QCOMPARE(first.error.code, code);
+        // 负结论必须能原样还原：命中缓存拿到的要是「同一个错误」，而不是一条空成功。
+        QCOMPARE(second.error.code, code);
+        QCOMPARE(second.ok(), first.ok());
+        if (code == ErrorCode::None)
+            QCOMPARE(second.value.root, QStringLiteral("/repo/a"));
+    }
+
+    // 其余一律不缓存，因为它们是**这一次的处境**而不是结论。缓存它们等于把「重试」
+    // 变成一句空话：用户改完环境再点一次，拿到的还是上一次的错误。
+    const QVector<ErrorCode> situational{ErrorCode::Unavailable, ErrorCode::Cancelled,
+                                         ErrorCode::Process, ErrorCode::Timeout, ErrorCode::Io,
+                                         ErrorCode::TooLarge, ErrorCode::InvalidPath,
+                                         ErrorCode::InvalidRevision, ErrorCode::AmbiguousRevision,
+                                         ErrorCode::Conflict, ErrorCode::Unsupported,
+                                         ErrorCode::NoHead};
+    for (ErrorCode code : situational) {
+        auto backend = QSharedPointer<ScriptedBackend>::create();
+        backend->tailError = Error{code, QStringLiteral("这一次不行"), {}};
+        RepositoryCache cache(backend);
+        cache.detect(QStringLiteral("/repo/a"));
+        const auto second = cache.detect(QStringLiteral("/repo/a"));
+        QCOMPARE(cache.cachedPathCount(), 0);
+        QCOMPARE(backend->detectCalls, 2);
+        QCOMPARE(cache.probeCount(), 2);
+        QCOMPARE(second.error.code, code);
+    }
+}
+
+void VcsTests::repositoryCacheInvalidationAndBackendReplacement()
+{
+    auto first = QSharedPointer<ScriptedBackend>::create();
+    auto second = QSharedPointer<ScriptedBackend>::create();
+    second->rootOverride = QStringLiteral("/replaced/root");
+    RepositoryCache cache(first);
+    QVERIFY(cache.detect(QStringLiteral("/repo/a")).ok());
+    QCOMPARE(first->detectCalls, 1);
+
+    cache.detect(QStringLiteral("/repo/b"));
+    QCOMPARE(cache.cachedPathCount(), 2);
+    // 只丢一个路径：别的路径的缓存不受影响（否则「丢一个」实际上是「全清」，
+    // 那会让 `invalidate` 在多路径场景下退化成一次全量重探）。
+    cache.invalidate(QStringLiteral("/repo/a"));
+    QCOMPARE(cache.cachedPathCount(), 1);
+    QVERIFY(cache.detect(QStringLiteral("/repo/a")).ok());
+    QCOMPARE(first->detectCalls, 3);
+    // 空路径与从没缓存过的路径都是无害空操作：既不该崩，也不该误删别人的条目。
+    cache.invalidate(QString());
+    cache.invalidate(QStringLiteral("/never/cached"));
+    QCOMPARE(cache.cachedPathCount(), 2);
+
+    cache.clear();
+    QCOMPARE(cache.cachedPathCount(), 0);
+
+    // 换后端必须清空：结论属于某个后端。不清空的话，下面这条会拿到旧后端的答案，
+    // 而它看起来完全正常（同一个路径、同一个形状），只是来自另一个世界；
+    // 用例里则表现为「所有断言都建立在另一个后端的结果上，而且全是绿的」。
+    //
+    // **这里必须先把缓存重新填上**：紧跟在 `clear()` 后面断言 `cachedPathCount() == 0`
+    // 是一句恒真的话（那个 0 是上一步 `clear()` 的功劳，与 `setBackend()` 清没清空
+    // 完全无关），于是「换后端不清空缓存」这个真 bug 在这个位置上**不可观察**——
+    // 本轮变异 M14 就是这么漏过去的。填上之后再换后端，两件事才分得开。
+    QVERIFY(cache.detect(QStringLiteral("/repo/a")).ok());
+    QCOMPARE(cache.cachedPathCount(), 1);
+    const int firstCallsBeforeReplacement = first->detectCalls;
+    cache.setBackend(second);
+    QCOMPARE(cache.cachedPathCount(), 0);
+    const auto replaced = cache.detect(QStringLiteral("/repo/a"));
+    QVERIFY(replaced.ok());
+    // 结论必须来自**新**后端，而不是缓存里那条属于旧后端的答案。
+    QCOMPARE(replaced.value.root, QStringLiteral("/replaced/root"));
+    QCOMPARE(first->detectCalls, firstCallsBeforeReplacement);
+    QCOMPARE(second->detectCalls, 1);
+
+    // 没有后端时按「不可用」处理——不是「探测成功但这里没有仓库」，后者会让调用方
+    // 以为结论是确定的。而且不计数：`probeCount()` 的语义是「真的问过后端几次」。
+    const QSharedPointer<Backend> noBackend;
+    RepositoryCache withoutBackend(noBackend);
+    const auto none = withoutBackend.detect(QStringLiteral("/repo/a"));
+    QCOMPARE(none.error.code, ErrorCode::Unavailable);
+    QCOMPARE(withoutBackend.probeCount(), 0);
+    QCOMPARE(withoutBackend.cachedPathCount(), 0);
+}
+
+void VcsTests::repositoryCacheDropsResultsFromAReplacedBackendMidProbe()
+{
+    auto stale = QSharedPointer<ScriptedBackend>::create();
+    auto fresh = QSharedPointer<ScriptedBackend>::create();
+    fresh->rootOverride = QStringLiteral("/fresh/root");
+    RepositoryCache cache(stale);
+    // 探测进行到一半时把后端换掉。这一次探测的结果属于旧后端，不得留在缓存里——
+    // 否则「换后端」只对新路径生效，已经问过的路径会继续吐旧后端的答案。
+    stale->duringDetect = [&cache, fresh] { cache.setBackend(fresh); };
+    const auto first = cache.detect(QStringLiteral("/repo/a"));
+    QVERIFY(first.ok());
+    QCOMPARE(first.value.root, QStringLiteral("/repo/a")); // 调用方仍拿到这一次的结果
+    QCOMPARE(cache.cachedPathCount(), 0);                  // 但它没有被留下
+
+    stale->duringDetect = {};
+    const auto second = cache.detect(QStringLiteral("/repo/a"));
+    QVERIFY(second.ok());
+    QCOMPARE(second.value.root, QStringLiteral("/fresh/root"));
+    QCOMPARE(stale->detectCalls, 1);
+    QCOMPARE(fresh->detectCalls, 1);
+    QCOMPARE(cache.probeCount(), 2);
+}
+
+void VcsTests::repositoryCacheRejectsAnEmptyPathWithoutProbing()
+{
+    auto backend = QSharedPointer<ScriptedBackend>::create();
+    RepositoryCache cache(backend);
+    const auto result = cache.detect(QString());
+    QCOMPARE(result.error.code, ErrorCode::InvalidPath);
+    QVERIFY(!result.error.message.isEmpty());
+    // 空路径是「问错了」而不是「这里没有仓库」：把它做成一条被缓存的 NotRepository
+    // 会让调用方这个 bug 从此隐身（第二次调用连错误都不再报）。
+    QCOMPARE(backend->detectCalls, 0);
+    QCOMPARE(cache.probeCount(), 0);
+    QCOMPARE(cache.cachedPathCount(), 0);
+}
+
+// ── VCS-001 第 3 条：无 git 时命令置灰并说明原因 ──────────────────────────
+
+void VcsTests::missingGitDisablesEveryVcsCommand()
+{
+    Options options;
+    options.gitExecutable = QDir::tempPath() + QStringLiteral("/lqcompare-no-such-git/git");
+    GitBackend missing(options);
+    QVERIFY(missing.availability().isError());
+    const auto status = probeAvailability(&missing);
+    QVERIFY(!status.available);
+    QVERIFY2(status.reason.contains(QStringLiteral("未检测到 git")), qPrintable(status.reason));
+
+    // 「没有后端」与「后端说没有 git」对用户是同一件事，因此必须是同一个结论、
+    // 同一句话：两句话的后果一样（命令全灰），措辞不一样会让用户以为是两个故障。
+    const auto none = probeAvailability(nullptr);
+    QVERIFY(!none.available);
+    QCOMPARE(none.reason, status.reason);
+
+    // 别的错误码照样置灰，但**不谎称**是没有 git：用户会去装一个已经装好的 git，
+    // 而真正的原因一个字都没被说出来。
+    ScriptedBackend failed;
+    failed.availabilityError = Error{ErrorCode::Process, QStringLiteral("git 进程启动失败"), {}};
+    const auto other = probeAvailability(&failed);
+    QVERIFY(!other.available);
+    QVERIFY(!other.reason.contains(QStringLiteral("未检测到 git")));
+    QVERIFY2(other.reason.contains(QStringLiteral("git 进程启动失败")), qPrintable(other.reason));
+    // 而且这句原因必须**自带主语**，不能把后端那句话原样透传：后端那句话的落点是
+    // 「版本控制设置」页（`GitBackend::availability()` 原文是「请在版本控制设置中配置
+    // Git 路径」），而这条结论会贴在**每一条被置灰的命令的 tooltip** 上——那里得先说清
+    // 是哪个东西不可用。少了主语，tooltip 上就只剩一句没头没尾的「git 进程启动失败」，
+    // 用户读不出这是版本控制功能坏了，还是某个后台任务坏了。
+    QVERIFY2(other.reason != QStringLiteral("git 进程启动失败"), qPrintable(other.reason));
+    QVERIFY2(other.reason.contains(QStringLiteral("版本控制")), qPrintable(other.reason));
+
+    // 连 message 都没有时也要给出一句能看的话：空字符串会让 tooltip 上出现一个
+    // 没有内容的「原因」，看起来像界面坏了。
+    ScriptedBackend silent;
+    silent.availabilityError = Error{ErrorCode::Timeout, {}, {}};
+    const auto bare = probeAvailability(&silent);
+    QVERIFY(!bare.available);
+    QVERIFY(!bare.reason.isEmpty());
+}
+
+void VcsTests::availableBackendLeavesVcsCommandsEnabled()
+{
+    ScriptedBackend backend;
+    const auto status = probeAvailability(&backend);
+    QVERIFY(status.available);
+    QVERIFY(status.reason.isEmpty());
+
+    // 本机有 git 时，真实后端也必须报可用——否则「可用」这一支只在替身上成立，
+    // 而生产路径走的是真实后端。
+    if (!QStandardPaths::findExecutable(QStringLiteral("git")).isEmpty()) {
+        GitBackend real;
+        const auto realStatus = probeAvailability(&real);
+        QVERIFY2(realStatus.available, qPrintable(realStatus.reason));
+        QVERIFY(realStatus.reason.isEmpty());
+    }
+}
+
+void VcsTests::vcsActionIdRecognition()
+{
+    QVERIFY(isVcsActionId(QStringLiteral("VCS-001")));
+    QVERIFY(isVcsActionId(QStringLiteral("VCS-")));
+    // 裸域名不是条目号。把裸 `VCS` 也算进来的话，将来某个 `VCSX-nnn` 形状的条目号
+    // 会被一起置灰——而那种错误要等真加了那条规格才显形。
+    QVERIFY(!isVcsActionId(QStringLiteral("VCS")));
+    QVERIFY(!isVcsActionId(QStringLiteral("vcs-001")));
+    // 必须是**前缀**，不是「出现过」：`MYVCS-001` 属于别的域，按 `contains` 判会把它
+    // 一起置灰——而「顺手多置灰一条」不会有人报 bug，只会有人觉得那个按钮时好时坏。
+    QVERIFY(!isVcsActionId(QStringLiteral("MYVCS-001")));
+    QVERIFY(!isVcsActionId(QStringLiteral("DIR-001")));
+    QVERIFY(!isVcsActionId(QString()));
 }
 
 int main(int argc, char **argv)

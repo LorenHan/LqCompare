@@ -1,4 +1,5 @@
 #include "vcsview.h"
+#include "vcsavailability.h"
 
 #include <QComboBox>
 #include <QColor>
@@ -109,11 +110,16 @@ Result<QString> resolveCommit(const Backend &backend, const Repository &repo, co
 
 class VcsView::Private {
 public:
-    explicit Private(VcsView *owner, QSharedPointer<Backend> backend) : q(owner), backend(std::move(backend)) {}
+    explicit Private(VcsView *owner, QSharedPointer<Backend> backend)
+        : q(owner), backend(std::move(backend)),
+          // 探测结果按路径缓存（VCS-001 第 4 条）。缓存与后端一起**按值**持有：
+          // 工作线程里只允许出现值、后端与取消令牌（见 run()），缓存同理。
+          cache(QSharedPointer<RepositoryCache>::create(this->backend)) {}
     ~Private() { if (token) token->store(true); }
 
     VcsView *q;
     QSharedPointer<Backend> backend;
+    QSharedPointer<RepositoryCache> cache;
     CancelToken token;
     quint64 generation = 0;
     bool busy = false, started = false, available = true, repositoryReady = false, hasMore = false;
@@ -175,8 +181,12 @@ public:
         if (wasBusy && report) setStatus(QStringLiteral("已取消 Git 查询。"));
     }
 
+    // 仓库探测缓存按引用传进来，而不是让每个 lambda 自己捕获：工作线程里只允许出现
+    // 值、后端、缓存与取消令牌（捕获 `this`/`d` 会在标签被关掉之后指向已析构的对象）。
+    // 四个 lambda 必须共用同一个签名，因此只有一个真的用它——其余三个把参数名留空，
+    // 因为本仓按 `-Wextra` 编译，命名了却不用的形参会直接报 `-Wunused-parameter`。
     void run(const QString &message,
-             std::function<WorkResult(const Backend &, const std::atomic_bool *)> work,
+             std::function<WorkResult(const Backend &, RepositoryCache &, const std::atomic_bool *)> work,
              std::function<void(const WorkResult &)> complete)
     {
         stop(false);
@@ -184,13 +194,14 @@ public:
         const auto thisToken = token;
         const auto thisGeneration = generation;
         const auto backendCopy = backend;
+        const auto cacheCopy = cache;
         busy = true;
         status->setToolTip({});
         setStatus(message);
         updateControls();
         auto *watcher = new QFutureWatcher<WorkResult>(q);
         // The connection has a QObject context, so closing a tab disconnects it.
-        // Only values, the backend and cancellation token enter the worker.
+        // Only values, the backend, the cache and the cancellation token enter the worker.
         QObject::connect(watcher, &QFutureWatcher<WorkResult>::finished, q,
                          [this, watcher, thisGeneration, thisToken, complete] {
             const WorkResult result = watcher->result();
@@ -201,13 +212,13 @@ public:
             if (result.error.isError()) { showError(result.error); return; }
             complete(result);
         });
-        watcher->setFuture(QtConcurrent::run([backendCopy, thisToken, work] {
+        watcher->setFuture(QtConcurrent::run([backendCopy, cacheCopy, thisToken, work] {
             if (thisToken->load()) {
                 WorkResult cancelled;
                 cancelled.error = {ErrorCode::Cancelled, {}, {}};
                 return cancelled;
             }
-            return work(*backendCopy, thisToken.data());
+            return work(*backendCopy, *cacheCopy, thisToken.data());
         }));
     }
 
@@ -277,11 +288,13 @@ public:
             return;
         }
         run(QStringLiteral("正在读取 Git 仓库…"),
-            [requestedPath, requestedMode, revisionA, revisionB](const Backend &backend, const std::atomic_bool *cancel) {
+            [requestedPath, requestedMode, revisionA, revisionB](const Backend &backend, RepositoryCache &cache, const std::atomic_bool *cancel) {
                 WorkResult result;
                 result.error = backend.availability();
                 if (result.error.isError()) return result;
-                const auto detected = backend.detectRepo(requestedPath, cancel);
+                // 走缓存而不是直接问后端：切模式 / 刷新都会重来一遍，而同一个路径
+                // 的仓库探测要起一次 git 进程（VCS-001 第 4 条）。
+                const auto detected = cache.detect(requestedPath, cancel);
                 if (!detected.ok()) { result.error = detected.error; return result; }
                 result.repository = detected.value;
                 result.scope = pathScope(result.repository, requestedPath);
@@ -366,7 +379,7 @@ public:
         const Source sourceA = left, sourceB = right;
         const Scope queryScope = scope;
         run(QStringLiteral("正在读取提交 %1 的变更…").arg(commit.id.left(12)),
-            [repo, sourceA, sourceB, queryScope](const Backend &backend, const std::atomic_bool *cancel) {
+            [repo, sourceA, sourceB, queryScope](const Backend &backend, RepositoryCache &, const std::atomic_bool *cancel) {
                 WorkResult result;
                 const auto diff = backend.diff(repo, sourceA, sourceB, cancel);
                 result.error = diff.error;
@@ -389,7 +402,7 @@ public:
         query.skip = commits.size();
         query.limit = PageSize;
         run(QStringLiteral("正在加载更多提交…"),
-            [repo, query](const Backend &backend, const std::atomic_bool *cancel) {
+            [repo, query](const Backend &backend, RepositoryCache &, const std::atomic_bool *cancel) {
                 WorkResult result;
                 const auto page = backend.log(repo, query, cancel);
                 result.error = page.error;
@@ -421,7 +434,7 @@ public:
         const QString labelA = sourceA.kind == SourceKind::Empty ? QStringLiteral("空版本（新增文件）") : leftLabel;
         const QString labelB = sourceB.kind == SourceKind::Empty ? QStringLiteral("空版本（已删除文件）") : rightLabel;
         run(QStringLiteral("正在读取只读比较快照…"),
-            [repo, pathA, pathB, sourceA, sourceB, labelA, labelB](const Backend &backend, const std::atomic_bool *cancel) {
+            [repo, pathA, pathB, sourceA, sourceB, labelA, labelB](const Backend &backend, RepositoryCache &, const std::atomic_bool *cancel) {
                 WorkResult result;
                 const auto comparison = backend.compare(repo, pathA, sourceA, pathB, sourceB, cancel);
                 result.error = comparison.error;
@@ -599,7 +612,11 @@ void VcsView::setMode(Mode mode)
     const QSignalBlocker blocker(d->mode);
     d->mode->setCurrentIndex(mode);
     d->configureMode();
-    refresh();
+    // 切模式**不丢**探测缓存：同一个仓库、同一个路径，只是在问它另一个问题，
+    // 重探一次要起一个 git 进程（VCS-001 第 4 条）。用户显式按「重新查询」
+    // 才丢缓存，见 `VcsView::refresh()`。走 `d->refresh()` 而不是 `refresh()`，
+    // 差的就是这一处失效。
+    d->refresh();
 }
 
 void VcsView::setPath(const QString &path)
@@ -609,6 +626,16 @@ void VcsView::setPath(const QString &path)
     refresh();
 }
 
-void VcsView::refresh() { d->refresh(); }
+void VcsView::refresh()
+{
+    // 显式「重新查询」= 我不相信上一次的结论。这就是 VCS-001 第 4 条里
+    // 「路径变化时失效」的另一半：缓存必须有一条**被用户按下去的**失效路径，
+    // 否则用户在刚 `git init` 的目录里点刷新，会一直拿到那条被缓存起来的
+    // 「这不是仓库」——而且看不出是缓存，只会以为刷新按钮坏了。
+    //
+    // 只失效当前路径，不整表清空：同一个视图里换过路径之后，别的路径的结论仍然成立。
+    d->cache->invalidate(d->path->text());
+    d->refresh();
+}
 void VcsView::cancel() { d->stop(true); }
 }

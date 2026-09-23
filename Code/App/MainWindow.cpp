@@ -19,6 +19,7 @@
 #include "foldermergesession.h"
 #include "formatdetector.h"
 #include "vcsview.h"
+#include "vcsavailability.h"
 #include "optionsdialog.h"
 #include "optionsruntime.h"
 #include "shortcutsettingsdialog.h"
@@ -125,6 +126,12 @@ MainWindow::MainWindow(QWidget *parent) : RibbonWindow(parent)
     restoreState(settings.value(QStringLiteral("window/state")).toByteArray());
     m_recent = QJsonDocument::fromJson(settings.value(QStringLiteral("sessions/recent")).toByteArray()).array();
     refreshRecent();
+    // 版本控制后端只用来回答「这台机器上现在能不能做 VCS 查询」（VCS-001 第 3 条）。
+    // 造在这里而不是构造函数初始化列表里：探测要在命令**全部注册完之后**才有意义，
+    // 而紧跟其后的 `updateCommandState()` 会把结论落到每一条 VCS 命令上。
+    m_ownedVcsBackend = std::make_unique<Vcs::GitBackend>();
+    m_vcsBackend = m_ownedVcsBackend.get();
+    refreshVcsAvailability();
     updateCommandState();
     refreshTitle();
     refreshStatusBar();
@@ -168,6 +175,37 @@ void MainWindow::updateCommandState()
     registry.setEnabled(QStringLiteral("merge.save"), merge && merge->canSave());
     for (const auto &id : {"report.file", "report.clipboard"}) registry.setEnabled(QString::fromLatin1(id), ready && (text || (folder && !folder->isScanning())));
     registry.setEnabled(QStringLiteral("patch.generate"), ready && text);
+    // VCS-001 第 3 条：没有 git 时版本控制命令全部置灰并说明原因。
+    //
+    // 「哪些命令算版本控制」由服务层判（`Vcs::isVcsActionId`），这里不列清单：
+    // 列清单的话，将来新加一条 vcs 命令时它会**静默地**不受降级保护——那条命令
+    // 照样可点，点下去才报「未检测到 git」，而这一条要的正是「点之前就知道」。
+    // 结论取自 `m_vcsAvailable` / `m_vcsReason`：本函数每次会话切换都会跑，
+    // 而探测（真实后端上是 `findExecutable`，将来配了路径还可能更贵）只该跑一次。
+    //
+    // 不另在 `showVcs()` 里加一道守卫：命令注册中心是按钮、菜单、QAT、快捷键与
+    // 搜索栏的**唯一出口**（UI-024），置灰在这里就等于所有入口都置灰。加一道
+    // 到不了的守卫只会长出一条没人能打红的分支——本仓的判据是「删掉它，谁变红？」。
+    for (const Command &command : registry.all()) {
+        if (Vcs::isVcsActionId(command.actionId))
+            registry.setEnabled(command.id, m_vcsAvailable, m_vcsReason);
+    }
+}
+
+void MainWindow::setVcsBackend(const Vcs::Backend *backend)
+{
+    m_vcsBackend = backend ? backend : m_ownedVcsBackend.get();
+    // 立即重探并刷新：调用方的意图是「换一个后端之后，界面上的可用性要跟着变」。
+    // 让调用方自己去别处触发一次刷新，是把这条契约拆成两半。
+    refreshVcsAvailability();
+    updateCommandState();
+}
+
+void MainWindow::refreshVcsAvailability()
+{
+    const Vcs::CommandAvailability status = Vcs::probeAvailability(m_vcsBackend);
+    m_vcsAvailable = status.available;
+    m_vcsReason = status.reason;
 }
 
 void MainWindow::buildRibbon()

@@ -269,6 +269,34 @@ private slots:
         QVERIFY(backend->diffCalls().isEmpty());
     }
 
+    // VCS-001 第 4 条在生产路径上的两半：切模式复用探测结论，显式刷新丢掉它。
+    // 两半必须一起测：只测前半句的话，一个「永远不失效」的缓存同样能过，
+    // 而它的后果是用户在刚 git init 的目录里点刷新也永远看不到仓库。
+    void repositoryDetectionIsCachedAcrossModeSwitchesButNotAcrossExplicitRefresh()
+    {
+        auto backend = QSharedPointer<FakeBackend>::create();
+        backend->setChanges({change("M")});
+        VcsView view("/virtual/repository", backend);
+        // 等首轮加载**真的跑完**：`isBusy()` 在工作还没被排上之前就是 false，
+        // 拿它当判据会在第一帧就通过，于是后面的计数断言全部落在 0 上（本轮实测踩到）。
+        QTRY_COMPARE(backend->detectCalls(), 1);
+        const int headDiffs = backend->diffCalls().size();
+
+        view.setMode(VcsView::Mode::Index);
+        QTRY_COMPARE(backend->diffCalls().size(), headDiffs + 1);
+        view.setMode(VcsView::Mode::History);
+        QTRY_COMPARE(backend->logCalls().size(), 1);
+        view.setMode(VcsView::Mode::Head);
+        QTRY_COMPARE(backend->diffCalls().size(), headDiffs + 2);
+        // 同一个路径切了三次模式，探测仍然只有开头那一次。
+        QCOMPARE(backend->detectCalls(), 1);
+
+        // 显式刷新必须真的重新探测：这是用户唯一的「我不信上一次结论」的入口。
+        view.refresh();
+        QTRY_COMPARE(backend->detectCalls(), 2);
+        QVERIFY(!backend->calledOnGui.load());
+    }
+
     void pathScopeIncludesRenamesAndDeletedFiles()
     {
         QTemporaryDir directory;

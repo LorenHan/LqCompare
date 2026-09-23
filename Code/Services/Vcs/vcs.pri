@@ -1,3 +1,3 @@
 INCLUDEPATH += $$PWD
-HEADERS += $$PWD/vcsbackend.h
-SOURCES += $$PWD/vcsbackend.cpp
+HEADERS += $$PWD/vcsbackend.h $$PWD/vcsavailability.h
+SOURCES += $$PWD/vcsbackend.cpp $$PWD/vcsavailability.cpp
