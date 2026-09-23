@@ -3370,14 +3370,16 @@ docs/
 | `1bc7529` | **DIR-012 状态着色与图标**：新模块 `Services/Folder/statuspalette.{h,cpp}`（三套配色表 `colorSchemeTable()` + **表当参数**的自检 `validateColorSchemeTable(table)`——自己读内部表的自检喂坏表进去也永远绿；`relativeLuminance()` / `contrastRatio()` 走 WCAG 相对亮度、非法输入返回 `-1` 而不是 `0`（`0` 是纯黑的合法亮度，拿它当哨兵会把「颜色写错了」读成「这个颜色很暗」）；`colorBlindSeparation()` 走 Viénot/Brettel 的线性 RGB → LMS → 替换缺失锥细胞 → 回 RGB，**「色盲友好」这一位是被判据守着的**而不是装饰标签（出厂方案那对「看着差很远」的 `#2055a0` / `#5a3fa0` 实测只差 2.8/255）；`.lqcolors` 的序列化 / 解析 / 文件往返，解析**结构层与语义层都要做**、失败时调用方那份方案一个字段都不改）+ 视图侧 `themedStatusIcon()` 用 `CompositionMode_SourceIn` 给中性灰描边图标着色以适配深浅主题、按表铺的配色下拉与「配色…」导出 / 导入菜单、`setColorScheme()` **只逐行发 `dataChanged` 重绘、刻意不发 `rescanRequested`**（换一次颜色不该把整棵目录树重扫一遍）、导入的自定义配色只活在本次会话且第二次导入是替换而不是追加。**新套件** `Tests/StatusPalette`（29 个用例函数，刻意 `QT -= gui`），`Tests/Folder` 51 → 55；全量 3730 → **3763**（70 → 71 个套件）；**30 处变异 30 处检出、0 处漏检**——其中一处探针（`coversEveryStatus()` 的「行数也要相等」）暴露出真缺口、补夹具后当场变红，另扫出五处「没人喂过输入」的校验分支并补齐夹具，见 §1.39 | DIR-012 |
 | `64d56b9` | **VCS-001 版本控制后端抽象层**：新模块 `Services/Vcs/vcsavailability.{h,cpp}`（`isVcsActionId()` 是「哪些命令属于版本控制」的**唯一定义**——按规格条目号前缀判而不是命令 ID 前缀，理由与它的静默错法都写在头文件里；`probeAvailability()` 把后端的 `availability()` 折成 `{是否可用, 不可用原因}`，**只在这一处**把「没装 git」翻成用户看得懂的那一句，其余故障聚合成一句**自带主语**的话而不是透传后端原文；`RepositoryCache` 按**规范化绝对路径**分桶、**只缓存定论**（成功与「不是仓库」；超时 / 取消这类「这一次的处境」不入缓，否则重试变成空话）、**探测在锁外做**并用自增 `generation` 丢弃「换后端那一刻在途」的结果）+ `MainWindow` 按 `isVcsActionId()` 把三条 VCS 命令一起置灰并给出同一句原因、新增 `setVcsBackend()` 让用例把假后端塞进**真窗口**（`updateCommandState()` 只读探测结论、不重复探测；**刻意不在 `showVcs()` 里加守卫**——唯一入口是命令注册中心，加了就是不可达的死代码）+ `VcsView` 跨模式切换保留缓存、**只有用户按下的那次刷新**才失效。`Tests/Vcs` 58 → 68、`Tests/VcsView` 16 → 17、`Tests/AppIntegration` 13 → 14（**没有新增套件**）；全量 3763 → **3775**；**19 处变异 19 处检出、0 漏检**（第一遍 15 / 4：补掉两处真缺口——「换后端清不清空缓存」被紧前面的 `clear()` 掩盖成一句恒真断言、「置灰原因必须自带主语」这条**写在注释里**的设计意图无人守；另两处与预期用例守的是同一件事，记入驱动的 `TOLERATE` 并写明理由。见 §1.42 / §4.0.20） | VCS-001 |
 
+| `cdabf13` | **TXT-015 BOM 处理策略**：新模块 `Services/Text/compareconclusion.{h,cpp}` 把「BOM 差异算不算差异」（比较侧三档策略表 `Automatic` / `Ignore` / `TreatAsDifference`）与「保存时怎么写 BOM」（保存侧三档 `Preserve` / `AlwaysWrite` / `NeverWrite`）收进同一张范式——`available*()` / `default*()` 全部由表推导，`validate*Table(table, expected)` 把**期望值当参数**传入（表里漏登记一档时只有拿规格比才发现）；`bomIsEncodingCritical()` 是**白名单**而不是「不等于 UTF-8」，`Automatic` 判的是「**任一侧**的编码把 BOM 当字节序声明」；保存侧做不到时（`NeverWrite × 字节序关键编码`、`AlwaysWrite × 没有可写 BOM 的编码`）**静默降级成保留**而不是弹窗拒绝。`Document` 的写盘链改走 `bomShouldBeWritten()`（出货行为逐字节不变），`CompareOptions` **末尾**新增 `bomPolicy`。视图侧比较规则那一排加 `bomPolicy` 下拉、每侧一个保存策略下拉。新套件 `Tests/CompareConclusion`（29 个用例函数，**纯 QtCore**），`Tests/TextView` 26 → 31；全量 **3809 / 0 / 2（72 个套件）**。**本轮含一处 CI 改动**：Linux 腿加一步装 gdb（run `35921319095` 的 `crash-trace.txt` 写明 ubuntu-24.04 镜像既没有 gdb 也没有 lldb），装不上只打 `::warning::` 不让腿变红。**变异 20 处 20 处检出**，其中两处是变异测试捞出来的**真缺口**（`Automatic` 的「任一侧」语料方向反了；状态栏那句「原始字节并不相同」只被「拿函数跟自己比」的断言覆盖） | TXT-015 / #70 |
+
 > 这张表里**从 `a693346` 起的行**都由**紧随其后的纯文档提交**补写提交号，原因见下——
 > 会因为 `--amend` 每次都改变提交号而永远对不上。
 > 补写链**只到代码提交为止**：补写这些行的那个纯文档提交自身不再上表，否则每轮都会多出一行
 > 永远指不到自己的记录（`bf05600`、TXT-003 与 TXT-008 那两轮的补写提交都是这样未被记录的）。
-> 本轮走的是同一条路：`64d56b9` 一条代码提交先定稿（代码 + 测试 + §1.42 / §4.0.20 /
+> 本轮走的是同一条路：`cdabf13` 一条代码提交先定稿（代码 + 测试 + CI + `§1.43` / `§4.0.21` /
 > `architecture.md` 的改动都在它里面），再由紧随其后的纯文档提交把它的提交号写进本表
 > （**那个补写提交自己不上表**，理由同上）。
-> 更早几轮的写法同此：`1bc7529`（DIR-012）、`5d672b5` / `446bdcc`（DIR-003 / DIR-011）
+> 更早几轮的写法同此：`64d56b9`（VCS-001）、`1bc7529`（DIR-012）、`5d672b5` / `446bdcc`（DIR-003 / DIR-011）
 > 各是一条代码提交先定稿，再由紧随其后的纯文档提交把提交号与对应的 §1.x / §4.0.x
 > 一起写进本文档。`1bc7529` 那一轮顺手修掉了本表里的三个空行（markdown 表格中间
 > 不能有空行，否则后面几行会渲染成带竖线的普通文字）。
