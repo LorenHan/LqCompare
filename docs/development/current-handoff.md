@@ -3070,14 +3070,19 @@ docs/
 | `f809ff4` | **超时套件的用例数不该计入合计，并让这条边界在每个平台上都被验到**（§1.35，真 bug）：ubuntu 腿的自测**连续 13 次**红在 `合计把各套件的用例数累加起来了`，真因是累加那一步只看「有没有统计行」而没排除超时——**Linux 的 Qt Test 接住 `SIGTERM` 后会自己补写一份统计行再以 `SIGABRT` 收尾**（`status=134`、`has_summary=1`），macOS 则直接被 `TERM` 带走、什么也不写（`has_summary=0`），于是同一条判据在两个平台上是**两种形状**，挂死探针的 `1 passed, 1 failed` 在 ubuntu 上被算进了合计；连带效应是自测红了之后「运行测试套件」被 skip，ubuntu 腿**一个套件都没跑过**。修成 `if [[ ${hs} -eq 1 && ${to} -eq 0 ]]`（与运行器自己打印的承诺一致），并让挂死探针**自己先写一份统计行再挂死**——否则这条边界在 macOS 上恒不可达，**任何本地变异都 redden不了它**。自测 30 → **32 条断言**；**5 处变异 5 处检出、0 处漏检**。**未勾掉任何完成标准** | ENG-003 / ENG-004 |
 | `446bdcc` | **DIR-011 条目状态判定与语义**：新模块 `Services/Folder/entrystatus.{h,cpp}`（9 档主状态表 + 内容证据 8 档 / 时间关系 4 档各一张表，**三张表都带一个把表当参数的校验函数**——自己读内部表的自检喂坏表进去也永远绿；`Entry::partialComparison` 由独立布尔字段改成 `contentEvidence == Partial` 的只读视图，把 DIR-008 留下的两份说法并成一份；存在性做成派生视图；`BaselineView` 要过 `validateBaselineView` 且细化只作用在叶子；`aggregateChildren()` 是引擎与用例**共用**的唯一父子汇总，否则「父子视图结论一致」会退化成「两套口径碰巧今天结果相同」；`statusReasonLines()` 三节 + `statusModelViolations()` 九类不可能组合）+ 视图侧状态图标列 / 按表铺的筛选下拉 / 越界整数回落 / 右键「为什么是这个状态」（三节恒定出现）+ 报表与命令行改用同一张表 + 9 个中性灰描边状态图标。**新套件** `Tests/EntryStatus`（27 个用例函数，纯 QtCore），`Tests/Folder` 35 → 45；全量 3688 → **3724**；**15 处变异 15 处检出**，其中 2 处必须一次改两个地方（同一判据在仓库里写了两遍、两道防线互相遮蔽，见 §6） | DIR-011 |
 | `5d672b5` | **DIR-003 递归子目录策略**：新模块 `Services/Folder/recursionstrategy.{h,cpp}`（三档表 + 七项自检 `validateRecursionTierTable(table)`；档位 ↔ `Options` 双向映射——**不新增第三个字段**，`recursionTierOf()` 按**行为**归类（`!recursive \|\| maximumDepth <= 0` 是第一档），`applyRecursionTier()` 在 `Full` 档只碰 `recursive`、仅当上限 `<= 1` 才提到缺省；深度边界上**唯一一份**解释文案 `recursionBoundaryExplanation()`，印的是 `qBound` 之后**实际生效**的上限；循环符号链接判据 `linkTargetReentersAncestor()`（解析目标 == 链接自身**或**是它的严格上级，相对目标按**链接所在目录**解析，指向兄弟 / 下级子树的刻意放过）+ 文案 `linkCycleExplanation()`，引擎在符号链接分支记 `Status::Error` + `ContentEvidence::NotCompared`）+ 视图侧两态复选框 → 按表铺的档位下拉（`folderRecursionTier`，带 `ToolTipRole`）+ 深度数字框（`folderMaximumDepth`，只在完全递归档可改）+ `rescanRequested()` 信号（**刻意不带路径参数**）→ 会话 `reload()`。**顺带删掉一处遮蔽防线**：`applyTierToControls(tier, bool fromUser)` 的 `if (fromUser)` 在程序性路径上恒被覆盖或恒等，删掉它没有任何用例变红（M13 第一次跑就是 green）。`Tests/Folder` 45 → 51；全量 3724 → **3730**；**15 处变异 15 处检出**，其中两处（越界深度必须印 256、根目录作上级不能拼成 `//`）是补断言之后才抓得住的，见 §1.38 与 §6 | DIR-003 |
+| `1bc7529` | **DIR-012 状态着色与图标**：新模块 `Services/Folder/statuspalette.{h,cpp}`（三套配色表 `colorSchemeTable()` + **表当参数**的自检 `validateColorSchemeTable(table)`——自己读内部表的自检喂坏表进去也永远绿；`relativeLuminance()` / `contrastRatio()` 走 WCAG 相对亮度、非法输入返回 `-1` 而不是 `0`（`0` 是纯黑的合法亮度，拿它当哨兵会把「颜色写错了」读成「这个颜色很暗」）；`colorBlindSeparation()` 走 Viénot/Brettel 的线性 RGB → LMS → 替换缺失锥细胞 → 回 RGB，**「色盲友好」这一位是被判据守着的**而不是装饰标签（出厂方案那对「看着差很远」的 `#2055a0` / `#5a3fa0` 实测只差 2.8/255）；`.lqcolors` 的序列化 / 解析 / 文件往返，解析**结构层与语义层都要做**、失败时调用方那份方案一个字段都不改）+ 视图侧 `themedStatusIcon()` 用 `CompositionMode_SourceIn` 给中性灰描边图标着色以适配深浅主题、按表铺的配色下拉与「配色…」导出 / 导入菜单、`setColorScheme()` **只逐行发 `dataChanged` 重绘、刻意不发 `rescanRequested`**（换一次颜色不该把整棵目录树重扫一遍）、导入的自定义配色只活在本次会话且第二次导入是替换而不是追加。**新套件** `Tests/StatusPalette`（29 个用例函数，刻意 `QT -= gui`），`Tests/Folder` 51 → 55；全量 3730 → **3763**（70 → 71 个套件）；**30 处变异 30 处检出、0 处漏检**——其中一处探针（`coversEveryStatus()` 的「行数也要相等」）暴露出真缺口、补夹具后当场变红，另扫出五处「没人喂过输入」的校验分支并补齐夹具，见 §1.39 | DIR-012 |
+
 > 这张表里**从 `a693346` 起的行**都由**紧随其后的纯文档提交**补写提交号，原因见下——
 > 会因为 `--amend` 每次都改变提交号而永远对不上。
 > 补写链**只到代码提交为止**：补写这些行的那个纯文档提交自身不再上表，否则每轮都会多出一行
 > 永远指不到自己的记录（`bf05600`、TXT-003 与 TXT-008 那两轮的补写提交都是这样未被记录的）。
-> 本轮走的是同一条路：`5d672b5` 一条代码提交先定稿，再由紧随其后的纯文档提交
-> 把它的提交号写进本表（**那个补写提交自己不上表**，理由同上）。
-> 更早一轮的写法同此：`446bdcc` 一条代码提交先定稿，再由紧随其后的纯文档提交
-> 把它的提交号与 §1.37 / §4.0.15 一起写进本文档。
+> 本轮走的是同一条路：`1bc7529` 一条代码提交先定稿（代码 + 测试 + §1.39 / §4.0.17 /
+> `architecture.md` 的改动都在它里面），再由紧随其后的纯文档提交把它的提交号写进本表
+> （**那个补写提交自己不上表**，理由同上）。
+> 更早两轮的写法同此：`5d672b5` / `446bdcc` 各是一条代码提交先定稿，再由紧随其后的
+> 纯文档提交把它的提交号与 §1.38 / §1.37 一起写进本文档。
+> **本轮顺手修掉了本表里的三个空行**（它们把表格截成三段，后面几行会渲染成带竖线的
+> 普通文字）——markdown 表格中间不能有空行，这是上一轮留下的毛病。
 
 远端：369 个 issue 全部创建，标签为 `需求 / 待实现 / <模块> / <优先级>`，
 其中 P0 59 条。反查入口是 `docs/github/prd-issues.json`。
