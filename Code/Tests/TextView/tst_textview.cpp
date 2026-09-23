@@ -9,6 +9,7 @@
 #include <QPushButton>
 #include <QTimer>
 #include <QComboBox>
+#include <QLabel>
 #include <QShortcut>
 #include <QTextEdit>
 #include <QSplitter>
@@ -1002,6 +1003,226 @@ private slots:
         QCOMPARE(severities.size(), 3);
         QVERIFY2(session.statusText().contains(QStringLiteral("Mixed (LF 1 / CRLF 1 / CR 0)")),
                  qPrintable(session.statusText()));
+    }
+    // -----------------------------------------------------------------------
+    // TXT-015 BOM 处理策略。两条端到端：结论档与状态栏文案（第 1、2 条）、
+    // 以及保存之后磁盘上的实际字节（第 3 条）。纯逻辑那部分在
+    // `Tests/CompareConclusion`，这里只验「服务层算出的东西真的到了界面/磁盘上」。
+    // -----------------------------------------------------------------------
+
+    void bomOnlyDifferenceIsRuleIdenticalNotIdentical()
+    {
+        QTemporaryDir directory;
+        const QString left = directory.filePath("left.txt"), right = directory.filePath("right.txt");
+        // 两份文件**逐字符相同**，只有左侧多一个 UTF-8 BOM。
+        // 这正是规格第 2 条描述的那个场景：行级一个差异块都比不出来。
+        writeFile(left, QByteArray::fromHex("efbbbf610a")); // BOM + "a\n"
+        writeFile(right, QByteArray("a\n"));
+        TextCompareSession session(left, right);
+        QVERIFY(session.open());
+        QCOMPARE(session.leftDocument().hasBom(), true);
+        QCOMPARE(session.rightDocument().hasBom(), false);
+        QVERIFY(session.comparison().differences.isEmpty());
+        QCOMPARE(session.differenceCount(), 0);
+
+        // 一、策略 = 忽略 BOM 差异 ⇒ 结论是**规则相同**，不是「相同」，
+        // 也不是「字节完全一致」。状态栏必须把这个区分说出来。
+        Text::CompareOptions options;
+        options.bomPolicy = Text::BomPolicy::Ignore;
+        session.setComparisonOptions(options);
+        QCOMPARE(session.conclusion(), Text::Conclusion::RuleIdentical);
+        QVERIFY2(session.statusText().contains(Text::bomConclusionSummary(Text::BomConclusion::Ignored)),
+                 qPrintable(session.statusText()));
+        QVERIFY2(session.statusText().contains(QStringLiteral("规则相同")),
+                 qPrintable(session.statusText()));
+        // 上面那条是拿 `bomConclusionSummary()` 跟它自己比——函数改了两边一起改，
+        // 所以这里再钉一个**字面**断言：状态栏那一句必须真的说出「原始字节并不相同」。
+        // 规格原话是「不得标成字节完全一致」，而用户读到的正是状态栏这一句。
+        QVERIFY2(session.statusText().contains(QStringLiteral("并不相同")),
+                 qPrintable(session.statusText()));
+        // 旧文案把 BOM 差异**无条件**说成「只是元数据、与结论无关」——
+        // 那正是规格不允许的，所以它必须彻底消失。
+        QVERIFY2(!session.statusText().contains(QStringLiteral("metadata only")),
+                 qPrintable(session.statusText()));
+        QCOMPARE(session.statusSeverity(), CompareSession::StatusSeverity::Normal);
+
+        // 二、策略 = 视为差异 ⇒ 结论是「不同」，**即使行级差异块还是 0**。
+        options.bomPolicy = Text::BomPolicy::TreatAsDifference;
+        session.setComparisonOptions(options);
+        QCOMPARE(session.conclusion(), Text::Conclusion::Different);
+        QCOMPARE(session.differenceCount(), 0);
+        QVERIFY2(session.statusText().contains(Text::bomConclusionSummary(Text::BomConclusion::Difference)),
+                 qPrintable(session.statusText()));
+        // 此时行级一个差异块都没有，状态栏若按普通信息显示（不亮警告图标），
+        // 用户看到的是一行「0 difference block(s)」——而这两份文件其实不同。
+        QCOMPARE(session.statusSeverity(), CompareSession::StatusSeverity::Warning);
+
+        // 三、两侧都没有 BOM ⇒ 这一维没有差异可谈，结论回到「相同」，
+        // 状态栏里一个字都不该提 BOM。
+        const QString plain = directory.filePath("plain.txt");
+        writeFile(plain, QByteArray("a\n"));
+        QVERIFY(session.setPaths(plain, right));
+        QCOMPARE(session.conclusion(), Text::Conclusion::Identical);
+        QCOMPARE(session.bomVerdict().differs(), false);
+        QVERIFY2(!session.statusText().contains(QStringLiteral("BOM")),
+                 qPrintable(session.statusText()));
+    }
+
+    void bomPolicyRoundTripsThroughSessionSettings()
+    {
+        QTemporaryDir directory;
+        const QString left = directory.filePath("left.txt"), right = directory.filePath("right.txt");
+        writeFile(left, QByteArray::fromHex("efbbbf61")); writeFile(right, QByteArray("a"));
+        TextCompareSession session;
+        QVERIFY(session.open());
+        QVERIFY(session.setPaths(left, right));
+
+        // 写下去的是**标识符**，不是枚举序号：序号是隐式的第二事实来源，
+        // 往枚举中间插一个档就会让设置文件里那个整数换一个含义。
+        for (const Text::BomPolicy policy : Text::availableBomPolicies()) {
+            Text::CompareOptions options = session.comparisonOptions();
+            options.bomPolicy = policy;
+            session.setComparisonOptions(options);
+            const QString stored =
+                session.sessionSettings()->value(QStringLiteral("text.bomPolicy")).toString();
+            QCOMPARE(stored, QString::fromLatin1(Text::bomPolicyIdentifier(policy)));
+            QCOMPARE(session.comparisonOptions().bomPolicy, policy);
+        }
+
+        // 设置键那一侧改回来：会话必须跟着走（界面改设置走的就是这条路）。
+        session.sessionSettings()->setValue(QStringLiteral("text.bomPolicy"),
+                                            QStringLiteral("ignore"));
+        QCOMPARE(session.comparisonOptions().bomPolicy, Text::BomPolicy::Ignore);
+        QCOMPARE(session.conclusion(), Text::Conclusion::RuleIdentical);
+
+        // 认不出来的标识符退回默认档，**不猜**成表里某一项。
+        session.sessionSettings()->setValue(QStringLiteral("text.bomPolicy"),
+                                            QStringLiteral("no-such-policy"));
+        QCOMPARE(session.comparisonOptions().bomPolicy, Text::defaultBomPolicy());
+    }
+
+    void bomSavePolicyControlsTheBytesOnDisk()
+    {
+        QTemporaryDir directory;
+        const QString left = directory.filePath("left.txt"), right = directory.filePath("right.txt");
+        const QByteArray bom = QByteArray::fromHex("efbbbf"), payload("a\nb\n");
+        writeFile(left, bom + payload);
+        writeFile(right, payload);
+        TextCompareSession session(left, right);
+        QVERIFY(session.open());
+        QCOMPARE(readFile(left), bom + payload); // 出厂策略是保留
+        QVERIFY(!session.isDirty());
+
+        // 一、强制不写：左去掉 BOM，右加上 BOM。两侧都落一次盘，逐字节看结果。
+        session.setBomSavePolicy(true, Text::BomSavePolicy::NeverWrite);
+        session.setBomSavePolicy(false, Text::BomSavePolicy::AlwaysWrite);
+        // 去掉 BOM 是一次真实的改动：脏标记不抬起来的话 Save 会是灰的。
+        QVERIFY(session.isDirty());
+        QCOMPARE(session.leftDocument().bomWillBeWritten(), false);
+        QCOMPARE(session.rightDocument().bomWillBeWritten(), true);
+        QVERIFY(session.saveSide(true));
+        QVERIFY(session.saveSide(false));
+        QCOMPARE(readFile(left), payload);
+        QCOMPARE(readFile(right), bom + payload);
+
+        // 二、保留：重新加载之后两侧都回到文件里实际带的状态。
+        // **这一条盯的是 `loadPair()` 里那两行**：`Document` 每次加载都会被整体
+        // 替换，忘了把策略贴回去的话，这里会看到「策略悄悄回到 Preserve」。
+        QCOMPARE(session.bomSavePolicy(true), Text::BomSavePolicy::NeverWrite);
+        QCOMPARE(session.bomSavePolicy(false), Text::BomSavePolicy::AlwaysWrite);
+        QVERIFY(session.reload());
+        QCOMPARE(session.bomSavePolicy(true), Text::BomSavePolicy::NeverWrite);
+        QCOMPARE(session.bomSavePolicy(false), Text::BomSavePolicy::AlwaysWrite);
+        session.setBomSavePolicy(true, Text::BomSavePolicy::Preserve);
+        session.setBomSavePolicy(false, Text::BomSavePolicy::Preserve);
+        QVERIFY(!session.isDirty());
+        QVERIFY(session.saveSide(true));
+        QCOMPARE(readFile(left), payload);      // 文件本来就没有 BOM，保留 = 不写
+        QCOMPARE(readFile(right), bom + payload); // 文件本来就有，保留 = 写
+    }
+
+    void bomOptionIsReportedWhenTheEncodingCannotHonourIt()
+    {
+        QTemporaryDir directory;
+        const QString left = directory.filePath("left.txt"), right = directory.filePath("right.txt");
+        // UTF-16LE 的 BOM 就是字节序声明，去掉之后文件读不回来。
+        const QByteArray utf16 = QByteArray::fromHex("fffe61000a00"); // "a\n"
+        writeFile(left, utf16);
+        writeFile(right, QByteArray::fromHex("fffe62000a00")); // "b\n"
+        TextCompareSession session(left, right);
+        QVERIFY(session.open());
+        QScopedPointer<QWidget> widget(session.createWidget());
+
+        session.setBomSavePolicy(true, Text::BomSavePolicy::NeverWrite);
+        session.setBomSavePolicy(false, Text::BomSavePolicy::NeverWrite);
+        // 策略做不到 ⇒ 降级成保留 ⇒ 文件一个字节都不会变，因此也**不该**变脏。
+        // 变脏会更坏：用户会被引去点一次 Save，而那次保存什么也没改。
+        QCOMPARE(session.leftDocument().bomWillBeWritten(), true);
+        QCOMPARE(session.rightDocument().bomWillBeWritten(), true);
+        QVERIFY(!session.isDirty());
+        // 而且这件事必须在**界面上**看得见——不写的话，用户按了「不写入 BOM」
+        // 又看到文件头还有它，只能判断成这个功能坏了。
+        auto *metadata = widget->findChild<QLabel *>(QStringLiteral("leftMetadata"));
+        QVERIFY(metadata);
+        QVERIFY2(metadata->text().contains(QStringLiteral("does not apply")),
+                 qPrintable(metadata->text()));
+        // 右侧是同一件事的对照：它也带 BOM，也一样降级。
+        auto *rightMetadata = widget->findChild<QLabel *>(QStringLiteral("rightMetadata"));
+        QVERIFY(rightMetadata);
+        QVERIFY2(rightMetadata->text().contains(QStringLiteral("does not apply")),
+                 qPrintable(rightMetadata->text()));
+
+        // UTF-8 那一侧同一句话**不**出现：策略在那里做得到。
+        // 两侧都要切回 Preserve，否则左侧那句提示会因为「策略做不到」
+        // 之外的另一个原因（编码仍是编码的）留着，这条对照就失去意义。
+        session.setBomSavePolicy(true, Text::BomSavePolicy::Preserve);
+        session.setBomSavePolicy(false, Text::BomSavePolicy::Preserve);
+        const QString plain = directory.filePath("plain.txt");
+        const QString other = directory.filePath("other.txt");
+        writeFile(plain, QByteArray::fromHex("efbbbf61"));
+        writeFile(other, QByteArray::fromHex("efbbbf62"));
+        QVERIFY(session.setPaths(plain, other));
+        QVERIFY(!session.isDirty());
+        QVERIFY2(!metadata->text().contains(QStringLiteral("does not apply")),
+                 qPrintable(metadata->text()));
+        QVERIFY2(!rightMetadata->text().contains(QStringLiteral("does not apply")),
+                 qPrintable(rightMetadata->text()));
+    }
+
+    void bomPolicyComboFollowsThePolicyTable()
+    {
+        QTemporaryDir directory;
+        const QString left = directory.filePath("left.txt"), right = directory.filePath("right.txt");
+        writeFile(left, QByteArray::fromHex("efbbbf61")); writeFile(right, QByteArray("a"));
+        TextCompareSession session(left, right);
+        QVERIFY(session.open());
+        QScopedPointer<QWidget> widget(session.createWidget());
+        auto *combo = widget->findChild<QComboBox *>(QStringLiteral("bomPolicy"));
+        QVERIFY2(combo, "TXT-015 第 1 条要求的策略选择入口必须存在——规格写的住所是"
+                        "会话设置的格式页，那张页尚未落地，因此它落在比较规则这一排");
+        // 下拉里第 i 行显示的文案必须**就是**策略表第 i 项的文案。
+        // 与空白模式那处同一条纪律：文案与取值脱钩时，值那条路照样对得上，
+        // 只有用户看到的字变了，任何用例都不会红。
+        const QVector<Text::BomPolicy> policies = Text::availableBomPolicies();
+        QCOMPARE(combo->count(), policies.size());
+        for (int i = 0; i < policies.size(); ++i)
+            QCOMPARE(combo->itemText(i), Text::bomPolicyLabel(policies.at(i)));
+        // 出厂选中项必须落在默认档上（否则界面显示的档与引擎在用的档不是同一个）。
+        QCOMPARE(policies.at(combo->currentIndex()), Text::defaultBomPolicy());
+
+        // 用户选一项 ⇒ 真的改了比较规则与结论。
+        const int difference = policies.indexOf(Text::BomPolicy::TreatAsDifference);
+        QVERIFY(difference >= 0);
+        combo->setCurrentIndex(difference);
+        QCOMPARE(session.comparisonOptions().bomPolicy, Text::BomPolicy::TreatAsDifference);
+        QCOMPARE(session.conclusion(), Text::Conclusion::Different);
+
+        // 会话把选项改回别处（例如恢复了一份会话文件）⇒ 下拉必须跟着回去。
+        Text::CompareOptions options = session.comparisonOptions();
+        options.bomPolicy = Text::BomPolicy::Ignore;
+        session.setComparisonOptions(options);
+        QCOMPARE(combo->currentIndex(), policies.indexOf(Text::BomPolicy::Ignore));
+        QCOMPARE(session.conclusion(), Text::Conclusion::RuleIdentical);
     }
 };
 QTEST_MAIN(TextViewTests)

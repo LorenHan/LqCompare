@@ -38,6 +38,17 @@ TextCompareSession::TextCompareSession(const QString &left, const QString &right
         m_options.similarityThreshold = Text::clampSimilarityThreshold(
             settings->value(QStringLiteral("text.similarityThreshold"),
                             defaults.similarityThreshold).toInt());
+        // BOM 策略按**标识符**存取，不按枚举序号。序号是隐式的第二事实来源：
+        // 往枚举中间插一个取值，设置文件里那个整数就会换一个含义，
+        // 而现象是「升级之后比较规则自己变了」，没有任何东西会红。
+        // 认不出来的标识符由 `bomPolicyFromIdentifier()` 退回默认档
+        // （返回值是「认不认识」，档本身走输出参数——刻意不把两者混成一个值，
+        // 否则「认不出来」就只能表达成某一个**合法**档，调用方再也分不清）。
+        Text::bomPolicyFromIdentifier(
+            settings->value(QStringLiteral("text.bomPolicy"),
+                            QString::fromLatin1(Text::bomPolicyIdentifier(defaults.bomPolicy)))
+                .toString(),
+            &m_options.bomPolicy);
         if (state() == State::Open) recompute();
     });
 }
@@ -65,6 +76,11 @@ bool TextCompareSession::loadPair(const QString &left, const QString &right, QSt
         return reject(error, tr("Right file: %1").arg(reason));
     m_left = nextLeft;
     m_right = nextRight;
+    // 保存侧的 BOM 策略跨重新加载保留：它是会话级偏好，而 `Document` 在每次
+    // `loadPair()` 时都会被整体替换。忘了这一句的表现是「改了策略、
+    // 一重新加载就悄悄回到默认」，而用户只会在保存之后才发现文件带了 BOM。
+    m_left.setBomSavePolicy(m_leftBomSavePolicy);
+    m_right.setBomSavePolicy(m_rightBomSavePolicy);
     m_undo.clear();
     m_redo.clear();
     m_leftPath = m_left.path();
@@ -107,6 +123,13 @@ void TextCompareSession::setComparisonOptions(const Text::CompareOptions &option
     settings->setValue(QStringLiteral("text.alignSimilarLines"), options.alignSimilarLines);
     settings->setValue(QStringLiteral("text.similarityThreshold"),
                        Text::clampSimilarityThreshold(options.similarityThreshold));
+    // 表外取值退回默认档的标识符，**不写一个空串**：空串读回来虽然也会落到默认档，
+    // 但设置文件里会留下一处「有键无值」，排查时看不出它是有意的还是一处损坏。
+    const char *policyIdentifier = Text::bomPolicyIdentifier(options.bomPolicy);
+    settings->setValue(QStringLiteral("text.bomPolicy"),
+                       QString::fromLatin1(policyIdentifier
+                                               ? policyIdentifier
+                                               : Text::bomPolicyIdentifier(Text::defaultBomPolicy())));
     m_options = options;
     recompute();
 }
@@ -153,7 +176,13 @@ void TextCompareSession::updateStatus()
              QString::fromLatin1(m_right.codecName()), m_right.eolDescription());
     if (m_options.ignoreEol) status += tr(" • Line endings ignored");
     if (m_options.ignoreFinalNewline) status += tr(" • Final newline ignored");
-    if (m_left.hasBom() != m_right.hasBom()) status += tr(" • BOM differs (metadata only)");
+    // BOM 这一维的结论（TXT-015 第 2 条）。原来这里写死的是一句
+    // 「BOM differs (metadata only)」——它把「两侧 BOM 不同」**无条件**说成
+    // 只是元数据、与结论无关。那正是规格不允许的：BOM 差异算不算差异
+    // 由策略决定，而这句文案必须说清它落在了哪一档（被忽略 / 计为不同）。
+    // 措辞取自 `Text::bomConclusionSummary()`，不在界面这一层另写一份。
+    const Text::BomVerdict bom = bomVerdict();
+    if (bom.differs()) status += QStringLiteral(" • ") + Text::bomConclusionSummary(bom.conclusion);
     if (m_left.codecName() != m_right.codecName()) status += tr(" • Encoding differs (metadata only)");
     if (m_result.alignmentLimited) status += tr(" • Alignment work limit reached; unmatched range shown as replacement");
     // 相似度配对没做成（工作量超限）与对齐受限是两件事，各自有各自的提示：
@@ -170,9 +199,46 @@ void TextCompareSession::updateStatus()
     // **两侧任意一侧混合就警告**：混合行尾本身是要处理的问题（提交进版本库后
     // 会让 diff 工具反复报同一批行），而状态栏只有一行，没法按侧分别亮两个图标。
     // 到底哪一侧混合，文本里两个 `eolDescription()` 已经分别写清楚了。
-    const StatusSeverity severity = (m_left.hasMixedEndings() || m_right.hasMixedEndings())
+    const StatusSeverity severity = (m_left.hasMixedEndings() || m_right.hasMixedEndings()
+                                     // 被判成「真差异」的 BOM 差异也要抬到 `Warning`：
+                                     // 此时行级差异块是 0，状态栏若按普通信息显示，
+                                     // 用户看到的是一行「0 difference block(s)」再加一句
+                                     // 被淹没在里面的说明——而「这两份文件其实不同」
+                                     // 恰恰是最需要显眼的一件事。
+                                     || bom.countedAsDifference())
         ? StatusSeverity::Warning : StatusSeverity::Normal;
     setStatusText(status, severity);
+}
+
+Text::BomVerdict TextCompareSession::bomVerdict() const
+{
+    // 未打开（或打开失败、已关闭）时不下结论：那时候 `m_left` / `m_right` 只是两个
+    // 默认构造的文档，「两侧都没有 BOM」会被读成「BOM 状态相同」，
+    // 于是状态栏在打开之前就印出一句关于 BOM 的话。
+    return Text::evaluateBom(m_options.bomPolicy,
+                             Text::observeBom(m_left, m_right, state() == State::Open));
+}
+
+Text::Conclusion TextCompareSession::conclusion() const
+{
+    return Text::conclude(m_result, bomVerdict());
+}
+
+void TextCompareSession::setBomSavePolicy(bool left, Text::BomSavePolicy policy)
+{
+    if (left) m_leftBomSavePolicy = policy;
+    else m_rightBomSavePolicy = policy;
+    (left ? m_left : m_right).setBomSavePolicy(policy);
+    // 保存策略不影响比较结论，但它**影响 `Document::isModified()`**：把原文件带 BOM
+    // 的一侧设成「不写入 BOM」会让 `bytes()` 与原始字节不同，于是这一侧立刻变成
+    // 「有未保存修改」。所以必须走一次 `recompute()` 把脏标记与状态栏一起刷新——
+    // 漏了它，界面上的 Save 按钮会一直是灰的，用户改完策略反而存不下去。
+    recompute();
+}
+
+Text::BomSavePolicy TextCompareSession::bomSavePolicy(bool left) const
+{
+    return left ? m_leftBomSavePolicy : m_rightBomSavePolicy;
 }
 
 bool TextCompareSession::setText(bool left, const QString &text, QString *error)

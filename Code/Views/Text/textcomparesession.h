@@ -2,6 +2,7 @@
 #define LQCOMPARE_TEXTCOMPARESESSION_H
 
 #include "comparesession.h"
+#include "compareconclusion.h"
 #include "textdiff.h"
 
 namespace LqCompare {
@@ -50,6 +51,36 @@ public:
     bool saveSideAs(bool left, const QString &path, bool overwrite, QString *error = nullptr);
     bool setEncoding(bool left, const QByteArray &codec, QString *error = nullptr);
     void setLineEnding(bool left, Text::Eol eol);
+
+    // -----------------------------------------------------------------------
+    // BOM（TXT-015）
+    // -----------------------------------------------------------------------
+
+    ///
+    /// \brief BOM 这一维的判定（TXT-015 第 1、2 条）。
+    ///
+    /// 每次调用重新算，不做缓存：输入只有两侧文档的 BOM 事实与一个策略，
+    /// 判定本身是常数时间，而缓存要跟着「换文件 / 改规则 / 重新加载」三件事
+    /// 一起失效——漏掉一处就会在状态栏留下一句关于**上一对文件**的话。
+    ///
+    /// 会话未打开时返回 `BomConclusion::None`（不下结论）。
+    ///
+    Text::BomVerdict bomVerdict() const;
+
+    ///
+    /// \brief 本次比较的结论档（TXT-015 第 2 条）。
+    ///
+    /// 与 `differenceCount()` 的关系：后者数的是**行级差异块**，因此
+    /// 「两侧只差 BOM、而策略要求把它算成差异」时它仍然是 0。要回答
+    /// 「这两份文件到底算不算相同」必须问这里，这也是规格为什么要求
+    /// 结论分「相同 / 规则相同 / 不同」三档而不是一个差异计数。
+    ///
+    Text::Conclusion conclusion() const;
+
+    /// 保存侧的 BOM 策略（TXT-015 第 3 条）。按侧设置：两侧可以是两种保存目的。
+    void setBomSavePolicy(bool left, Text::BomSavePolicy policy);
+    Text::BomSavePolicy bomSavePolicy(bool left) const;
+
     bool copyDifference(bool leftToRight, QString *error = nullptr);
     void selectDifference(int index);
     // Read-only is enforced at every mutation API, independently of UI state.
@@ -111,6 +142,11 @@ private:
     QString m_rightPath;
     QByteArray m_leftCodec;
     QByteArray m_rightCodec;
+    /// 保存侧的 BOM 策略（TXT-015 第 3 条）。单独存而不塞进 `Document` 是因为
+    /// `Document` 会在每次 `loadPair()` 时被整体替换——策略是会话级的偏好，
+    /// 重新加载不该把它忘掉（忘了的表现是「改了策略、一重新加载就回到默认」）。
+    Text::BomSavePolicy m_leftBomSavePolicy = Text::BomSavePolicy::Preserve;
+    Text::BomSavePolicy m_rightBomSavePolicy = Text::BomSavePolicy::Preserve;
     int m_currentDifference = -1;
     /// 每一处改动对应的块下标区间（闭区间），见 `differenceCount()`。
     QVector<Text::DifferenceRun> m_differenceRuns;

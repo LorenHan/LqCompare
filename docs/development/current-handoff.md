@@ -316,6 +316,7 @@ Y Repository checks in 13s
 | `Services/Text/` + `Views/Text/`（行尾规则与状态栏严重度） | TXT-010 | **已完成**（四条标准全落。两条开关 `ignoreEol` / `ignoreFinalNewline` **早就在同一条键函数里**，缺的是「哪一条管哪件事」的组合断言；**本轮唯一新增的能力是第 4 条后半句那个「警告图标」**：会话多出一条独立的严重程度通道 `StatusSeverity`（文本与严重度**各自去重**）、容器转发并在切标签时重播、窗口在状态栏放一个永久控件 `statusWarningIcon`。另把 `Document::hasMixedEndings()` 做成谓词并与文案共用 `countEndings()`。**顺带删掉一处冗余路径**：图标原本有两条刷新路，导致两处变异互相遮蔽、双双漏检，见 §1.31） | `Tests/Text`（38 个用例函数，本轮 34 → 38）+ `Tests/TextView`（26，24 → 26）+ `Tests/Session`（52，50 → 52）+ `Tests/AppIntegration`（13，12 → 13） |
 | `Services/Text/`（替换规则链） | TXT-012 | **部分完成**（第 1、3、4 条已勾；第 2 条只落了服务层那一半——四条规则都能单独开关，且「正则 / 说明」都是服务层的可测数据，**画到界面上的那一半**要等设置页 `OPT-*`，见 §1.32） | **新套件** `Tests/TextRules`（19 个用例函数，**纯 QtCore**） |
 | `Services/Folder/`（二进制逐字节比对） | DIR-008 | **部分完成**（第 1、3、4、5 条已落；第 2 条落了「只比较前 N 字节」的引擎、设置键与视图往返，**缺的是画到界面上的那个输入框**——`FolderCompareView` 目前用与 `maximumDepth` 同样的办法原样保留该值而不显示它。见 §1.33） | `Tests/Folder`（45 个用例函数；DIR-008 那一轮 30 → 35，DIR-011 那一轮 35 → 45，链接 QtWidgets）+ `Tests/Report`（37，36 → 37） |
+| `Services/Text/` + `Views/Text/`（BOM 处理策略） | TXT-015 | **已完成**（四条标准全落，见 §1.43）。新模块 `compareconclusion.{h,cpp}` 承载两件事：**比较侧**「BOM 差异算不算差异」与**保存侧**「保存时怎么写 BOM」——两张描述子表（`Automatic` / `Ignore` / `TreatAsDifference` 与 `Preserve` / `AlwaysWrite` / `NeverWrite`）、三档结论 `Conclusion`（`Identical` / `RuleIdentical` / `Different`）的合成、`bomIsEncodingCritical()` 白名单（UTF-16/32 的 LE/BE 四个，**不是**「不等于 UTF-8」）与 `bomBytesForCodec()`。会话侧新增 `bomVerdict()` / `conclusion()` / `setBomSavePolicy()`（设置键 `text.bomPolicy` 存**标识符**不存枚举序号）；视图侧在比较规则那一排加 `bomPolicy` 下拉（按表铺、按表读回）、每侧一个保存策略下拉、元数据行多两句（「保存时会改 BOM」/「该策略对本编码不适用」）。规格第 2 条那句「**不得标成字节完全一致**」落在 `bomConclusionSummary()` 的文案上，界面层不另写一份。**入口位置是一处妥协**：规格写的住所是「会话设置 → 格式」，那张页属 `OPT-*` 尚未落地，所以策略入口暂时落在比较规则那一排（用例里写明了这一点） | **新套件** `Tests/CompareConclusion`（29 个用例函数，**纯 QtCore**）+ `Tests/TextView`（31，26 → 31） |
 | `Services/Folder/`（条目状态模型与判据） | DIR-011 | **已完成**（五条标准全落；新模块 `entrystatus.{h,cpp}`：9 档主状态表 + 内容证据 / 时间关系两维 + 存在性派生视图 + 基线校验与「只在叶子上细化」+ 引擎与用例共用的父子汇总 + 「为什么是这个状态」三节理由 + 不可能组合自检；视图侧新增状态图标列与右键菜单、报表与命令行改用同一张表；9 个中性灰描边状态图标。**一处必须说清的边界**：`RuleIdentical` / `CrcIdentical` 两档已进类型模型、证据表与理由链，但引擎暂时只产得出字节档——规则比对与 CRC 比对分别属 DIR-009 / DIR-007，尚未开工；第 1 条要求的是证据这一维**能区分**这些档，不是要求兄弟条目先落地。见 §1.37） | **新套件** `Tests/EntryStatus`（27 个用例函数，**纯 QtCore**）+ `Tests/Folder`（45，35 → 45） |
 | `Services/Folder/`（递归子目录策略） | DIR-003 | **已完成**（五条标准全落；新模块 `recursionstrategy.{h,cpp}`：三档表 + 表自检、档位 ↔ `Options` 双向映射（反查**按行为**归类，不新增字段）、深度边界唯一一份解释文案、循环符号链接判据与文案；视图侧把两态复选框换成档位下拉 + 深度上限数字框，换档即 `rescanRequested()` → 会话重扫。**一处必须说清的边界**：`applyTierToControls` 原先带一个 `fromUser` 参数，实测是**遮蔽防线**（程序性路径下那条写入恒被覆盖或恒等），删掉它没有任何用例变红，本轮收成「深度控件只有两个写入者」并让变异能单独打红。见 §1.38） | `Tests/Folder`（51 个用例函数，本轮 45 → 51；链接 QtWidgets） |
 | `Services/Folder/`（状态着色与图标） | DIR-012 | **已完成**（五条标准全落；新模块 `statuspalette.{h,cpp}`：三套配色（`default` / `high-contrast` / `color-blind-safe`）各带深浅两套色值 + 两个参考背景 + **自报的对比度门槛**，一张表 `colorSchemeTable()` 与一个**把表当参数**的校验函数；`relativeLuminance()` / `contrastRatio()` 走 WCAG 相对亮度、非法输入返回 `-1`；`colorBlindSeparation()` 走 Viénot/Brettel 模拟，**「色盲友好」这一位是被判据守着的**而不是装饰标签；配色导出 / 导入 `.lqcolors`，导入**复用同一个校验函数**且失败时一个字段都不改。视图侧：`themedStatusIcon()` 用 `CompositionMode_SourceIn` 给中性灰描边图标着色以适配深浅主题、按表铺的配色下拉与「配色…」菜单、`setColorScheme()` 只逐行 `dataChanged` 重绘**绝不重扫**、导入的自定义配色只活在本次会话。见 §1.39） | **新套件** `Tests/StatusPalette`（29 个用例函数，**纯 QtCore**）+ `Tests/Folder`（55，51 → 55；链接 QtWidgets） |
@@ -2998,6 +2999,87 @@ app bundle 的 `PkgInfo` / `Info.plist` 规则，而那两条规则开头就是 
   `-Wextra` 下会报 `-Wunused-parameter`；删掉形参名（保留类型）并在注释里说明「签名要求它存在」
   才能保持 0 warning。
 
+### 1.43 TXT-015 BOM 处理策略：20 处变异 20 处检出，其中两处是**变异测试捞出来的真缺口**（2026-09-24 06:4x）
+
+**条目**：issue #70 `[TXT-015] BOM 处理策略`（P1，入场时标签「需求 / 待实现 / 文本比对」）。
+
+**为什么选它**：这是本机可独立验证的一批里最完整的一条——四条完成标准全部落在
+`Services/Text` 与既有的 `Views/Text` 两层里，**不需要新建设置页**（另外几条候选的
+完成标准里带着指向尚不存在模块的动词：TXT-006/007 要「对齐命令」、DIR-007 要「CRC 列与报表」、
+TXT-014 要「状态栏编码下拉」、TXT-017 要「View 页」）。
+
+**落地了什么**
+
+| 文件 | 内容 |
+| --- | --- |
+| `Services/Text/compareconclusion.{h,cpp}`（**新**） | 三档结论 `Conclusion`（`Identical` / `RuleIdentical` / `Different`）与 `conclusionLabel()` / `conclusionDescription()`；比较侧策略表 `bomPolicyTable()`（`Automatic` / `Ignore` / `TreatAsDifference`）+ `bomPolicyIdentifier()` / `bomPolicyFromIdentifier()` / `defaultBomPolicy()` / `availableBomPolicies()` / `validateBomPolicyTable(table, expected)` / `bomPolicyLabel()`；编码判定 `bomIsEncodingCritical()`（白名单）与 `bomBytesForCodec()`；观测与判定 `BomObservation` / `observeBom()` / `BomVerdict` / `evaluateBom()` / `bomConclusionSummary()`；保存侧策略表 `bomSavePolicyTable()` 同一套范式 + `bomSavePolicyApplies()` / `bomShouldBeWritten()`；合成 `conclude(Result, BomVerdict)` |
+| `Services/Text/textdocument.{h,cpp}` | `Document` 新增 `setBomSavePolicy()` / `bomSavePolicy()` / `bomWillBeWritten()`，写盘那一段从「按编码写死的一串 `if`」换成 `bomShouldBeWritten()`。**出货行为逐字节不变**：`bomBytesForCodec()` 覆盖的正是原来那五个编码，其余编码原来也不写 |
+| `Services/Text/textdiff.h` | `CompareOptions` **末尾**新增 `BomPolicy bomPolicy = BomPolicy::Automatic;`（新字段只能加末尾，见 §4 那条按位置聚合初始化的纪律） |
+| `Views/Text/textcomparesession.{h,cpp}` | `bomVerdict()` / `conclusion()` / `setBomSavePolicy(bool left, …)` / `bomSavePolicy(bool left)`；设置键 `text.bomPolicy` 存**标识符**不存枚举序号；`updateStatus()` 里那句无条件的 `BOM differs (metadata only)` 换成按判定结果说话的一句，并在「BOM 计为差异」时把严重度提到 `Warning` |
+| `Views/Text/textcompareview.{h,cpp}` | 比较规则那一排新增 `bomPolicy` 下拉（按 `availableBomPolicies()` 铺、按同一张表读回），每侧保存策略一个下拉；元数据行多两句「保存时会改 BOM」/「该策略对本编码不适用」 |
+
+**四条完成标准各自被谁守着**
+
+1. **三档策略**——`bomPolicyTable()` 是唯一来源，`availableBomPolicies()` / `defaultBomPolicy()`
+   全部由它推导；`validateBomPolicyTable()` 把**期望值当参数**传入，所以「表里漏登记一档」
+   必须拿规格去比才报（重复登记与空标识符那几条都不会响）。下拉有一条用例逐行比对
+   「第 i 行显示的字 == 表第 i 项的文案」（TXT-009 留下的那条纪律：值一条链、文案一条链，两条都要钉）。
+2. **仅 BOM 不同且策略为忽略 ⇒ 规则相同，且不得标成字节完全一致**——`conclude()`
+   里 BOM 那一路**单独判**（BOM 差异不会往 `differences` 里加条目），结论从「相同」
+   降为「规则相同」；`bomConclusionSummary(Ignored)` 那句文案必须同时说出「已忽略」与
+   「两侧的原始字节并不相同」。
+3. **保存时可保留 / 强制写 / 强制不写**——两张边界：`NeverWrite × 字节序关键编码`
+   与 `AlwaysWrite × 没有可写 BOM 的编码（GBK 等）` 都返回「不适用」，此时
+   `bomShouldBeWritten()` **静默降级成保留**而不是弹窗拒绝；而「编码本身没有可写的 BOM」
+   这一句留在函数**最后一行**（`Preserve` 那一支完全可能想要 true）。
+4. **UTF-8 BOM 不会被误判成 UTF-16**——`utf8BomIsNeverReadAsUtf16_data()` 八行语料
+   （含 `double-utf8-bom` 与 `utf8-bom-then-fffe` 两个刻意绕的输入）。
+
+**验证数据**
+
+| 项 | 结果 |
+| --- | --- |
+| 新套件 `Tests/CompareConclusion` | **29 个用例函数全绿**（QTest 合计 29；刻意 `QT -= gui`，兼作「服务层不依赖界面」的编译期护栏） |
+| `Tests/TextView` | **31 全绿**（26 → 31，本轮新增 5 条端到端：状态栏文案与结论档、设置往返、保存后的磁盘字节、不可用编码的提示、下拉跟随策略表） |
+| 全量 | **3809 passed / 0 failed / 2 skipped（72 个套件）**，退出码 0，4 分 30 秒。上一轮 3775（71 个套件）⇒ 本轮 **+34 条、+1 个套件** |
+| 五道护栏 | 全部 `exit=0`：`check_layering` 分层通过 / `check_winapi` **357** 个源文件（353 → 357，正是本轮 2 个生产文件 + 2 个测试文件）/ `check_spec` 369 条规格、P0 59 条 / `check_icons` 41 个图标 / `check_shell` 16 个脚本。**`exit=` 取自护栏程序本身**，不是管道末端 `tail` 的 |
+| 主程序构建 | **全量重编 197 个翻译单元、0 条本仓 warning、0 error**，1 次链接（触发重编用**刷源码 mtime**，不是 `make clean`——理由见 §1.41 那条工具坑）。此后只改了测试文件，生产代码一字未动 |
+| 主程序启动 | 重签后 `QT_QPA_PLATFORM=offscreen … --new-instance` 三行日志齐全：单实例机制已由选项关闭 → Ribbon 构建完成：10 页 / 45 组 / 169 个按钮 → LqCompare 0.1.0 启动完成；跑完 `kill` 并确认残留进程为 0 |
+| 变异（反向验证） | **20 处变异 20 处检出、0 漏检、0 无效**（详见下一节）。驱动 `/tmp/lq_mutate_txt015.py`，**不进仓库**。每处都**在还原源码之前**比对目标 `.o` 的 mtime 来证明变异真的编进去了；没有统计行的（构建失败）一律按「无效」处理，不计漏检 |
+
+**变异测试这一次真的改了三处代码——这是本轮最有价值的部分**
+
+第一遍 15 处变异跑完，驱动报「9 检出 / 4 跑偏 / 2 存活」。逐条定性之后是三种不同的东西：
+
+- **2 处是真缺口**（补断言 + 补变异反向验证）：
+  - **M02「`Automatic` 只看左侧编码」全套用例全绿。** 注释里明明写着「只看一侧不够」，
+    用例里也真有一段叫 `mixed` 的语料——但它把 `rightCodec` 改成 UTF-8，**关键编码仍留在左侧**，
+    于是删掉 `|| bomIsEncodingCritical(rightCodec)` 之后「任一侧」只剩「左侧」，一条用例都不红。
+    补法是加一行**镜像**语料（`leftCodec = "UTF-8"`、`rightCodec = codec`）并注明「这一行才是判据」。
+  - **M06「把『两侧的原始字节并不相同』整段从句子里删掉」全套用例全绿。** 状态栏那条断言写的是
+    `statusText().contains(bomConclusionSummary(Ignored))`——**拿函数跟它自己比**，两边同源，
+    删掉实现里那句话两边一起变。规格第 2 条的「不得标成字节完全一致」在**用户真正读到的那一句**
+    上因此一直裸着。补法是钉**字面**（`contains(QStringLiteral("并不相同"))`），`CompareConclusion`
+    与 `TextView` 各一条。
+- **4 处是驱动自己的解析 bug，把检出读成了漏检**：`FAIL!` 行用 `split(":", 2)[-1]` 取出来的是
+  `:foo() Compared …`（开头多一个冒号），再 `split(":")[0]` 得到空串 ⇒ 提取到的用例名全是乱串，
+  于是 M07 / M08 / M12 / M13 这四处理论上已检出、期望用例也确实红了，却被报成「跑偏」。
+  改用正则取 `::([A-Za-z0-9_]+)\s*\(` 并保留整行之后，15/15。
+  **教训已进 §6：驱动的「漏检」结论必须附上实际红点清单，只给一个分类词的报告不能信。**
+- **5 处是后来专门去扫的「冷门分支」**（M16–M20）：`defaultBomPolicy({})` 与
+  `defaultBomSavePolicy({})` 两个**空表回退**此前没有任何输入走过（把它们硬编码的回退值改掉
+  全绿）、`bomSavePolicyLabel(NeverWrite)` 返回空串、`bomBytesForCodec("UTF-32BE")` 返回空、
+  `conclusionLabel(RuleIdentical)` 去掉「规则」二字。**5 处里前两处是真盲区**（补了
+  `QCOMPARE(defaultBomPolicy({}), BomPolicy::Automatic)` 与保存侧对应的一条），后三处检出。
+
+**本机没能验到的一件事（如实记下）**：`Automatic` 那一档的完整语义在**真实文件**上只走了
+「UTF-8 一侧带 BOM」这一种形状；「两侧编码相同、都带 BOM」与「两侧编码不同、BOM 状态也不同」
+这两组只在单元层验过。它们不需要新的验证手段，只差一次带真实编码文件的端到端，留待
+`TXT-011`（编码自动检测）落地后一起补。
+
+**其它**：本轮**没有触碰 `run-tests.sh`**，所以 §4.1 里那条「`--self-test` 偶发红点」的签名
+没有出现、也不需要「重跑一次基线」那句限定。
+
 ## 3. 当前代码结构（哪些文件已经存在）
 
 ```
@@ -4482,6 +4564,46 @@ Windows 腿 26 个套件、`actions/*@v4` → v5）都还没有结论或还没�
   文档 + 提交 + 推送 + issue 更新）。按 prompt 的停止条件，这是一种合法的停法：
   **停在完整闭环之后，不留半成品**。
 
+### 4.0.21 本轮（2026-09-24 06:4x）：TXT-015 BOM 处理策略（issue #70，**已完成**）
+
+**做了什么**：新模块 `Services/Text/compareconclusion.{h,cpp}`（比较侧「BOM 差异算不算差异」
++ 保存侧「BOM 怎么写」+ 三档结论 `Identical` / `RuleIdentical` / `Different` 的合成），
+`Document` 的写盘链改成走 `bomShouldBeWritten()`（出货行为逐字节不变），
+`CompareOptions` **末尾**新增 `bomPolicy`，会话与视图各加一条策略链。
+完整记录见 §1.43。
+
+**验证数据**：单套件 `Tests/CompareConclusion` 29 / `Tests/TextView` 31（26 → 31）；
+全量 **3809 passed / 0 failed / 2 skipped（72 个套件）**、退出码 0；
+五道护栏全 `exit=0`（`check_winapi` 源文件 353 → 357）；
+主程序**全量重编 197 个翻译单元、0 warning、0 error**、重签后离屏启动三行日志齐全；
+**变异 20 处 20 处检出、0 漏检**。
+
+**本轮的真实收获不在新增的功能，而在变异测试改了三处代码**：第一遍 15 处变异跑出
+「9 检出 / 4 跑偏 / 2 存活」，逐条定性后发现——**2 处是真空洞**（`Automatic` 的
+「任一侧」语料方向反了；状态栏那句「原始字节并不相同」只被「拿函数跟自己比」的断言覆盖）、
+**4 处是驱动自己的解析 bug 把检出读成了漏检**、**另扫出 2 处空表回退分支没有任何输入走过**。
+三处代码/断言都已补齐并各自反向验证会红。三条教训都进了 §6。
+
+**下一步（按优先顺序）**
+
+1. **先读新一轮 CI 的 `crash-trace.txt`**。上一轮已经查明 ubuntu 腿**从来没装过 gdb 也没装 lldb**
+   （见 §1.40 的产物：`结论：没有可用的调试器——本平台没拿到调用栈`），本轮**没有**改 CI。
+   下一次 push 会带上 gdb 安装步骤，届时 `Folder/crash-trace.txt` 里第一次会出现**真正的调用栈**——
+   那条从 §1.36 挂到现在的崩溃线（崩在 `linksAreComparedWithoutFollowing()` 的
+   `Folder::compare(pair.left, pair.right)` 这一次调用里）就等着那几帧。这是**最便宜的一条**：
+   拉产物、读文件，不需要写代码。
+2. `DIR-005` 文件修改时间的判定与容差：`DIR-011` 已把服务层那一半做出来，**只剩界面入口**
+   （§4.1 里已从「被阻塞」改为「不再被阻塞」）。
+3. 其余 DIR 条目（`DIR-004` / `DIR-002` / `DIR-006` / `DIR-007` / `DIR-009` / `DIR-010`）与
+   TXT 侧的 `TXT-011` / `TXT-016` / `TXT-017` / `TXT-004`。**开工前先按 §4.1 的三步核对**
+   （读完成标准 / `ls` 源码与用例目录找断言 / 在本文档里 `grep` 一次条目号）。
+4. `TXT-015` 留下的一处遗憾：`Automatic` 在**真实文件**上只走了「UTF-8 一侧带 BOM」一种形状。
+   `TXT-011`（编码自动检测）落地时补一组带真实编码文件的端到端。
+
+**停下的原因**：这一轮已经把一条 P1 完整闭环（实现 + 两个套件的用例 + 全量 + 五道护栏 +
+主程序全量重编与离屏启动 + 20 处变异 + 文档 + 提交 + 推送 + issue 更新）。
+按 prompt 的停止条件，这是合法的停法：**停在完整闭环之后，不留半成品**。
+
 ### 4.1 选下一步之前先看这一节：哪些条目被谁阻塞
 
 **为什么单独写一节**：本项目的推进方式是「一次闭环一条 issue」，
@@ -4530,6 +4652,8 @@ Windows 腿 26 个套件、`actions/*@v4` → v5）都还没有结论或还没�
 
 | ~~`DIR-012` 状态着色与图标~~ | **已落地**（issue #122，记录见 §1.39） | 五条完成标准**全部已勾**：三套配色表（默认 / 高对比 / 色盲友好）与记表自检、WCAG 对比度、「色盲友好」由 Viénot/Brettel 模拟距离守着、图标随主题着色、切换只重绘不重扫、`.lqcolors` 导出导入且**失败时一个字段都不改**。**入口住所**：配色下拉落在文件夹比对页的「显示」工具条上，规格说的 View 页 Coloring 组属 `OPT-*`（未落地）——与 `DIR-003` 的档位下拉同一处置，因此**不阻塞任何人**。**它给同族留了一条判据**：本轮扫出五处「没人喂过输入」的校验分支，说明**「分支写了」也不等于「判据被守住了」**，判据仍然是那句「把它删掉，谁变红？」 |
 | ~~`VCS-001` 版本控制后端抽象层~~ | **已落地**（issue #272，记录见 §1.42） | 五条完成标准**全部已勾**。它是本表里**第二种形态**的反例：不是「模块不存在」，也不是「模块存在但被误记成不存在」（`FMT-001` 那种），而是**「模块在、但三条标准一个守的都没有」**——抽象类、`GitBackend`、可注入假后端全都在仓库里跑着，而 `availability()` **从来没有被生产代码调用过**、路径缓存**一行都没有**。所以本轮的产出是：一个把「可用性」与「探测缓存」收在一处的新服务层模块（第 3、4 条）、主程序里唯一一处按 `isVcsActionId()` 统一置灰的接线（第 3 条），以及把「哪些命令算 VCS」与「置灰时说什么」两件事各收成**一份实现**。**它不阻塞任何条目**，也不被任何条目阻塞。**它给同族的 `VCS-002` ~ `VCS-019` 留了一条判据**：这条队列里的绝大多数条目都要「在有 git 的机器上看界面」，而**只要后端可注入，服务层那一半就永远能在本机闭环**——先做能反向验证的那一半 |
+
+| ~~`TXT-015` BOM 处理策略~~ | **已落地**（issue #70，记录见 §1.43） | 四条完成标准**全部已勾**。它是本表里**第三种形态**的反例：不是「模块不存在」，不是「模块存在但被误记成不存在」（`FMT-001` 那种），也不是「模块在、但标准一个守的都没有」（`VCS-001` 那种），而是**「每条标准都有断言，但其中两条守的是旁边的量」**——20 处变异反向验证时捞出两个真空洞：`Automatic` 的「任一侧」语料方向反了（删掉 `\|\| bomIsEncodingCritical(rightCodec)` 全套用例仍绿），以及状态栏那句「原始字节并不相同」只被「拿函数跟自己比」的断言覆盖（把整句从句子里删掉也全绿）。第三处是空表回退分支此前**没有任何输入走到过**。三处都已补断言并各自验证会红。**它不解除任何人的阻塞**，但它把「BOM 差异算不算差异」这件事从「散在写盘链里的几个 `if`」收敛成了一张表 + 一个判定函数 |
 
 **`FILT-002` 第 2 条当时为什么需要先决策（已被解决，留作记录）**：那条要求
 「正则匹配有超时保护（默认 200ms/条），超时记录为错误条目并继续」。但
@@ -4910,3 +5034,6 @@ Windows 腿 26 个套件、`actions/*@v4` → v5）都还没有结论或还没�
 | **`class VcsView` 的守卫写在视图方法里等于不可达的死代码** | VCS-001 最初在 `MainWindow::showVcs(int mode)` 开头加了「后端不可用就直接返回」的守卫，读起来是纵深防御。但 `VcsView` 的**唯一**入口是 `CommandRegistry::trigger`，而命令被置灰时那条路根本走不到——这道守卫**不可能被执行**，也不可能有任何用例把它打红 | 与上一条同族（「删掉之后没有用例变红的分支不是纵深防御」），但这里额外多一层：**先找「这个函数有几个调用者」**。只有一个调用者、且那个调用者的前置条件已经排除了该分支时，守卫就不是防线而是装饰。正确做法是把「不可用」这件事放在**唯一的出口**（`updateCommandState()` 里统一 `setEnabled`），并在注释里写明为什么只有一处 |
 | **断言紧跟在一次「清空 / 重置 / 复位」后面时，它会变成一句恒真的话** | VCS-001 的 `RepositoryCache::setBackend()` 里有 `m_entries.clear()`，而用例原本写成 `cache.clear(); QCOMPARE(cache.cachedPathCount(), 0); cache.setBackend(second); QCOMPARE(cache.cachedPathCount(), 0);`——第二条断言里那个 0 是**上一步 `clear()`** 的功劳，与 `setBackend()` 清没清空毫无关系。于是「换后端不清空缓存」这个**真 bug** 在那个位置上完全不可观察（后果：换成新后端之后，已经问过的路径继续吐旧后端的答案，形状完全正常，谁都看不出来），本轮变异 M14 就是这么漏过去的——它的表现是 `failed=0 用例=[]`，读起来像「这处变异没有影响」，而不是像「断言没守住」 | 判据：**先问「这个量为 0 / 为空 / 为假，是不是上一条语句刚做出来的」**。是的话，就在被观察的动作之前**先把状态填成非平凡的**——本轮在 `setBackend()` 前补了 `QVERIFY(cache.detect("/repo/a").ok()); QCOMPARE(cache.cachedPathCount(), 1);`，两件事才分得开。这与 TXT-001 那条「断言里的具体数字必须有独立来源」是同一族的两种写法：一种钉错了量，一种钉的量是上一步自己造出来的（DIR-008 的「等长、只差一处」夹具也属此列） |
 | **实现注释里写着的设计意图，也是一种规格；它同样要有东西守** | VCS-001 的 `unavailableReason()` 末尾把「其他故障」聚合成一整句带主语的文案（`版本控制后端当前不可用：<原始 detail>`），注释里写明**为什么不直接透传 `error.message`**（后端那句话的落点是设置页，而这条结论要贴在每条置灰命令的 tooltip 上，那里得先说清是哪个东西不可用）。但用例只断言了「原始 detail 出现在原因里」，把整句换成裸 detail 一样绿——**那条注释里的意图没有任何东西守着**。变异 M03 第一次跑就是 `failed=0` | 与「完成标准里带副词的那个词最容易没人守」同族，但这句话的规格来源是**注释而不是 issue**。判据仍然是「把它反过来写，谁变红？」，只是要把**代码注释里那些「为什么不这样做」的句子**也当成待守清单过一遍（本仓的注释惯例就是写「为什么不」，这恰好使它成了一份现成的检查表）。补法：`QVERIFY(reason != "裸的那句话")` + `QVERIFY(reason.contains("版本控制"))` 两条 |
+| **「拿 X 跟 X 自己比」的断言是一条恒真的话；而它长得非常像一条强断言** | TXT-015 的状态栏用例里写着 `QVERIFY2(session.statusText().contains(Text::bomConclusionSummary(BomConclusion::Ignored)), …)`，读起来是「状态栏必须说出那句结论」。但状态栏那句话**就是**由 `bomConclusionSummary()` 拼出来的，两边同源：把「（结论为规则相同，**两侧的原始字节并不相同**）」整段从实现里删掉，等式两边一起变，**全部用例依然全绿**。规格原话「不得标成字节完全一致」因此只被**档名/说明**那两条守着，**用户真正读到的那一句**其实裸着。同一次扫描里还捞出另一处同形：`validateBomPolicyTable({})` 有断言，而 `defaultBomPolicy({})`（空表回退）**没有任何输入喂过** | 判据：**凡断言形如 `输出.contains(f(输入))`，先问「f 是不是就是产生这段输出的那个函数」**——是的话这条断言只证明了「函数是它自己」。改为钉**字面**（`contains(QStringLiteral("并不相同"))`）才有区分力。空表回退那一处则要显式喂空表（`QCOMPARE(defaultBomPolicy({}), BomPolicy::Automatic)`）。两处补完各加一处变异反向验证（M02 / M06 / M16 / M17） |
+| **「注释里写着『只看一侧不够』」不等于「夹具真的喂了两个方向」** | TXT-015 的 `Automatic` 判定注释写明「只看一侧不够：一侧 UTF-16LE、另一侧 UTF-8 时仍然算差异」，用例里也**确实**有一段叫 `mixed` 的语料——但它把 `rightCodec` 改成了 UTF-8，**关键编码仍留在左侧**。于是把实现里的 `\|\| bomIsEncodingCritical(rightCodec)` 整个删掉（「任一侧」只剩「左侧」），29 条用例**一条都不红**。注释与用例看起来严丝合缝，实际守的是同一个方向 | 判据：**一个「A 或 B」的判据，夹具必须给出「只有 A」与「只有 B」两种形状**——只给一种时，被覆盖的那一支可以是任意值。这与 DIR-008 那条「默认夹具形状会天然掩盖某些性质」同族，但更容易骗过审阅：**注释的措辞会让人以为语料已经是对称的**。补法是加一行镜像语料，并在这行旁边写明「这一行才是『任一侧』的判据」 |
+| **变异驱动的「预期用例名」解析会静默错位，把检出读成漏检** | TXT-015 第一版驱动用 `line.split(":", 2)[-1]` 取 QTest 的 `FAIL!` 行，得到的是 `:foo() Compared …`（开头多一个冒号），再 `split(":")[0]` 拿到空串，于是「提取到的用例名」全是截断的乱串。**后果不是报错，而是分类反了**：四处理论上已检出的变异被报成「跑偏（红的不是期望那组）」，报告里看起来像测试有洞 | `FAIL!` 行里用正则取 `::([A-Za-z0-9_]+)\s*\(`，并保留**整行**而不是切过的片段。更稳的做法是**先把分类结果打印出来再判**：驱动必须能回答「这一处红的是哪几条用例」，而人看得见那一列之后，解析错位当场就露馅了。**判据：驱动的「漏检」结论必须附上实际红点清单，只给一个分类词的报告不能信**（TXT-015） |

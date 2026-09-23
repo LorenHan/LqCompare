@@ -1,5 +1,6 @@
 #include "textdocument.h"
 #include "textdiff.h"
+#include "compareconclusion.h"
 
 #include <QFile>
 #include <QFileInfo>
@@ -363,14 +364,25 @@ QByteArray Document::bytes(QString *error) const
              .arg(state.invalidChars));
         return {};
     }
-    if (m_bom) {
-        if (m_codec == "UTF-8") encoded.prepend(QByteArray::fromHex("efbbbf"));
-        else if (m_codec == "UTF-16LE") encoded.prepend(QByteArray::fromHex("fffe"));
-        else if (m_codec == "UTF-16BE") encoded.prepend(QByteArray::fromHex("feff"));
-        else if (m_codec == "UTF-32LE") encoded.prepend(QByteArray::fromHex("fffe0000"));
-        else if (m_codec == "UTF-32BE") encoded.prepend(QByteArray::fromHex("0000feff"));
+    // 保存侧的 BOM 策略（TXT-015 第 3 条）。
+    //
+    // 判定放在这一层而不是会话层：`bytes()` 还被 `isModified()`、`save()` 与
+    // `saveAs()` 用着，四处必须看到同一个答案——否则会出现「文件已经改了、
+    // 界面却说没改」（或反过来），而那种症状看起来与 BOM 毫无关系。
+    //
+    // 原来这里是一串按编码写死 BOM 字节的分支，出货行为（`Preserve`）与它
+    // **逐字节相同**：`bomBytesForCodec()` 覆盖的正是那五个编码，其余编码
+    // 原来也走「不写」（没有分支命中），现在返回空串，同样不写。
+    if (bomShouldBeWritten(m_bomSavePolicy, m_bom, m_codec)) {
+        const QByteArray marker = bomBytesForCodec(m_codec);
+        if (!marker.isEmpty()) encoded.prepend(marker);
     }
     return encoded;
+}
+
+bool Document::bomWillBeWritten() const
+{
+    return bomShouldBeWritten(m_bomSavePolicy, m_bom, m_codec);
 }
 
 bool Document::isModified() const

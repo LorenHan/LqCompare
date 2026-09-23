@@ -85,6 +85,9 @@ private:
     QPushButton *m_saveAs[2] = {};
     QComboBox *m_encodings[2] = {};
     QComboBox *m_endings[2] = {};
+    /// 保存侧的 BOM 策略（TXT-015 第 3 条）。**按侧**存：两侧的保存目的可以不同，
+    /// 而比较规则那一排（`m_bomPolicy`）是成对的，两者不能共用一个控件。
+    QComboBox *m_bomSaves[2] = {};
     QPushButton *m_copyToRight = nullptr;
     QPushButton *m_copyToLeft = nullptr;
     QLabel *m_summary = nullptr;
@@ -92,6 +95,10 @@ private:
     QCheckBox *m_ignoreEol = nullptr;
     QCheckBox *m_ignoreFinal = nullptr;
     QComboBox *m_whitespace = nullptr;
+    /// BOM 处理策略（TXT-015 第 1 条）。与其余比较规则同排，因为它就是一条比较规则：
+    /// 规格写的入口（会话设置 → 格式）所在的那张页属 `OPT-007`，尚未落地，
+    /// 与 `DIR-003` 的档位下拉同一处置。
+    QComboBox *m_bomPolicy = nullptr;
     // TXT-005：相似行对齐的总开关与阈值。两者是一组——阈值在开关关掉时
     // 不生效，因此界面上必须把阈值一起禁用，否则用户会以为调了没用。
     QCheckBox *m_alignSimilar = nullptr;

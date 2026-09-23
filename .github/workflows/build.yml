@@ -172,6 +172,38 @@ jobs:
           fi
           bash Code/Tests/run-tests.sh --self-test
 
+      # ubuntu 腿**没有**调试器。这不是猜的：run 35921319095 的
+      # `test-logs-ubuntu-latest/Folder/crash-trace.txt` 写的正是
+      # 「没有可用的调试器——本平台没拿到调用栈」，同一步的日志里
+      # `command -v gdb` 与 `command -v lldb` 都返回空（ubuntu-24.04 镜像不再自带它们）。
+      #
+      # 后果很具体：`Tests/Folder` 那条 `*** buffer overflow detected ***` 只能答到
+      # 「崩在哪一条用例」（`verbose.txt` 的功劳），答不到「崩在哪一行 C++」——
+      # 而只有后者能拿去改代码。装 gdb 是把这条线从「哪一条用例」推进到
+      # 「哪一行」的唯一一步，它比任何一次代码猜测都便宜。
+      #
+      # **装不上不让腿变红**：缺一个调试器是环境差异，不是被测对象失败
+      # （与本文件里 LqRibbon 那条同一处置）。但降级必须可见——`::warning::`
+      # 会进 CI 注解，`crash-trace.txt` 里也会照旧写明「没有栈」，
+      # 绝不让「没有栈」被读成「没有崩」。
+      - name: 准备崩溃栈调试器（ENG-004）
+        if: runner.os == 'Linux'
+        run: |
+          if command -v gdb >/dev/null 2>&1; then
+            echo "镜像已自带 gdb：$(command -v gdb)"
+            exit 0
+          fi
+          # `apt-get update` 允许失败并单独成句：源列表本来就可用时它可能报
+          # 「有些索引文件下载失败」，而那句与「gdb 装不装得上」是两件事。
+          # 把它和 install 合成一句用 `&&` 连起来，会让一个无关的镜子故障
+          # 变成「装不上 gdb」，然后下一次有人去查 `run-tests.sh`。
+          sudo apt-get update -qq || true
+          if sudo apt-get install -y -qq gdb; then
+            echo "已安装 gdb：$(command -v gdb)"
+          else
+            echo "::warning::gdb 安装失败：崩溃套件只能答到「哪一条用例」，答不到「哪一行 C++」"
+          fi
+
       # 这一步必须在没有 LqRibbon 时也跑：64 个套件是自足的（ENG-002），
       # 而「测试到底跑没跑」才是这条流水线最该回答的问题。
       # 拿不到依赖时把 2 个真正依赖它的套件排除，但排除必须**被看到**：
@@ -187,6 +219,8 @@ jobs:
           # 就是「这里到底有没有 gdb」。所以这里只是打印与告警，**不让这条腿变红**：
           # 缺一个调试器是环境差异，不是被测对象失败（与本文件里 LqRibbon 那条
           # 「降级必须可见、但不能把不需要凭据也能拿到的信息一起丢掉」同一处置）。
+          # Linux 腿上面那一步会先把 gdb 装上，因此这里现在应当总是打印出路径；
+          # 打不出来就说明安装那一步真的失败了，而那正是告警要提醒的事。
           if command -v gdb >/dev/null 2>&1; then
             echo "崩溃栈捕获可用调试器：$(command -v gdb)"
           elif command -v lldb >/dev/null 2>&1; then

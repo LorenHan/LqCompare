@@ -76,6 +76,26 @@ struct CompareOptions {
     /// 的错位。空白模式更在后面——它管的是「怎么比」，替换管的是「拿什么比」。
     ///
     ReplacementSet replacements;
+    ///
+    /// BOM 差异算不算差异（TXT-015 第 1 条）。
+    ///
+    /// 枚举本身住在 `textdocument.h`（`Document` 也要用同族的 `BomSavePolicy`，
+    /// 而 `textdocument.h` 是本模块的底座头，两边都能看见它；反过来依赖不行——
+    /// 本头文件已经 include 它）。**它的全部行为**——策略表、可选集合、自检、
+    /// 判定函数与面向用户的文案——只写在 `compareconclusion.h/cpp` 一处。
+    ///
+    /// 为什么把它做成**比较规则**而不是 `Document` 上的属性：同两份文件在不同
+    /// 规则下应当给出不同结论，而 `Document` 描述的是「这一侧的文件是什么」，
+    /// 与另一侧无关。
+    ///
+    /// 出厂值 `Automatic`（按编码自动判定）不是「新功能先关掉」的保守选择：
+    /// 它同时避开了两个方向的误判——对 UTF-8 那个完全冗余的 BOM 不计较，
+    /// 对 UTF-16/UTF-32 那个「就是字节序声明」的 BOM 计较。理由详见
+    /// `compareconclusion.cpp` 里那张策略表旁边。
+    /// **恒等式**由 `Tests/CompareConclusion` 钉住：它必须等于 `defaultBomPolicy()`，
+    /// 否则界面下拉一打开显示的就是一个与引擎实际在用的不同的档。
+    ///
+    BomPolicy bomPolicy = BomPolicy::Automatic;
 };
 struct Block {
     Change change = Change::Equal;

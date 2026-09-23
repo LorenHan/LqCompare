@@ -64,6 +64,30 @@ int whitespaceIndexOf(Text::Whitespace mode)
     const int index = Text::availableWhitespaces().indexOf(mode);
     return index < 0 ? 0 : index;
 }
+// BOM 策略同一套做法：下拉按 `availableBomPolicies()` 铺、按同一张表读回。
+// 与空白模式那两处一样，序号不参与任何判定。
+Text::BomPolicy bomPolicyAt(int index)
+{
+    const QVector<Text::BomPolicy> policies = Text::availableBomPolicies();
+    if (index < 0 || index >= policies.size()) return Text::defaultBomPolicy();
+    return policies.at(index);
+}
+int bomPolicyIndexOf(Text::BomPolicy policy)
+{
+    const int index = Text::availableBomPolicies().indexOf(policy);
+    return index < 0 ? 0 : index;
+}
+Text::BomSavePolicy bomSavePolicyAt(int index)
+{
+    const QVector<Text::BomSavePolicy> policies = Text::availableBomSavePolicies();
+    if (index < 0 || index >= policies.size()) return Text::defaultBomSavePolicy();
+    return policies.at(index);
+}
+int bomSavePolicyIndexOf(Text::BomSavePolicy policy)
+{
+    const int index = Text::availableBomSavePolicies().indexOf(policy);
+    return index < 0 ? 0 : index;
+}
 }
 
 // 单个空白模式的界面文案。
@@ -186,6 +210,19 @@ TextCompareView::TextCompareView(TextCompareSession *session, QWidget *parent)
     rules->addWidget(m_whitespace);
     rules->addWidget(m_ignoreEol);
     rules->addWidget(m_ignoreFinal);
+    // BOM 策略（TXT-015 第 1 条）。规格写的入口是「会话设置 → 格式中的 BOM 相关项」，
+    // 而那张设置页（`OPT-007`）还没落地——与 `DIR-003` 的档位下拉、`DIR-012` 的
+    // 配色下拉同一处置：把它放在**离它最近、且已经存在**的界面上（这里与其余
+    // 比较规则同排），等设置页落地时再搬。这样本轮不必为了一个下拉去落一张设置页，
+    // 也不会把这条规则塞进 `general` 另起一个与规格无关的键。
+    m_bomPolicy = new QComboBox(this);
+    m_bomPolicy->setObjectName(QStringLiteral("bomPolicy"));
+    m_bomPolicy->setToolTip(tr("Whether a byte order mark counts as a difference. "
+                               "\"By encoding\" ignores a redundant UTF-8 BOM but counts "
+                               "a UTF-16/UTF-32 byte order mark."));
+    for (Text::BomPolicy policy : Text::availableBomPolicies())
+        m_bomPolicy->addItem(Text::bomPolicyLabel(policy));
+    rules->addWidget(m_bomPolicy);
     rules->addWidget(m_alignSimilar);
     rules->addWidget(m_similarity);
     rules->addStretch();
@@ -198,12 +235,14 @@ TextCompareView::TextCompareView(TextCompareSession *session, QWidget *parent)
         options.whitespace = whitespaceAt(m_whitespace->currentIndex());
         options.alignSimilarLines = m_alignSimilar->isChecked();
         options.similarityThreshold = m_similarity->value();
+        options.bomPolicy = bomPolicyAt(m_bomPolicy->currentIndex());
         m_session->setComparisonOptions(options);
     };
     connect(m_ignoreCase, &QCheckBox::toggled, this, optionsChanged);
     connect(m_ignoreEol, &QCheckBox::toggled, this, optionsChanged);
     connect(m_ignoreFinal, &QCheckBox::toggled, this, optionsChanged);
     connect(m_whitespace, QOverload<int>::of(&QComboBox::currentIndexChanged), this, optionsChanged);
+    connect(m_bomPolicy, QOverload<int>::of(&QComboBox::currentIndexChanged), this, optionsChanged);
     connect(m_alignSimilar, &QCheckBox::toggled, this, optionsChanged);
     connect(m_similarity, QOverload<int>::of(&QSpinBox::valueChanged), this, optionsChanged);
 
@@ -326,12 +365,32 @@ QWidget *TextCompareView::makeSide(bool left)
         ending->setCurrentIndex(0);
     });
     actions->addWidget(ending);
+    // 保存侧的 BOM 策略（TXT-015 第 3 条）。放在行尾下拉旁边而不是比较规则那一排：
+    // 那两个是**按侧**的（每一侧的保存目的可以不同），比较规则那一排是**成对**的。
+    auto *bomSave = new QComboBox(widget);
+    m_bomSaves[side] = bomSave;
+    bomSave->setObjectName(left ? QStringLiteral("bomSaveLeft") : QStringLiteral("bomSaveRight"));
+    for (Text::BomSavePolicy policy : Text::availableBomSavePolicies())
+        bomSave->addItem(Text::bomSavePolicyLabel(policy));
+    bomSave->setToolTip(tr("How the byte order mark is written when this side is saved. "
+                           "Removing it is impossible for UTF-16/UTF-32, where the mark "
+                           "is what states the byte order."));
+    connect(bomSave, QOverload<int>::of(&QComboBox::currentIndexChanged), this,
+            [this, left](int index) {
+                m_session->setBomSavePolicy(left, bomSavePolicyAt(index));
+            });
+    actions->addWidget(bomSave);
     actions->addStretch();
     layout->addLayout(actions);
     m_panes[side] = new TextPane(widget);
     m_panes[side]->setObjectName(left ? QStringLiteral("leftTextPane") : QStringLiteral("rightTextPane"));
     layout->addWidget(m_panes[side], 1);
     m_metadata[side] = new QLabel(widget);
+    // 与路径框、窗格、编码下拉同样的处置：给一个稳定的对象名，
+    // 「这一行写了什么」才验得到。元数据行是 BOM 保存策略见不到效果时
+    // 唯一的解释出口，它必须有名字。
+    m_metadata[side]->setObjectName(left ? QStringLiteral("leftMetadata")
+                                         : QStringLiteral("rightMetadata"));
     m_metadata[side]->setWordWrap(true);
     layout->addWidget(m_metadata[side]);
     return widget;
@@ -340,12 +399,13 @@ QWidget *TextCompareView::makeSide(bool left)
 void TextCompareView::refresh()
 {
     const QSignalBlocker b1(m_ignoreCase), b2(m_ignoreEol), b3(m_ignoreFinal), b4(m_whitespace),
-        b5(m_alignSimilar), b6(m_similarity);
+        b5(m_alignSimilar), b6(m_similarity), b7(m_bomPolicy);
     const auto options = m_session->comparisonOptions();
     m_ignoreCase->setChecked(options.ignoreCase);
     m_ignoreEol->setChecked(options.ignoreEol);
     m_ignoreFinal->setChecked(options.ignoreFinalNewline);
     m_whitespace->setCurrentIndex(whitespaceIndexOf(options.whitespace));
+    m_bomPolicy->setCurrentIndex(bomPolicyIndexOf(options.bomPolicy));
     m_alignSimilar->setChecked(options.alignSimilarLines);
     m_similarity->setValue(Text::clampSimilarityThreshold(options.similarityThreshold));
     // 关掉总开关时阈值没有任何作用，把它一起禁用——留着可改会让人以为「调了阈值
@@ -355,6 +415,12 @@ void TextCompareView::refresh()
     m_paths[1]->setText(m_session->rightPath());
     for (int side = 0; side < 2; ++side) {
         const auto &document = side == 0 ? m_session->leftDocument() : m_session->rightDocument();
+        // 保存策略下拉要在**屏蔽信号**的情况下铺：`setCurrentIndex()` 会发
+        // `currentIndexChanged`，那个槽会回调 `setBomSavePolicy()` 再触发一次
+        // `comparisonChanged` → `refresh()`。不屏蔽就是一次「刷新触发刷新」，
+        // 而且会在用户没动过手的情况下把设置写一遍。
+        const QSignalBlocker savePolicyBlocker(m_bomSaves[side]);
+        m_bomSaves[side]->setCurrentIndex(bomSavePolicyIndexOf(m_session->bomSavePolicy(side == 0)));
         QStringList content;
         QVector<int> numbers;
         for (const auto &row : m_session->comparison().rows) {
@@ -376,6 +442,14 @@ void TextCompareView::refresh()
             .arg(document.lines().isEmpty() || document.lines().last().eol == Text::Eol::None
                  ? tr("No final newline") : tr("Final newline"));
         if (document.isModified()) metadata += tr(" • Unsaved");
+        // BOM 的**保存**状态（TXT-015 第 3 条）。「这次保存会写/不写 BOM」与
+        // 「文件里现在有没有 BOM」是两件事，用户改完策略最需要知道的正是会不会变；
+        // 而「策略在这个编码上做不到」更要写出来——不写的话，用户按了
+        // 「不写入 BOM」又看到文件头还有它，只能判断成这个功能坏了。
+        if (document.bomWillBeWritten() != document.hasBom())
+            metadata += tr(" • BOM will change on save");
+        if (!Text::bomSavePolicyApplies(document.bomSavePolicy(), document.codecName()))
+            metadata += tr(" • BOM option does not apply to this encoding");
         if (!document.warning().isEmpty()) metadata += tr(" • %1").arg(document.warning());
         m_metadata[side]->setText(metadata);
     }
@@ -394,6 +468,7 @@ void TextCompareView::refreshActions()
         m_saveAs[side]->setEnabled(writable && document.canEdit());
         m_encodings[side]->setEnabled(writable);
         m_endings[side]->setEnabled(writable && document.canEdit());
+        m_bomSaves[side]->setEnabled(writable && document.canEdit());
     }
     const bool hasDifference = m_session->currentDifference() >= 0;
     m_copyToLeft->setEnabled(hasDifference && !m_session->isSideReadOnly(true)
