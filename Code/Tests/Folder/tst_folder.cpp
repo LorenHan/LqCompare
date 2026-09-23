@@ -7,6 +7,8 @@
 #include "sessiondocument.h"
 
 #include <QAction>
+#include <QAbstractItemModel>
+#include <QBrush>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QCoreApplication>
@@ -14,6 +16,7 @@
 #include <QDir>
 #include <QFile>
 #include <QIcon>
+#include <QImage>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
@@ -46,6 +49,31 @@ const Folder::Entry *findEntry(const Folder::Result &result, const QString &path
             return &entry;
     }
     return nullptr;
+}
+
+// 一张图标里不透明像素的平均明度（DIR-012）。
+//
+// 用它而不是「某个坐标的像素值」：描边图标的边缘全是抗锯齿的半透明像素，
+// 钉单个坐标会在图标稍微改动时莫名其妙地红，而它想验证的其实是
+// 「整张图被染成了什么颜色」。着色走 `CompositionMode_SourceIn`，
+// 因此每个非透明像素的 RGB 都恰好等于该状态在本方案里的颜色，
+// 平均值也就等于那个颜色的明度——两边都算不出东西（全透明，也就是
+// 「图标根本没加载出来」）时返回 -1，由调用方断言掉。
+double meanOpaqueLightness(const QIcon &icon)
+{
+    const QImage image = icon.pixmap(16, 16).toImage().convertToFormat(QImage::Format_ARGB32);
+    qint64 sum = 0;
+    int count = 0;
+    for (int y = 0; y < image.height(); ++y) {
+        for (int x = 0; x < image.width(); ++x) {
+            const QColor pixel = image.pixelColor(x, y);
+            if (pixel.alpha() < 8)
+                continue;
+            sum += pixel.lightness();
+            ++count;
+        }
+    }
+    return count == 0 ? -1.0 : double(sum) / count;
 }
 
 struct Pair
@@ -1830,6 +1858,284 @@ private slots:
         QCOMPARE(model->rowCount(), 1);
         view->setStatusFilter(-1);
         QCOMPARE(model->rowCount(), all);
+        session.close();
+    }
+
+    // -----------------------------------------------------------------------
+    // J 组：DIR-012 状态着色与图标
+    //
+    // 五条标准里第 1 条的后半句、第 3 条、第 4 条与第 5 条的界面那一半
+    // **必须**链接 QtWidgets，因此它们在这里；配色表自身合不合规、
+    // 对比度与色觉判据、配色文件往返在 `Tests/StatusPalette`（纯 QtCore）。
+    // -----------------------------------------------------------------------
+
+    // DIR-012 第 1 条后半句：图标随主题切换自动适配深浅。
+    // 九张资源图是中性灰描边（DIR-011 刻意的取舍：不同形状而不是不同颜色），
+    // 深色主题上原样用几乎看不见，因此配色方案必须连图标一起换。
+    void statusIconsAreTintedByTheSchemeAndFollowTheTheme()
+    {
+        const auto &standard = Folder::colorSchemeByIdentifier(Folder::defaultColorSchemeIdentifier());
+        for (const auto &descriptor : Folder::mainStatusTable()) {
+            const QIcon lightIcon = themedStatusIcon(descriptor.value, standard, false);
+            const QIcon darkIcon = themedStatusIcon(descriptor.value, standard, true);
+            QVERIFY2(!lightIcon.isNull(), qPrintable(Folder::statusIdentifier(descriptor.value)));
+            QVERIFY2(!darkIcon.isNull(), qPrintable(Folder::statusIdentifier(descriptor.value)));
+            const double light = meanOpaqueLightness(lightIcon);
+            const double dark = meanOpaqueLightness(darkIcon);
+            // 两边都算得出来 —— 全透明（也就是「图标没加载出来」）会让下面两条
+            // 断言一起通过，而那正是最需要被抓住的一种失败。
+            QVERIFY2(light >= 0.0, qPrintable(Folder::statusIdentifier(descriptor.value)));
+            QVERIFY2(dark >= 0.0, qPrintable(Folder::statusIdentifier(descriptor.value)));
+            // 深色主题那一档必须明显更亮。一个「只管前景色、不管图标」的实现
+            // 会给出两张一模一样的图，这里当场红。
+            QVERIFY2(dark > light + 40.0,
+                     qPrintable(QStringLiteral("%1: 深 %2 / 浅 %3")
+                                    .arg(Folder::statusIdentifier(descriptor.value))
+                                    .arg(dark)
+                                    .arg(light)));
+        }
+        // 换方案必须换出不同的图标：不然「配色方案可切换」在图标这一半是假的。
+        const auto &contrast = Folder::colorSchemeByIdentifier(QStringLiteral("high-contrast"));
+        const double standardDark =
+            meanOpaqueLightness(themedStatusIcon(Folder::Status::Different, standard, true));
+        const double contrastDark =
+            meanOpaqueLightness(themedStatusIcon(Folder::Status::Different, contrast, true));
+        QVERIFY(qAbs(standardDark - contrastDark) > 5.0);
+    }
+
+    // DIR-012 第 3 条：颜色仅作为辅助，状态图标与文字提示必须同时存在。
+    //
+    // 这条在界面上是「三样同时在」：状态列的**文字**、**图标**，以及配色给的
+    // **颜色**。颜色在任何一套方案下都必须能给出来（否则那一档退化成默认前景色，
+    // 与「这一档不重要」看起来一样）。逐套方案都要查——只查默认方案的话，
+    // 「导入的自定义配色缺了一档」这条最可能的坏法完全测不到。
+    void everySchemeStillCarriesTextAndIconInTheRow()
+    {
+        Pair pair;
+        QVERIFY(writeFile(pair.left + "/same.txt", "same"));
+        QVERIFY(writeFile(pair.right + "/same.txt", "same"));
+        QVERIFY(writeFile(pair.left + "/diff.txt", "aaa"));
+        QVERIFY(writeFile(pair.right + "/diff.txt", "bbb"));
+        QVERIFY(writeFile(pair.left + "/only-left.txt", "x"));
+
+        FolderCompareSession session(pair.left, pair.right);
+        std::unique_ptr<QWidget> widget(session.createWidget());
+        QSignalSpy finished(&session, &FolderCompareSession::scanFinished);
+        QVERIFY(session.open());
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 5000);
+        auto *view = session.view();
+        QVERIFY(view);
+        auto *model = view->leftTree()->model();
+        QVERIFY(model);
+        const int stateColumn = 3;
+
+        for (const auto &scheme : Folder::colorSchemeTable()) {
+            view->setColorScheme(scheme.identifier);
+            QCOMPARE(view->colorSchemeId(), scheme.identifier);
+            for (const char *name : {"same.txt", "diff.txt", "only-left.txt"}) {
+                const QModelIndex name0 = indexNamed(model, QString::fromLatin1(name));
+                QVERIFY2(name0.isValid(), name);
+                const QModelIndex state = name0.sibling(name0.row(), stateColumn);
+                const QString where = QStringLiteral("%1/%2").arg(scheme.identifier, QString::fromLatin1(name));
+                // 文字
+                QVERIFY2(!state.data(Qt::DisplayRole).toString().isEmpty(), qPrintable(where));
+                // 图标
+                const QVariant decoration = state.data(Qt::DecorationRole);
+                QVERIFY2(decoration.isValid(), qPrintable(where));
+                QVERIFY2(!decoration.value<QIcon>().isNull(), qPrintable(where));
+                // 颜色
+                const QVariant foreground = state.data(Qt::ForegroundRole);
+                QVERIFY2(foreground.isValid(), qPrintable(where));
+                QVERIFY2(foreground.value<QBrush>().color().isValid(), qPrintable(where));
+            }
+        }
+        session.close();
+    }
+
+    // DIR-012 第 4 条：着色方案切换立即重绘列表，不需要重新扫描。
+    void switchingColourSchemeRepaintsWithoutRescanning()
+    {
+        Pair pair;
+        QVERIFY(writeFile(pair.left + "/sub/diff.txt", "aaa"));
+        QVERIFY(writeFile(pair.right + "/sub/diff.txt", "bbb"));
+        QVERIFY(writeFile(pair.left + "/same.txt", "same"));
+        QVERIFY(writeFile(pair.right + "/same.txt", "same"));
+
+        FolderCompareSession session(pair.left, pair.right);
+        std::unique_ptr<QWidget> widget(session.createWidget());
+        QSignalSpy finished(&session, &FolderCompareSession::scanFinished);
+        QVERIFY(session.open());
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 5000);
+        auto *view = session.view();
+        QVERIFY(view);
+        auto *model = view->leftTree()->model();
+        QVERIFY(model);
+        const int entryCount = model->rowCount();
+
+        // 「不需要重新扫描」这一条必须被正面钉住：`rescanRequested` 上的
+        // spy 计数为 0 才是证据。只断言「颜色变了」的话，一个既重绘又重扫的
+        // 实现照样绿——而它在大目录上要等好几秒，用户只是换了个颜色。
+        QSignalSpy rescan(view, &FolderCompareView::rescanRequested);
+        QSignalSpy changed(view, &FolderCompareView::colorSchemeChanged);
+
+        const QModelIndex before = indexNamed(model, QStringLiteral("same.txt"));
+        QVERIFY(before.isValid());
+        const QColor beforeColor =
+            before.sibling(before.row(), 3).data(Qt::ForegroundRole).value<QBrush>().color();
+
+        QSignalSpy repaint(model, &QAbstractItemModel::dataChanged);
+        view->setColorScheme(QStringLiteral("high-contrast"));
+
+        QCOMPARE(view->colorSchemeId(), QStringLiteral("high-contrast"));
+        QCOMPARE(changed.count(), 1);
+        QCOMPARE(rescan.count(), 0);
+        // 逐行重画：每一行都要收到通知，只发一个「整体变了」是不够的——
+        // 树形模型里没有哪一次单个 dataChanged 能覆盖全部子行。
+        QVERIFY2(repaint.count() > 0, "切换配色没有发出任何 dataChanged");
+        QVERIFY2(repaint.count() >= entryCount, qPrintable(QStringLiteral("重绘 %1 次 / %2 行")
+                                                              .arg(repaint.count())
+                                                              .arg(entryCount)));
+        // 结果集没动过：重扫会让条目数或颜色之外的字段变化。
+        QCOMPARE(model->rowCount(), entryCount);
+
+        const QModelIndex after = indexNamed(model, QStringLiteral("same.txt"));
+        QVERIFY(after.isValid());
+        const QColor afterColor =
+            after.sibling(after.row(), 3).data(Qt::ForegroundRole).value<QBrush>().color();
+        QVERIFY(beforeColor.isValid());
+        QVERIFY(afterColor.isValid());
+        QVERIFY2(beforeColor != afterColor, "换了方案但颜色没变");
+        // 下拉选中项与「实际生效的」必须一致（两条链）。
+        auto *combo = view->findChild<QComboBox *>(QStringLiteral("folderColorScheme"));
+        QVERIFY(combo);
+        QCOMPARE(combo->currentData().toString(), view->colorSchemeId());
+        // 换回同一个方案不该再发一次「用户改了配色」。
+        const int changedBefore = changed.count();
+        view->setColorScheme(QStringLiteral("high-contrast"));
+        QCOMPARE(changed.count(), changedBefore);
+        session.close();
+    }
+
+    // DIR-012 第 5 条：自定义颜色可导出为配色文件并分享。
+    // 菜单项本身会开原生文件对话框（离屏环境下会一直等），因此这里只断言
+    // 两个入口在、并且**不带对话框**的那两个方法真的能把色值写出去读回来。
+    void colourSchemeCanBeExportedImportedAndShared()
+    {
+        Pair pair;
+        QVERIFY(writeFile(pair.left + "/diff.txt", "aaa"));
+        QVERIFY(writeFile(pair.right + "/diff.txt", "bbb"));
+
+        FolderCompareSession session(pair.left, pair.right);
+        std::unique_ptr<QWidget> widget(session.createWidget());
+        QSignalSpy finished(&session, &FolderCompareSession::scanFinished);
+        QVERIFY(session.open());
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 5000);
+        auto *view = session.view();
+        QVERIFY(view);
+        auto *model = view->leftTree()->model();
+        QVERIFY(model);
+        auto *combo = view->findChild<QComboBox *>(QStringLiteral("folderColorScheme"));
+        QVERIFY(combo);
+
+        std::unique_ptr<QMenu> menu(view->createColorSchemeMenu());
+        QVERIFY(menu);
+        auto *exportAction = menu->findChild<QAction *>(QStringLiteral("folderColorSchemeExport"));
+        auto *importAction = menu->findChild<QAction *>(QStringLiteral("folderColorSchemeImport"));
+        QVERIFY(exportAction);
+        QVERIFY(importAction);
+        QVERIFY(exportAction->isEnabled());
+        QVERIFY(importAction->isEnabled());
+
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const QString path = dir.filePath(QStringLiteral("shared.")
+                                          + Folder::colorSchemeFileExtension());
+
+        // 先把当前方案换成非默认那一套，导出的内容才带得出「导出的是哪一套」：
+        // 停在出厂默认时，下面那句「文件里应当写着 high-contrast」会落空，
+        // 而那正是「导出的是**当前**配色」这条语义的证据。
+        view->setColorScheme(QStringLiteral("high-contrast"));
+        QCOMPARE(view->colorSchemeId(), QStringLiteral("high-contrast"));
+
+        QStringList problems;
+        QVERIFY2(view->exportColorScheme(path, &problems), qPrintable(problems.join(QStringLiteral(" | "))));
+        QVERIFY(QFile::exists(path));
+
+        // 手改文件模拟「同事发来的自定义配色」：只改标识符与色值，不改覆盖结构。
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        QByteArray bytes = file.readAll();
+        file.close();
+        QVERIFY2(bytes.contains("\"identifier\": \"high-contrast\""), bytes.constData());
+        // 顺手把「不同」这一档改成别的颜色：自定义配色的意义就在这里，
+        // 只换一个标识符的话，一个「导入时其实读的是出厂表」的实现照样能过。
+        QVERIFY2(bytes.contains("\"#7a3b00\""), bytes.constData());
+        bytes.replace("\"identifier\": \"high-contrast\"", "\"identifier\": \"colleague-mix\"");
+        bytes.replace("#7a3b00", "#005f73");
+        QVERIFY(bytes.contains("\"colleague-mix\""));
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QVERIFY(file.write(bytes) == bytes.size());
+        file.close();
+
+        // 从同一个文件读回那份「同事的配色」，用作逐像素比对的真值。
+        Folder::ColorScheme colleague;
+        QStringList colleagueProblems;
+        QVERIFY2(Folder::loadColorSchemeFile(path, colleague, &colleagueProblems),
+                 qPrintable(colleagueProblems.join(QStringLiteral(" | "))));
+        QCOMPARE(colleague.identifier, QStringLiteral("colleague-mix"));
+
+        const QSignalSpy rescan(view, &FolderCompareView::rescanRequested);
+        const int itemsBefore = combo->count();
+        QSignalSpy changed(view, &FolderCompareView::colorSchemeChanged);
+        QVERIFY2(view->importColorScheme(path, &problems), qPrintable(problems.join(QStringLiteral(" | "))));
+        // 导入的配色当场生效，但**不进出厂表**：下拉里多出且只多出一项。
+        QCOMPARE(view->colorSchemeId(), QStringLiteral("colleague-mix"));
+        QCOMPARE(combo->count(), itemsBefore + 1);
+        QCOMPARE(combo->currentData().toString(), QStringLiteral("colleague-mix"));
+        QCOMPARE(changed.count(), 1);
+        // 换配色不重扫：导入也是换配色。
+        QCOMPARE(rescan.count(), 0);
+        // 出厂表里没有它（回落成默认），而视图用的是导入的那一份。
+        QCOMPARE(Folder::colorSchemeByIdentifier(QStringLiteral("colleague-mix")).identifier,
+                 Folder::defaultColorSchemeIdentifier());
+
+        // 界面真的在用文件里那套色值：拿「不同」那一行去比对。
+        // 主题（深/浅）决定取哪一档，而用例不该把主题判定再抄一遍，
+        // 因此接受两档里**恰好命中一档**，同时要求两档都与出厂默认不同颜色——
+        // 「命中了但颜色没换」与「根本没换」是两件事，前者才是这里要抓的。
+        auto *model2 = view->leftTree()->model();
+        const QModelIndex diffRow = indexNamed(model2, QStringLiteral("diff.txt"));
+        QVERIFY(diffRow.isValid());
+        const QModelIndex diffState = diffRow.sibling(diffRow.row(), 3);
+        const QColor rendered = diffState.data(Qt::ForegroundRole).value<QBrush>().color();
+        QVERIFY(rendered.isValid());
+        const QColor colleagueLight(colleague.colorFor(Folder::Status::Different, false));
+        const QColor colleagueDark(colleague.colorFor(Folder::Status::Different, true));
+        const auto &factoryDefault =
+            Folder::colorSchemeByIdentifier(Folder::defaultColorSchemeIdentifier());
+        QVERIFY(colleagueLight != QColor(factoryDefault.colorFor(Folder::Status::Different, false)));
+        QVERIFY(colleagueDark != QColor(factoryDefault.colorFor(Folder::Status::Different, true)));
+        QVERIFY2(rendered == colleagueLight || rendered == colleagueDark,
+                 qPrintable(QStringLiteral("渲染出 %1，文件里是 %2 / %3")
+                                .arg(rendered.name(), colleagueLight.name(), colleagueDark.name())));
+
+        // 第二次导入是**替换**而不是追加：一个会话里反复试几份配色之后，
+        // 下拉会长出一串谁也认不出是哪个的条目。
+        QVERIFY(view->importColorScheme(path, &problems));
+        QCOMPARE(combo->count(), itemsBefore + 1);
+
+        // 导入失败必须**什么都不改**：界面留在半套配色上比直接说「没读进来」糟得多。
+        const QString broken = dir.filePath(QStringLiteral("broken.lqcolors"));
+        QFile bad(broken);
+        QVERIFY(bad.open(QIODevice::WriteOnly));
+        QVERIFY(bad.write("{\"format\":\"lqcompare-color-scheme\",\"version\":1}") > 0);
+        bad.close();
+        QStringList failures;
+        QVERIFY(!view->importColorScheme(broken, &failures));
+        QVERIFY(!failures.isEmpty());
+        QCOMPARE(view->colorSchemeId(), QStringLiteral("colleague-mix"));
+        QCOMPARE(combo->count(), itemsBefore + 1);
+        QCOMPARE(diffState.data(Qt::ForegroundRole).value<QBrush>().color(), rendered);
         session.close();
     }
 };

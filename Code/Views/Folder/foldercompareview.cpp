@@ -6,6 +6,7 @@
 #include <QApplication>
 #include <QBrush>
 #include <QCheckBox>
+#include <QColor>
 #include <QComboBox>
 #include <QDateTime>
 #include <QEvent>
@@ -19,6 +20,8 @@
 #include <QLocale>
 #include <QMenu>
 #include <QMessageBox>
+#include <QPainter>
+#include <QPixmap>
 #include <QPushButton>
 #include <QPlainTextEdit>
 #include <QScrollBar>
@@ -35,6 +38,49 @@
 #include <vector>
 
 namespace LqCompare {
+
+namespace {
+
+// 当前 Qt 调色板是不是深色主题。三处共用（模型的前景色、状态图标着色、
+// 以及将来的其它着色点）：各自写一遍 `lightness() < 128` 的话，
+// 有一处把方向写反只会表现为「某个地方的颜色在深色主题下反了」。
+bool usesDarkPalette()
+{
+    return QApplication::palette().color(QPalette::Base).lightness() < 128;
+}
+
+} // namespace
+
+QIcon themedStatusIcon(Folder::Status status, const Folder::ColorScheme &scheme, bool dark)
+{
+    const QString key = Folder::statusIconKey(status);
+    if (key.isEmpty())
+        return {};
+    const QIcon base(key);
+    // 资源缺失时如实返回原图标（哪怕是空的），**不要**在这里造一个回退图形：
+    // 「图标文件没登记进 qrc」这件事由 `tools/check_icons.py` 那道护栏负责报，
+    // 在这里补一个假图标只会让护栏失去意义。
+    if (base.isNull())
+        return base;
+    const QColor tint(scheme.colorFor(status, dark));
+    if (!tint.isValid())
+        return base;
+
+    QPixmap source = base.pixmap(QSize(16, 16));
+    if (source.isNull())
+        return base;
+    QPixmap tinted(source.size());
+    tinted.fill(Qt::transparent);
+    {
+        QPainter painter(&tinted);
+        painter.drawPixmap(0, 0, source);
+        // SourceIn：只把**已有内容**的像素重新染色，alpha 原样保留。
+        // 于是描边的抗锯齿边缘不会被抹平（用 fillRect 直接盖一层会得到一块实心方块）。
+        painter.setCompositionMode(QPainter::CompositionMode_SourceIn);
+        painter.fillRect(tinted.rect(), tint);
+    }
+    return QIcon(tinted);
+}
 
 class FolderTreeModel : public QAbstractItemModel
 {
@@ -69,6 +115,14 @@ public:
     {
         return index.isValid() ? &m_result.entries.at(static_cast<Node *>(index.internalPointer())->entry)
                                : nullptr;
+    }
+    // 配色方案（DIR-012）。默认值取自服务层的出厂默认，不在这里写死一个
+    // 标识符字面量——那会让「出厂默认是哪一套」长出第二份说法。
+    const Folder::ColorScheme &colorScheme() const { return m_scheme; }
+    void setColorScheme(const Folder::ColorScheme &scheme)
+    {
+        m_scheme = scheme;
+        refreshHighlight();
     }
     int totalCount() const { return m_result.entries.size(); }
     int excludedCount() const { return m_result.excludedCount; }
@@ -142,28 +196,27 @@ public:
         if (role == Qt::TextAlignmentRole && sizeColumn)
             return int(Qt::AlignRight | Qt::AlignVCenter);
         if (role == Qt::ForegroundRole) {
-            const bool dark = QApplication::palette().color(QPalette::Base).lightness() < 128;
+            const bool dark = usesDarkPalette();
+            // 颜色一律查配色表（DIR-012 第 2 条）。这里原本是一个 switch，
+            // 它是状态的**第二份清单**：新增一档状态时没人会记得回来补一行，
+            // 界面于是静默少一种颜色；而「高对比 / 色盲友好」要的是把九档
+            // 一起换掉，散落的 switch 只能复制九行再改九处。
             if (!item->inComparison())
-                return QBrush(QColor(dark ? "#b0b0b0" : "#666666"));
-            switch (item->status) {
-            case Folder::Status::Different: return QBrush(QColor(dark ? "#ffbc66" : "#895000"));
-            case Folder::Status::LeftOnly: return QBrush(QColor(dark ? "#89beff" : "#2055a0"));
-            case Folder::Status::RightOnly: return QBrush(QColor(dark ? "#99dcb6" : "#236c44"));
-            case Folder::Status::Error: case Folder::Status::TypeConflict:
-                return QBrush(QColor(dark ? "#ff9696" : "#aa2424"));
-            // 「两侧均改」是同步安全的（改法一致），因此中性偏暖而不是红；
-            // 「冲突」必须由人决定，用最重的红。着色口径本身归 DIR-012。
-            case Folder::Status::BothChanged: return QBrush(QColor(dark ? "#c9b3ff" : "#5a3fa0"));
-            case Folder::Status::Conflict: return QBrush(QColor(dark ? "#ff9ad2" : "#8a1f6a"));
-            case Folder::Status::Same: case Folder::Status::Unknown: break;
-            }
-            return {};
+                return QBrush(QColor(m_scheme.excludedColor(dark)));
+            const QString color = m_scheme.colorFor(item->status, dark);
+            // 表里查不到这一档时**不猜**：返回空让 Qt 用默认前景色。
+            // 猜一个（比如回落到「未知」的颜色）会让「配色表缺了一档」
+            // 这件事在界面上完全看不出来，而它正是配色导入最可能的坏法。
+            return color.isEmpty() ? QVariant() : QVariant(QBrush(QColor(color)));
         }
         // 状态图标（DIR-011 第 4 条）：颜色之外必须同时有图标和文本。
         // 图标与颜色都只是「辅助」，真正不可省略的是状态列的文字。
         if (role == Qt::DecorationRole && index.column() == State) {
-            const QString iconKey = Folder::statusIconKey(item->status);
-            return iconKey.isEmpty() ? QVariant() : QVariant(QIcon(iconKey));
+            // 图标跟着配色与主题一起变（DIR-012 第 1 条后半句）。九张资源图是
+            // 中性灰描边，深色主题上原样用几乎看不见；用该状态在本方案里的
+            // 颜色着色之后，深浅两档都保持可见，而「不同形状」这一点不变。
+            const QIcon icon = themedStatusIcon(item->status, m_scheme, usesDarkPalette());
+            return icon.isNull() ? QVariant() : QVariant(icon);
         }
         if (role == Qt::DecorationRole && nameColumn && side.exists()) {
             return QApplication::style()->standardIcon(side.kind == Folder::Kind::Directory
@@ -206,6 +259,34 @@ private:
         Node *parent = nullptr;
         std::vector<std::unique_ptr<Node>> children;
     };
+
+    // 换配色后逐行重画（第 4 条）。
+    //
+    // **刻意不用 `beginResetModel()` / `endResetModel()`**：重置模型会把展开状态、
+    // 选中项与滚动位置一起丢掉，而「换一个配色」不该让用户重新展开一遍树、
+    // 重新挑一遍要看的行。逐行发 `dataChanged` 只刷新颜色与图标这两件事，
+    // 其余视图状态原样保留——也因此它**不需要重新扫描**（第 4 条的后半句）。
+    void refreshHighlight()
+    {
+        const int lastColumn = columnCount() - 1;
+        emitRowsChanged(&m_root, lastColumn);
+    }
+    void emitRowsChanged(const Node *node, int lastColumn)
+    {
+        for (const auto &child : node->children) {
+            // 行号取 `child->row`（它在自己父节点里的位置），与 `index()` 的
+            // 构造方式同一个来源。另算一次行号就会在筛选/排序之后对不上，
+            // 而症状是「换了配色之后有几行没变」。
+            const QModelIndex topLeft = createIndex(child->row, 0, child.get());
+            const QModelIndex bottomRight = createIndex(child->row, lastColumn, child.get());
+            emit dataChanged(topLeft, bottomRight,
+                             {Qt::ForegroundRole, Qt::DecorationRole, Qt::ToolTipRole});
+            emitRowsChanged(child.get(), lastColumn);
+        }
+    }
+
+    Folder::ColorScheme m_scheme =
+        Folder::colorSchemeByIdentifier(Folder::defaultColorSchemeIdentifier());
     Node m_root;
     Folder::Result m_result;
 };
@@ -380,6 +461,21 @@ FolderCompareView::FolderCompareView(QWidget *parent) : QWidget(parent)
     for (const auto &row : Folder::mainStatusTable())
         m_filter->addItem(Folder::statusLabel(row.value), int(row.value));
     displayToolbar->addWidget(m_filter);
+    // 配色方案（DIR-012 第 2 条）。它铺在**显示**这一条工具条上而不是
+    // 「文件夹选项」那一条：配色改的是画出来的样子，不进 `Options`、
+    // 不改变结果集，放在「子目录 / 逐字节比较内容」旁边会让人以为它影响比对。
+    // 住所在 View 页 Coloring 组是规格的说法，而那张设置页（OPT-*）尚未落地，
+    // 因此入口先落在视图自己的工具条上——与 DIR-003 的档位下拉同一处置。
+    displayToolbar->addWidget(new QLabel(tr("配色："), this));
+    m_colorScheme = new QComboBox(this);
+    m_colorScheme->setObjectName(QStringLiteral("folderColorScheme"));
+    displayToolbar->addWidget(m_colorScheme);
+    auto *colorMenuButton = new QToolButton(this);
+    colorMenuButton->setText(tr("配色…"));
+    colorMenuButton->setObjectName(QStringLiteral("folderColorSchemeButton"));
+    colorMenuButton->setPopupMode(QToolButton::InstantPopup);
+    colorMenuButton->setMenu(createColorSchemeMenu());
+    displayToolbar->addWidget(colorMenuButton);
     m_hideExcluded = new QCheckBox(tr("隐藏扫描排除项"), this);
     m_hideExcluded->setObjectName(QStringLiteral("folderHideExcluded"));
     m_hideExcluded->setChecked(true);
@@ -516,8 +612,148 @@ FolderCompareView::FolderCompareView(QWidget *parent) : QWidget(parent)
         applyTierToControls(Folder::recursionTierOf(probe));
         emit rescanRequested();
     });
+    // 配色方案（DIR-012 第 4 条）：换方案**只重画**，绝不重扫。
+    // 这条连接里没有 `rescanRequested`，而「没有」是一句不可断言的话——
+    // 因此它由 `Tests/Folder` 的 J 组用 `QSignalSpy` 正面钉住。
+    connect(m_colorScheme, qOverload<int>(&QComboBox::currentIndexChanged), this, [this] {
+        if (!m_colorScheme)
+            return;
+        const QString identifier = m_colorScheme->currentData().toString();
+        if (!identifier.isEmpty())
+            setColorScheme(identifier);
+    });
+    rebuildColorSchemeItems();
+    setColorScheme(Folder::defaultColorSchemeIdentifier());
     // 出厂状态就是缺省选项：控件初值不各写一个字面量，免得默认值长出第二份。
     setOptions(Folder::Options());
+}
+
+void FolderCompareView::rebuildColorSchemeItems()
+{
+    if (!m_colorScheme)
+        return;
+    // 重建期间挡信号：清空列表会让 `currentIndexChanged` 连发几次，
+    // 每次都走一遍 setColorScheme 并重画整棵树。用户没做任何操作，
+    // 却会看到列表闪几下，还会收到几个假的 `colorSchemeChanged`。
+    const QSignalBlocker blocker(m_colorScheme);
+    m_colorScheme->clear();
+    for (const auto &scheme : Folder::colorSchemeTable()) {
+        m_colorScheme->addItem(scheme.displayName, scheme.identifier);
+        m_colorScheme->setItemData(m_colorScheme->count() - 1, scheme.description,
+                                   Qt::ToolTipRole);
+    }
+    if (m_hasCustomColorScheme) {
+        // 导入的自定义配色排在最后，并在名字上标明它不是出厂方案——
+        // 否则用户下次打开下拉会以为自己改的那套被「重置」了。
+        // **只保留一套**：导入第二次是替换而不是追加，否则一个会话里
+        // 反复试几份配色之后，下拉会长出一串谁也认不出是哪个的条目。
+        m_colorScheme->addItem(tr("%1（导入）").arg(m_customColorScheme.displayName),
+                               m_customColorScheme.identifier);
+    }
+}
+
+Folder::ColorScheme FolderCompareView::schemeForIdentifier(const QString &identifier) const
+{
+    if (m_hasCustomColorScheme && m_customColorScheme.identifier == identifier)
+        return m_customColorScheme;
+    // 出厂三套与「认不出来回落默认」都在服务层，这里不重写一遍。
+    return Folder::colorSchemeByIdentifier(identifier);
+}
+
+QString FolderCompareView::colorSchemeId() const
+{
+    // 取**模型实际在用的**那一套，而不是下拉选中项：标准要的是「切换生效」，
+    // 而只改控件不改模型正是「选了没反应」那种坏法。
+    return m_model ? m_model->colorScheme().identifier : QString();
+}
+
+void FolderCompareView::setColorScheme(const QString &identifier)
+{
+    if (!m_model)
+        return;
+    const Folder::ColorScheme scheme = schemeForIdentifier(identifier);
+    const bool changed = m_model->colorScheme().identifier != scheme.identifier;
+    // 即使标识符没变也重新下发一次：调用方可能刚导入了一份**同名**的自定义配色，
+    // 此时「没变」是假的，而只比较标识符会让新色值永远不生效。
+    m_model->setColorScheme(scheme);
+    if (m_colorScheme) {
+        const int index = m_colorScheme->findData(scheme.identifier);
+        const QSignalBlocker blocker(m_colorScheme);
+        m_colorScheme->setCurrentIndex(index < 0 ? 0 : index);
+    }
+    // 「值没变就不发信号」与本仓其余状态入口同一条纪律：恢复存档、
+    // 切标签重播之类的程序性路径不该让容器以为用户改了配色。
+    if (changed)
+        emit colorSchemeChanged(scheme.identifier);
+}
+
+bool FolderCompareView::exportColorScheme(const QString &path, QStringList *problems) const
+{
+    if (!m_model)
+        return false;
+    return Folder::saveColorSchemeFile(path, m_model->colorScheme(), problems);
+}
+
+bool FolderCompareView::importColorScheme(const QString &path, QStringList *problems)
+{
+    Folder::ColorScheme loaded;
+    QStringList localProblems;
+    if (!Folder::loadColorSchemeFile(path, loaded, &localProblems)) {
+        // 失败时**什么都不改**：界面仍用当前配色，下拉不改选择。
+        // 一次失败的导入把界面留在半套配色上，比直接说「没读进来」糟得多。
+        if (problems)
+            *problems += localProblems;
+        return false;
+    }
+    m_customColorScheme = loaded;
+    m_hasCustomColorScheme = true;
+    rebuildColorSchemeItems();
+    setColorScheme(loaded.identifier);
+    return true;
+}
+
+QMenu *FolderCompareView::createColorSchemeMenu()
+{
+    auto *menu = new QMenu(this);
+    menu->setObjectName(QStringLiteral("folderColorSchemeMenu"));
+    auto *exportAction = menu->addAction(tr("导出当前配色…"));
+    exportAction->setObjectName(QStringLiteral("folderColorSchemeExport"));
+    auto *importAction = menu->addAction(tr("导入配色…"));
+    importAction->setObjectName(QStringLiteral("folderColorSchemeImport"));
+    connect(exportAction, &QAction::triggered, this, [this] { promptExportColorScheme(); });
+    connect(importAction, &QAction::triggered, this, [this] { promptImportColorScheme(); });
+    return menu;
+}
+
+void FolderCompareView::promptExportColorScheme()
+{
+    // 默认文件名取自当前方案标识符，用户改起来比从空白框开始省事。
+    const QString suggestion = colorSchemeId() + QLatin1Char('.')
+        + Folder::colorSchemeFileExtension();
+    const QString path = QFileDialog::getSaveFileName(this, tr("导出配色方案"), suggestion,
+                                                     Folder::colorSchemeFileFilter());
+    if (path.isEmpty())
+        return;
+    QStringList problems;
+    if (!exportColorScheme(path, &problems)) {
+        QMessageBox::warning(this, tr("导出配色方案"), problems.join(QLatin1Char('\n')));
+        return;
+    }
+    m_status->setText(tr("已导出配色方案：%1").arg(path));
+}
+
+void FolderCompareView::promptImportColorScheme()
+{
+    const QString path = QFileDialog::getOpenFileName(this, tr("导入配色方案"), QString(),
+                                                     Folder::colorSchemeFileFilter());
+    if (path.isEmpty())
+        return;
+    QStringList problems;
+    if (!importColorScheme(path, &problems)) {
+        QMessageBox::warning(this, tr("导入配色方案"), problems.join(QLatin1Char('\n')));
+        return;
+    }
+    m_status->setText(tr("已导入配色方案：%1").arg(path));
 }
 
 Folder::RecursionTier FolderCompareView::recursionTier() const
