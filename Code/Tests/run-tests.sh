@@ -6,7 +6,8 @@
 # **并行**跑（默认 4 个套件同时进行），**每个套件有超时上限**，
 # 汇总通过/失败/跳过统计，并在失败时给出可直接复制的复现命令。
 # **崩溃**（没产出 `Totals:` 行）的套件会被**自动补跑一遍 `-v2`**，
-# 把「跑到哪一条用例才崩」变成日志里直接看得见的东西（见 rerun_verbosely）。
+# 把「跑到哪一条用例才崩」变成日志里直接看得见的东西（见 rerun_verbosely），
+# 并用调试器再抓一次**调用栈**，把「崩在哪一行 C++」也答出来（见 capture_crash_trace）。
 #
 # 用法：
 #   Code/Tests/run-tests.sh                 # 全部套件
@@ -23,6 +24,9 @@
 #   LQCOMPARE_TEST_TIMEOUT    单个套件的运行超时（秒），默认 600
 #   LQCOMPARE_TEST_ROOT       套件搜索根目录，默认 Code/Tests（自测用它指向临时目录）
 #   LQCOMPARE_TEST_BUILD_ROOT 构建产物根目录，默认 <仓库根>/_test-build
+#   LQCOMPARE_TEST_DEBUGGER   崩溃时抓调用栈用的调试器（绝对路径）。不设则
+#                             `command -v` 探测 gdb → lldb。指到一个跑不了的路径
+#                             等于「这轮抓不到栈」——那条降级会照实写进产物。
 #
 # 兼容性约束：本脚本要同时在 macOS 与 Windows（Git Bash）上跑，因此不得使用
 # bash 4 语法，也不得使用 GNU 工具扩展。具体踩过的坑：
@@ -146,11 +150,14 @@ export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}"
 # 失败路径的报错文案、并发下的计数）如果错了，**没有任何东西会变红**——
 # 恰恰是它本该报告的那种静默失败。所以按仓库约定（handoff §5 第 7 条
 # 「静态检查脚本必须能自证会报错」）给它一个 `--self-test`：在临时目录里现造
-# 四个探针套件（通过 / 失败 / 挂死 / 硬退出），用同一个运行器跑两遍
-# （并行 4 与串行 1），逐条断言它该说的话，并断言两遍的合计**逐字相同**。
+# 六个探针套件（通过 / 失败 / 挂死 / 硬退出 / 有信号地崩掉 / 构建失败），
+# 用同一个运行器跑两遍（并行 4 与串行 1），逐条断言它该说的话，
+# 并断言两遍的合计**逐字相同**；再各用一遍（过滤器 + 独立构建根目录）
+# 验两个**不会天天走到**的分支：lldb 的旗标形状、以及「本平台没有调试器」。
 #
 # 探针**只存在于临时目录**、跑完即删：把探针留在 Code/Tests/ 下会让全量运行
 # 永远失败（这一条上一轮已经用三个临时探针验过，见 handoff §1.23）。
+# 同上，「假调试器」也只是临时目录里的一个脚本。
 # ---------------------------------------------------------------------------
 selftest_tmp=""
 selftest_failures=0
@@ -227,7 +234,7 @@ st_snapshot_evidence() {
         grep -E '^(超时套件（|另有 [0-9]+ 个套件|失败套件：)' "${log}" | sed 's/^/    /' || true
         echo "  每个探针的判定与产物："
         local probe d state totals
-        for probe in ZZProbeBadBuild ZZProbeFail ZZProbeHang ZZProbeHardExit ZZProbePass; do
+        for probe in ZZProbeAbort ZZProbeBadBuild ZZProbeFail ZZProbeHang ZZProbeHardExit ZZProbePass; do
             d="${b}/${probe}"
             state="（没有 summary.env）"
             if [[ -f "${d}/summary.env" ]]; then
@@ -236,8 +243,12 @@ st_snapshot_evidence() {
                 state="status=${p_st:-?} timed_out=${p_to:-?} has_summary=${p_hs:-?} passed=${p_ps:-?} failed=${p_fs:-?} skipped=${p_ss:-?}"
             fi
             totals="$(grep -m1 -E '^Totals:' "${d}/results.txt" 2>/dev/null || echo '（没有 Totals 行）')"
-            printf '    %-16s results.txt=%-4s totals=%-52s %s\n' "${probe}" \
-                "$([[ -f "${d}/results.txt" ]] && echo 有 || echo 无)" "${totals}" "${state}"
+            # 崩溃诊断的两个产物也进证据块：断言红了的时候，「哪个探针没有留下
+            # 调用栈产物」光看断言名字是推不出来的（与 verbose 同一理由）。
+            printf '    %-16s results.txt=%-4s crash-trace=%-4s totals=%-52s %s\n' "${probe}" \
+                "$([[ -f "${d}/results.txt" ]] && echo 有 || echo 无)" \
+                "$([[ -f "${d}/crash-trace.txt" ]] && echo 有 || echo 无)" \
+                "${totals}" "${state}"
         done
     } > "${dst}"
 }
@@ -384,6 +395,98 @@ private slots:
 QTEST_APPLESS_MAIN(ZZProbeHardExit)
 #include "tst_zzprobehardexit.moc"'
 
+    # 「有信号地崩掉」探针：调试器抓栈那条路必须有它才验得到。
+    #
+    # **为什么探针要自己把 SIGABRT 的处置复位成默认**：Qt Test 在某些平台上给致命
+    # 信号装了处理，会替进程补写一份结果文件——那样它就变成「有统计行」的失败，
+    # 走不到「崩溃」这条路，而这条路正是本探针要验的（与 ZZProbeHardExit 要避开的
+    # 是同一条）。自己复位处置，夹具的形状就与平台无关：实测 macOS / Qt 5.15.2 上
+    # 两种写法都走崩溃路径（`std::abort()` 同样不写统计行、退出码 134），但那只是
+    # 因为这里恰好没人给它装处理，写死依赖它等于把跨平台差异埋进夹具。
+    #
+    # 用 `raise` 而不是 `abort()` 还有一个可观测的后果：`abort` 是 `noreturn`，
+    # `-O2` 下编译器可以把它编译成尾调用，于是「崩在哪个函数里」这一帧会消失，
+    # 下面那条「帧里出现崩溃点所在函数」的断言就时灵时不灵。
+    write_probe ZZProbeAbort tst_zzprobeabort '
+#include <csignal>
+class ZZProbeAbort : public QObject { Q_OBJECT
+private slots:
+    void initTestCase() { tracePhase("Abort", "start"); }
+    void diesBySignal()
+    {
+        // end 必须写：并发度只统计「有头有尾」的探针，少写一个 end 会让
+        // 「并行确实生效」那条断言悄悄变弱（与 ZZProbeHardExit 同一处置）。
+        tracePhase("Abort", "end");
+        std::fprintf(stderr, "ZZProbeAbort: MARKER-BEFORE-ABORT\n");
+        std::fflush(stderr);
+        std::signal(SIGABRT, SIG_DFL);
+        std::raise(SIGABRT);
+    }
+};
+QTEST_APPLESS_MAIN(ZZProbeAbort)
+#include "tst_zzprobeabort.moc"'
+
+    # 自测用的**假调试器**：几十行脚本，按真调试器的命令行形状收参数。
+    #
+    # **为什么用假的，而不是直接用本机的 lldb**：本机 lldb 调试不通 x86_64
+    # （Rosetta）进程——进程被信号带走时它不会停下、在 `abort` 上打断点也不命中，
+    # `-o bt` 只回一句 `error: Command requires a process which is currently
+    # stopped`；而同一台机器上一个原生 arm64 的 abort 程序会让 lldb 直接卡在
+    # `run` 上不动（debugserver 起来之后没有下文）。两条都是实测，见 handoff §6。
+    # 于是自测验的是**运行器这一侧**的契约：给了调试器就必须按「要调用栈」的形状
+    # 调它、必须把它的输出与结论写进 crash-trace.txt、必须只对崩溃的套件这么做、
+    # 没有调试器时必须明说。真调试器那条路只能在 CI 上跑（ubuntu 上是 gdb），
+    # **不当作本地已验证**——这一条写在 handoff §1.40 的「还没做到的」里。
+    #
+    # 它按真调试器的行为分岔：进程被信号带走（退出码 > 128）就打出几帧，不是被
+    # 信号带走就直说「没有现场」。这样「调试器跑完了但没拿到栈」这一支在自测里
+    # 也能被走到——靠的是硬退出探针，它用 `_Exit(3)`。
+    local stub="${selftest_tmp}/stub-debugger"
+    cat > "${stub}" <<'STUB'
+#!/usr/bin/env bash
+# 假的调试器，只在自测的临时目录里存在，不进仓库。
+set -uo pipefail
+# 把收到的命令行原样记下来：「运行器到底按什么形状调的调试器」这件事必须由
+# **被调用方**记录，不能由运行器自己打印一行再自己断言那一行。
+echo "STUB-DEBUGGER-ARGV: $*"
+prog=()
+seen=0
+st=0
+for a in "$@"; do
+    if [[ "${seen}" -eq 1 ]]; then prog+=("$a"); continue; fi
+    case "${a}" in
+        --|--args) seen=1 ;;
+    esac
+done
+if [[ "${#prog[@]}" -gt 0 ]]; then
+    # 与真调试器一样：被测进程的 stdout / stderr 直接透传（运行器把它们收进
+    # crash-trace.txt），但**不替它加任何 `-o`**——加了就是把结果产物改写掉。
+    "${prog[@]}"
+    st=$?
+fi
+if [[ ${st} -gt 128 ]]; then
+    echo "* thread #1, stop reason = signal SIGABRT"
+    echo "  frame #0: 0x0 libsystem_kernel.dylib\`__pthread_kill + 10"
+    echo "  frame #1: 0x0 libsystem_c.dylib\`abort + 100"
+    echo "  frame #2: 0x0 tst_zzprobeabort\`ZZProbeAbort::diesBySignal() + 40"
+else
+    echo "进程退出码 ${st}（不是被信号带走的），没有可停住的现场。"
+fi
+exit 0
+STUB
+    chmod +x "${stub}"
+    # 探测那两遍**不给** `LQCOMPARE_TEST_DEBUGGER`，让运行器自己去 PATH 上找——
+    # 那才是生产路径。把假的 `gdb` 放在 PATH 最前面有两个理由：ubuntu 上真的
+    # gdb 就在 /usr/bin/gdb，不遮住它的话这两遍在 CI 上验的是另一个东西；
+    # 而本机真的 lldb 会把这两遍挂住（见上面的实测）。
+    local fakebin="${selftest_tmp}/fakebin"
+    mkdir -p "${fakebin}"
+    cp "${stub}" "${fakebin}/gdb"
+    chmod +x "${fakebin}/gdb"
+    # lldb 那一支的旗标与 gdb 完全不同，靠文件名分辨，所以只需要换一个名字。
+    cp "${stub}" "${selftest_tmp}/stub-lldb"
+    chmod +x "${selftest_tmp}/stub-lldb"
+
     # 构建期就失败的探针：它验的是「本轮产物必须在任何动作之前删干净」这条规则。
     # 这条规则**只在失败路径上才看得出来**：成功路径上 qmake 的 `>` 与二进制的
     # `-o` 自己就会覆盖旧文件，删不删一个样；只有构建失败、脚本提前 `return` 时，
@@ -406,9 +509,13 @@ QTEST_APPLESS_MAIN(ZZProbeBadBuild)
 #include "tst_zzprobebadbuild.moc"
 CPP
     # 埋下「上一轮的假结果」。它必须在本轮结束时不见了。
+    # `crash-trace.txt` 一并埋：它的语义是「这个套件崩过」，一份上一轮留下的
+    # 假崩溃现场比假结果更有说服力（下一个人会照它去查一个不存在的崩溃）。
     mkdir -p "${build}/ZZProbeBadBuild"
     printf 'Totals: 999 passed, 0 failed, 0 skipped, 0 blacklisted, 1ms\n' \
         > "${build}/ZZProbeBadBuild/results.txt"
+    printf '崩溃栈捕获（上一轮留下的假产物，本轮必须被删掉）\n结论：拿到调用栈（3 帧）。\n' \
+        > "${build}/ZZProbeBadBuild/crash-trace.txt"
 
     local trace="${selftest_tmp}/trace.txt"
     echo "══ 运行器自测：探针套件在 ${selftest_tmp}（不进仓库） ══"
@@ -421,6 +528,7 @@ CPP
     LQCOMPARE_TEST_JOBS=4 \
     LQCOMPARE_TEST_TIMEOUT=5 \
     LQCOMPARE_SELFTEST_TRACE="${trace}" \
+    PATH="${fakebin}:${PATH}" \
         bash "${SELF}" >"${out4}" 2>&1 || code4=$?
     local peak4
     peak4="$(st_max_concurrency "${trace}")"
@@ -438,11 +546,34 @@ CPP
     LQCOMPARE_TEST_JOBS=1 \
     LQCOMPARE_TEST_TIMEOUT=5 \
     LQCOMPARE_SELFTEST_TRACE="${trace}" \
+    PATH="${fakebin}:${PATH}" \
         bash "${SELF}" >"${out1}" 2>&1 || code1=$?
     local peak1
     peak1="$(st_max_concurrency "${trace}")"
     local ev1="${selftest_tmp}/evidence-jobs1.txt"
     st_snapshot_evidence "${ev1}" "${out1}" "${build}"
+
+    # ---- 第三、四遍：只跑崩溃探针（过滤器 + 独立构建根目录），各换一种调试器配置 ----
+    # 为什么必须只跑崩溃探针：这两遍验的是「调试器这一侧的配置变了会怎样」，
+    # 与并行/计数无关；用过滤器把 6 个探针缩到 1 个，代价从十几秒降到几秒。
+    # 为什么用**独立的构建根目录**：上面两遍的 crash-trace.txt 是断言的证据，
+    # 共用目录的话第三遍会把它覆盖掉（与 st_snapshot_evidence 那条注释同一个坑）。
+    run_trace_pass() {
+        # $1 名字 $2 LQCOMPARE_TEST_DEBUGGER 的值
+        local name="$1" dbg="$2"
+        local out="${selftest_tmp}/out-${name}.log"
+        local b="${selftest_tmp}/build-${name}"
+        mkdir -p "${b}"
+        LQCOMPARE_TEST_ROOT="${suites}" \
+        LQCOMPARE_TEST_BUILD_ROOT="${b}" \
+        LQCOMPARE_TEST_JOBS=1 \
+        LQCOMPARE_TEST_TIMEOUT=5 \
+        LQCOMPARE_TEST_DEBUGGER="${dbg}" \
+            bash "${SELF}" ZZProbeAbort >"${out}" 2>&1
+        echo "$?" > "${selftest_tmp}/code-${name}.txt"
+    }
+    run_trace_pass lldb "${selftest_tmp}/stub-lldb"
+    run_trace_pass nodebug "${selftest_tmp}/does-not-exist/debugger"
 
     echo
     echo "── 断言：失败与超时的报错（日志 ${out4}）──"
@@ -459,9 +590,9 @@ CPP
     # 而那正是最容易让人怀疑合计本身的地方。
     # 为什么要写成整行：只断言「有这一行」的话，把挂死探针也塞进这份清单、
     # 或者把统计行判据反过来写，都不会有任何东西变红（本轮之前就是如此）。
-    st_line_matches "无统计行清单只收「非超时且没统计行」的两个探针（超时的那个不许重复出现）" \
+    st_line_matches "无统计行清单只收「非超时且没统计行」的三个探针（超时的那个不许重复出现）" \
         "${out4}" '^另有 [0-9]+ 个套件没有产出统计行' \
-        '另有 2 个套件没有产出统计行（其用例数不计入上面的合计）：ZZProbeBadBuild ZZProbeHardExit '
+        '另有 3 个套件没有产出统计行（其用例数不计入上面的合计）：ZZProbeAbort ZZProbeBadBuild ZZProbeHardExit '
     st_contains "硬退出探针走「没有产出 Totals 行」" "${out4}" '没有产出 Totals 行'
     st_contains "硬退出探针的 stderr 被贴出来" "${out4}" 'stderr 结尾'
     # 注意 Qt 的口径：`Totals:` 行把 initTestCase 与 cleanupTestCase 也算作用例，
@@ -500,6 +631,11 @@ CPP
     # （成功路径上覆盖写会掩盖这件事，见探针 ZZProbeBadBuild 处的注释）。
     st_expect "构建失败的套件里，上一轮的 results.txt 已被删掉" \
         "$([[ ! -f "${build}/ZZProbeBadBuild/results.txt" ]] && echo 0 || echo 1)"
+    # 同一条规则的另一半：崩溃现场也一样。少了这一条，往 `rm -f` 那一行里漏掉
+    # `crash-trace.txt` 没有任何东西会红，而它在生产里意味着「这一轮没崩的套件
+    # 带着上一轮的崩溃现场被上传」——读的人是照着它去查一个不存在的崩溃的。
+    st_expect "构建失败的套件里，上一轮的 crash-trace.txt 也已被删掉" \
+        "$([[ ! -f "${build}/ZZProbeBadBuild/crash-trace.txt" ]] && echo 0 || echo 1)"
     # 只断言「文件没了」还不够：脚本还得说清**为什么**没编出来。qmake 的报错原文
     # 在 build.log 里，运行器负责把末尾几十行贴到日志上——否则 CI 上只剩
     # 「✗ qmake 失败」一句，排查的人仍然只能去下载产物。
@@ -535,6 +671,66 @@ CPP
     st_expect "补跑的 -v2 没有改写首轮的 results.txt（里面不该有 -v2 独有的 INFO 行）" \
         "$(grep -qE '^(INFO|DEBUG|QDEBUG|QWARN)[ ]*: |Loc: \[' \
             "${build}/ZZProbeHardExit/results.txt" 2>/dev/null && echo 1 || echo 0)"
+
+    echo
+    echo "── 断言：崩溃时的调用栈捕获（crash-trace.txt）──"
+    # 这一块守的是「崩在哪一行 C++」这条诊断。它有两条路都出错得很难看：
+    # 一条是**根本没抓**（于是 ubuntu 腿那个崩溃继续停在「知道崩在哪条用例」），
+    # 另一条是**抓了但产物骗人**（空文件、结论缺失、形状调错却静默无输出）。
+    local tr_abort="${build}/ZZProbeAbort/crash-trace.txt"
+    local tr_hard="${build}/ZZProbeHardExit/crash-trace.txt"
+    local tr_lldb="${selftest_tmp}/build-lldb/ZZProbeAbort/crash-trace.txt"
+    local tr_nodebug="${selftest_tmp}/build-nodebug/ZZProbeAbort/crash-trace.txt"
+
+    st_contains "崩溃的套件留下调用栈产物" "${tr_abort}" '崩溃栈捕获'
+    # 调试器的选择要落在产物里，否则「本机抓到的是谁的栈」事后无从追。
+    st_contains "产物里记下用的是哪个调试器" "${tr_abort}" '^调试器：.*fakebin/gdb'
+    # **命令行形状由被调用方记下**，不是运行器自己打印一行再自己断言那一行：
+    # 假调试器把它收到的 argv 原样写进了产物，所以这一条钉的是真实调用形状。
+    st_contains "按 gdb 的形状调它（明确要了调用栈：-ex bt）" "${tr_abort}" \
+        'STUB-DEBUGGER-ARGV: -batch -ex run -ex bt 40 --args'
+    # 「没传 `-o`」这件事的可观测后果：程序自己的输出（Qt Test 默认写 stdout）
+    # 必须落在 crash-trace.txt 里。传了 `-o` 就会被搬进 results.txt——
+    # 那正是「让诊断改写证据」，而它改掉的那份记录是首轮唯一的现场。
+    st_contains "调试器真的把套件跑起来了、且没有搬走结果（进程自己的输出在产物里）" \
+        "${tr_abort}" 'Start testing of ZZProbeAbort'
+    st_contains "调用栈里出现崩溃点所在的函数" "${tr_abort}" 'ZZProbeAbort::diesBySignal'
+    st_contains "结论行明说拿到了调用栈" "${tr_abort}" '^结论：拿到调用栈'
+    # 「不必下产物就能看到」这条纪律对**拿到栈的那一支**同样要成立：日志里要点出
+    # 帧数、并把最外层几帧贴出来——排查的人第一眼看的是 CI 日志，不是流水线产物。
+    # 为什么非要单列两条断言：只守产物的话，把 `capture_crash_trace()` 末尾这段
+    # 日志整段删掉**不会有任何断言变红**（本轮实测：补上这两条之前的 46 条全绿，
+    # 而那段日志正是「不必下产物」的全部兑现）。删掉不会变红的分支不是纵深防御，
+    # 是没人知道的死代码——与 TXT-010 / DIR-003 那条判据同一个道理。
+    # 这里走 `out-lldb.log`（专跑崩溃探针那一遍）而不是两遍全量日志：同一件事
+    # 只留一个证据来源，全量那两遍的日志另有并行/计数的断言在用。
+    st_contains "拿到调用栈时，日志里点出帧数" \
+        "${selftest_tmp}/out-lldb.log" '调用栈 [0-9]+ 帧'
+    st_contains "并且真的贴出了几帧（带 | 前缀）" \
+        "${selftest_tmp}/out-lldb.log" '^[[:space:]]+\|[[:space:]]+frame #[0-9]+'
+    # 「拿到了」与「没拿到」是两件事，结论必须分开写：硬退出探针不是被信号带走的，
+    # 调试器没有现场可停。产物里必须直说这一句——否则一份只有原始输出的文件
+    # 会与「抓到了空栈」看起来一模一样。
+    st_contains "调试器没停住时，结论照实写「没拿到调用栈」" "${tr_hard}" '^结论：.*没拿到调用栈'
+    # 这一条守「**只**对崩溃的套件抓栈」里的那个「只」。四个不崩的探针都不许有产物。
+    st_expect "只有崩溃的套件才抓栈（通过/断言失败/超时/构建失败都没有 crash-trace.txt）" \
+        "$([[ ! -e "${build}/ZZProbePass/crash-trace.txt" \
+              && ! -e "${build}/ZZProbeFail/crash-trace.txt" \
+              && ! -e "${build}/ZZProbeHang/crash-trace.txt" \
+              && ! -e "${build}/ZZProbeBadBuild/crash-trace.txt" ]] && echo 0 || echo 1)"
+    # lldb 与 gdb 的旗标完全不同，而写岔了的症状是**静默拿到空表**（实测：`-o bt`
+    # 在进程已被信号带走时只回一句 error，一帧都没有）。所以两支都得有一条断言，
+    # 不能只验平时跑得最多的那一支——本机平时跑得最多的恰恰是 lldb。
+    st_contains "按 lldb 的形状调它（--batch -o run -o bt）" "${tr_lldb}" \
+        'STUB-DEBUGGER-ARGV: --batch -o run -o bt -c 40 --'
+    # 「降级必须被看见」：没有可用调试器时产物**照旧留下**，并明说到底为什么、
+    # 以及怎么才能拿到。静默什么都不留的话，「没有栈」与「没有崩」会被读成同一件事。
+    st_contains "没有可用调试器时产物照旧留下" "${tr_nodebug}" '崩溃栈捕获'
+    st_contains "没有可用调试器时明说拿不到调用栈" "${tr_nodebug}" '^结论：没有可用的调试器'
+    st_contains "并说清怎么才能抓到（探了哪两个 + 可用哪个环境变量覆盖）" \
+        "${tr_nodebug}" 'LQCOMPARE_TEST_DEBUGGER'
+    st_contains "这条降级也打进了运行器日志（不必下产物就能看到）" \
+        "${selftest_tmp}/out-nodebug.log" '没有可用的调试器'
 
     echo
     echo "── 断言：并发 ──"
@@ -602,18 +798,24 @@ echo "并行度 ${JOBS}（每个套件 make -j${MAKE_JOBS}），单套件超时 
 # ---------------------------------------------------------------------------
 # 启动一个套件二进制并等它结束（带超时看门狗）
 #
+# 第一个参数是**这一次**的超时秒数（不是直接读全局 `TIMEOUT`）：崩溃诊断那一步
+# 要用一个更大的下限，见 capture_crash_trace 的注释。第二个是标记文件路径
+# （空字符串表示不落标记）。
+#
 # 返回它**真实的退出码**（`wait` 取回的，不是看门狗的）；超时则置全局
 # `BIN_TIMED_OUT=1`，并在给了标记文件路径时落一个 `timeout.marker`。
 #
-# **为什么抽成函数而不是在两处各写一遍**：崩溃套件的补跑（见 rerun_verbosely）
-# 必须走完全同一条路。两处各写一份轮询实现，迟早会在某一处漂移——而「超时」
-# 这条路的证据（标记文件、汇总里单独一行）正是自测断言的对象。
+# **为什么抽成函数而不是在三处各写一遍**：崩溃套件的补跑（见 rerun_verbosely）
+# 与调试器抓栈（见 capture_crash_trace）必须走完全同一条路。三处各写一份轮询
+# 实现，迟早会在某一处漂移——而「超时」这条路的证据（标记文件、汇总里单独一行）
+# 正是自测断言的对象。
 #
 # 判存活用 `kill -0` 是可行的（见文件头第 8 条），并且 `wait` 仍能取回真实
 # 退出码——`--self-test` 两遍都跑到这里，「通过探针报成功」那条断言就是证据。
 # ---------------------------------------------------------------------------
 BIN_TIMED_OUT=0
 run_binary_with_timeout() {
+    local limit="$1"; shift
     local marker="$1"; shift
     local waited=0 pid=0
     BIN_TIMED_OUT=0
@@ -621,7 +823,7 @@ run_binary_with_timeout() {
     pid=$!
 
     while kill -0 "${pid}" 2>/dev/null; do
-        if [[ "${waited}" -ge "${TIMEOUT}" ]]; then
+        if [[ "${waited}" -ge "${limit}" ]]; then
             BIN_TIMED_OUT=1
             [[ -n "${marker}" ]] && : > "${marker}"
             # 先 TERM 再 KILL：给套件一次写残存输出的机会，但绝不为它多等。
@@ -679,7 +881,7 @@ rerun_verbosely() {
     # 补跑这件事本身不需要额外的标记文件：`verbose.txt` 存在 ⟺ 补跑发生过，
     # 两个文件各说各的、本来就是同一件事的两份记录（上一轮刚因为「两条必然同进
     # 同出的写入路径」踩过这个坑，见 handoff §6）。
-    run_binary_with_timeout "" \
+    run_binary_with_timeout "${TIMEOUT}" "" \
         "${binary}" -v2 -o "${verbose_txt},txt" >/dev/null 2>"${verbose_err}"
     local rc=$?
     local rerun_timed_out="${BIN_TIMED_OUT}"
@@ -733,6 +935,153 @@ rerun_verbosely() {
 }
 
 # ---------------------------------------------------------------------------
+# 崩溃套件的**调用栈**捕获（crash-trace.txt）：回答「崩在哪一行 C++」
+#
+# 为什么在 `-v2` 补跑之外还要这一层：补跑回答的是「跑到哪一条用例才崩」，
+# 而 CI 上 ubuntu 腿的 `Tests/Folder` 被 glibc 的 `_FORTIFY_SOURCE` 抓住
+# （stderr 只有一行 `*** buffer overflow detected ***`）时，真正卡住的是下一问——
+# 「崩在那串调用的哪一处」。`enumerateDirectory` → 符号链接判定 → `linkTarget`
+# → `canonicalFilePath` 里既有本仓代码也有 Qt / glibc，**凭猜改一处的代价是
+# 「改错 + 一次 CI 往返」**（见 handoff §1.36）。调试器能把这个问题直接答掉。
+#
+# 三条纪律，每条都对应一个会真实发生的错法：
+#   1. **与 `-v2` 补跑用同一个判据**（非超时 + 没产出 `Totals:` 行）。有统计行的
+#      失败，用例名已经在 results.txt 里；超时的套件上面已经单独点名，再挂一个
+#      调试器只会白等一个超时。
+#   2. **不传 `-o`**：这一步的产物是 crash-trace.txt，不是结果。传了 `-o` 就是把
+#      首轮那份「崩之前跑过哪些用例」的记录改写掉——那等于让诊断改写证据。
+#      副产品：程序自己的输出（Qt Test 默认写 stdout）会落进 crash-trace.txt，
+#      于是「调试器真的把二进制跑起来了」这件事是可断言的，而不是靠信任。
+#   3. **超时下限 60 秒**：调试器要先把自己启动起来，这跟套件本身快不快无关。
+#      自测的超时窗口是 5 秒，不加下限的话「调试器还没启动完就被看门狗掐掉」
+#      会把「没抓到栈」伪装成「没有栈可抓」。
+#
+# **没有可用调试器时照样写下 crash-trace.txt**，里面明说抓不到栈：这样
+# 「产物存在」始终等价于「这个套件崩过」（与 verbose.txt 同一约定），而
+# 「里面没有栈」永远是一句**写出来的结论**，不会被读成「这次崩得什么都没留下」。
+# ---------------------------------------------------------------------------
+
+# 选调试器：显式指定优先，否则 `command -v` 探测 gdb → lldb。
+# 返回非 0 表示「本平台没有可用调试器」。
+#
+# 为什么 gdb 排前面：这条诊断真正要回答的那个崩溃在 ubuntu 腿（那里有 gdb）；
+# macOS 上两者都可能存在（Homebrew 的 gdb 与 Xcode 的 lldb），而 gdb 在没有
+# 调试信息时的输出更好读。
+CRASH_TRACE_DEBUGGER=""
+select_crash_debugger() {
+    local explicit="${LQCOMPARE_TEST_DEBUGGER:-}"
+    CRASH_TRACE_DEBUGGER=""
+    if [[ -n "${explicit}" ]]; then
+        if [[ -x "${explicit}" ]]; then
+            CRASH_TRACE_DEBUGGER="${explicit}"
+            return 0
+        fi
+        return 1
+    fi
+    local candidate found
+    for candidate in gdb lldb; do
+        found="$(command -v "${candidate}" 2>/dev/null || true)"
+        if [[ -n "${found}" ]]; then
+            CRASH_TRACE_DEBUGGER="${found}"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# 把「怎么让调试器停在崩溃点并把调用栈打出来」收成一张按调试器选的形式表，
+# 结果写进全局 CRASH_TRACE_ARGV。
+#
+# **两个调试器的旗标完全不同，而写岔了的症状是「静默拿到空表」**：`-o bt` 在 lldb
+# 上要求进程「当前处于停止状态」，进程已被信号带走时它只回一句
+# `error: Command requires a process which is currently stopped`，栈一个字节都拿
+# 不到（本机实测，见 handoff §6）。所以这里的差别必须在源码里看得见、并有断言钉住。
+#
+# 按**可执行文件名**分辨两者，而不是按 `--version` 的输出猜：后者要多起一个进程，
+# 而那个进程自己也可能挂住——给一条诊断路径再引入一个可能挂住的环节不值得。
+crash_trace_argv() {
+    local binary="$1"
+    CRASH_TRACE_ARGV=("${CRASH_TRACE_DEBUGGER}")
+    case "$(basename "${CRASH_TRACE_DEBUGGER}")" in
+        *lldb*)
+            CRASH_TRACE_ARGV+=("--batch" "-o" "run" "-o" "bt -c 40" "--" "${binary}")
+            ;;
+        *)
+            # gdb 默认就在 SIGABRT / SIGSEGV 上停下——这正是 `gdb -batch -ex run
+            # -ex bt` 这条老套路成立的原因，不需要额外设置信号的处置方式。
+            CRASH_TRACE_ARGV+=("-batch" "-ex" "run" "-ex" "bt 40" "--args" "${binary}")
+            ;;
+    esac
+}
+
+# 调用栈帧的行首形式：gdb 是 `#0 0x…`，lldb 是 `  frame #0: 0x…`（当前帧还带一个
+# `*`）。两者都认，「有没有帧」这件事才不用按平台分叉去判。
+CRASH_TRACE_FRAME_RE='^[[:space:]]*\*?[[:space:]]*(frame #[0-9]+|#[0-9]+ )'
+
+capture_crash_trace() {
+    local binary="$1" build_dir="$2" first_status="$3"
+    local trace_txt="${build_dir}/crash-trace.txt"
+    local limit=$(( TIMEOUT > 60 ? TIMEOUT : 60 ))
+    local frames=0 rc=0
+
+    {
+        echo "崩溃栈捕获（run-tests.sh 自动执行；不改写 results.txt / verbose.txt）"
+        echo "套件：${binary##*/}（${binary}）"
+        echo "首轮退出码：${first_status}"
+    } > "${trace_txt}"
+
+    if ! select_crash_debugger; then
+        {
+            echo "结论：没有可用的调试器——本平台没拿到调用栈。"
+            echo "  已探测 gdb 与 lldb；也可以用 LQCOMPARE_TEST_DEBUGGER=/path/to/gdb 指定一个。"
+            echo "  这份产物本身仍是「这个套件崩过」的标记，别把「没有栈」读成「没有崩」。"
+        } >> "${trace_txt}"
+        echo "      本平台没有可用的调试器（探测过 gdb / lldb）："
+        echo "      crash-trace.txt 已留下、并写明拿不到调用栈（随日志产物一起上传）。"
+        return
+    fi
+
+    crash_trace_argv "${binary}"
+    {
+        echo "调试器：${CRASH_TRACE_DEBUGGER}"
+        echo "调试器命令：${CRASH_TRACE_ARGV[*]}"
+        echo "看门狗：${limit}s（套件超时 ${TIMEOUT}s；调试器要先启动，故取较大者、且不低于 60s）"
+        echo "--------- 调试器输出（含被测进程自己的输出）---------"
+    } >> "${trace_txt}"
+
+    run_binary_with_timeout "${limit}" "" "${CRASH_TRACE_ARGV[@]}" \
+        >>"${trace_txt}" 2>&1
+    rc=$?
+    local trace_timed_out="${BIN_TIMED_OUT}"
+
+    frames="$(grep -c -E "${CRASH_TRACE_FRAME_RE}" "${trace_txt}" || true)"
+
+    # 结论必须由我们自己写、而且必须写进**产物**：调试器的原始输出原样转储时
+    # 看不出有没有拿到栈——lldb 那句 error 是一行普通错误、gdb 在没有符号时只有
+    # 地址，于是「调试器根本没停住」与「停住了但栈是空的」会混成同一个样子。
+    if [[ ${trace_timed_out} -eq 1 ]]; then
+        echo "结论：调试器在 ${limit}s 内没有结束，已被看门狗终止——没有拿到调用栈。" >> "${trace_txt}"
+    elif [[ ${frames} -gt 0 ]]; then
+        echo "结论：拿到调用栈（${frames} 帧，见上面 frame / #N 行）。" >> "${trace_txt}"
+    else
+        echo "结论：调试器跑完了（退出码 ${rc}），但没拿到调用栈（输出里一帧都没有）。" >> "${trace_txt}"
+        echo "  两种常见原因：调试器没能停在被调试进程上（调试链路不通就会这样），" >> "${trace_txt}"
+        echo "  或者这次的死法没给调试器留下现场（进程不是被信号带走的）。" >> "${trace_txt}"
+    fi
+
+    echo "      调试器：${CRASH_TRACE_DEBUGGER}（完整命令见 crash-trace.txt）"
+    if [[ ${frames} -gt 0 ]]; then
+        echo "      调用栈 ${frames} 帧。最外层的几帧（离崩溃点最近的调用者）："
+        grep -E "${CRASH_TRACE_FRAME_RE}" "${trace_txt}" | tail -n 12 | sed 's/^/    | /'
+        echo "      （完整内容见 ${trace_txt}，随日志产物一起上传）"
+    elif [[ ${trace_timed_out} -eq 1 ]]; then
+        echo "      调试器超时未结束（超过 ${limit}s），已被看门狗终止——没有拿到调用栈。"
+    else
+        echo "      调试器跑完了但没拿到调用栈（退出码 ${rc}）——结论已写进 ${trace_txt}。"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # 单个套件：构建 → 运行（带超时）→ 判定 → 落盘一行结果
 #
 # **必须在子 shell 里跑**（调用处直接 `&`）。子 shell 里对全局变量的赋值不会
@@ -751,6 +1100,7 @@ run_suite() {
     local summary_file="${build_dir}/summary.env"
     local verbose_txt="${build_dir}/verbose.txt"
     local verbose_err="${build_dir}/verbose.stderr.log"
+    local crash_trace="${build_dir}/crash-trace.txt"
 
     mkdir -p "${build_dir}"
     # 本套件的全部人读输出进自己的文件；父进程按启动顺序整块打印。
@@ -763,8 +1113,10 @@ run_suite() {
     # 找不到可执行文件时会 `return` 掉，于是上一轮的产物原样留着，被当作
     # 「这一轮的输出」上传——构建失败的那一轮反而会带上一份看起来正常的旧结果。
     # 这类「旧结果冒充新结果」是 CI 里最难发现的一种假信号。
+    # `crash-trace.txt` 与 `verbose.txt` 同一处境：它「存在」等价于「这个套件崩过」，
+    # 上一轮留下的那份会让这一轮的正常套件带上一份假的崩溃证据。
     rm -f "${results_txt}" "${results_xml}" "${stderr_log}" "${build_log}" "${timeout_marker}" "${summary_file}" \
-        "${verbose_txt}" "${verbose_err}"
+        "${verbose_txt}" "${verbose_err}" "${crash_trace}"
 
     local status=255 timed_out=0 has_summary=0 pass=0 fail=0 skip=0
 
@@ -835,7 +1187,7 @@ run_suite() {
     # 而日志上只显示「上一个套件还没跑完」——比失败难查得多。
     #
     # 轮询而不是 `wait` + 看门狗子 shell：后者会在每个套件上留一个孤儿 `sleep`。
-    run_binary_with_timeout "${timeout_marker}" \
+    run_binary_with_timeout "${TIMEOUT}" "${timeout_marker}" \
         "${binary}" -o "${results_txt},txt" -o "${results_xml},junitxml" \
         >/dev/null 2>"${stderr_log}"
     status=$?
@@ -890,8 +1242,10 @@ run_suite() {
             fi
             # 走到这里说明「它死了，但没说死在哪一条」。补跑一遍 `-v2` 把这条
             # 信息补上——这一步只对**崩溃**做，不与超时/断言失败共用（理由见
-            # rerun_verbosely 的注释）。
+            # rerun_verbosely 的注释）。紧接着再抓一次调用栈：`-v2` 回答「哪一条
+            # 用例」，调试器回答「哪一行」（理由见 capture_crash_trace 的注释）。
             rerun_verbosely "${binary}" "${build_dir}" "${status}"
+            capture_crash_trace "${binary}" "${build_dir}" "${status}"
         fi
     else
         echo "  ✓ 通过"

@@ -150,10 +150,14 @@ jobs:
           make -j"$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)"
 
       # ENG-003 第 2、3 条的可重复证据：运行器**自己的**行为（并行、超时、
-      # 失败路径的报错文案、并发下的计数）如果错了，没有任何东西会变红——
-      # 恰恰是它本该报告的那种静默失败。`--self-test` 在临时目录里现造五个探针
-      # 套件（通过 / 失败 / 挂死 / 硬退出 / 构建失败）来验它自己，跑两遍
-      # （并行 4 与串行 1）并断言两遍的合计逐字相同；探针跑完即删、不进仓库。
+      # 失败路径的报错文案、并发下的计数、崩溃诊断的产物与降级）如果错了，
+      # 没有任何东西会变红——恰恰是它本该报告的那种静默失败。`--self-test` 在
+      # 临时目录里现造六个探针套件（通过 / 失败 / 挂死 / 硬退出 / 有信号地崩掉 /
+      # 构建失败）外加一个「假调试器」脚本来验它自己，跑两遍（并行 4 与串行 1）
+      # 并断言两遍的合计逐字相同；再各用一遍（过滤器 + 独立构建根目录）验两个
+      # 不会天天走到、却最需要正确的分支：lldb 的旗标形状、以及「本平台没有
+      # 可用调试器」。探针跑完即删、不进仓库。真调试器那条路只有在崩溃时才走到，
+      # 因此下面「运行测试套件」那一步才是它的第一现场。
       #
       # Windows 腿显式跳过并打出告警：超时那一支靠 POSIX 信号打断，而 Git Bash 的
       # `kill` 能不能终止一个原生 Windows 进程没有实测过。**不做成静默跳过**——
@@ -177,6 +181,19 @@ jobs:
         env:
           RIBBON_AVAILABLE: ${{ steps.ribbon.outputs.available }}
         run: |
+          # 崩溃栈捕获（run-tests.sh 的 crash-trace.txt）要靠平台上的调试器。缺了它
+          # 那条诊断不会静默消失——产物里会明说「没有可用的调试器」——但**在这一步
+          # 先说一句**能省掉一次「从产物里反推」：读这条腿日志的人第一件想知道的
+          # 就是「这里到底有没有 gdb」。所以这里只是打印与告警，**不让这条腿变红**：
+          # 缺一个调试器是环境差异，不是被测对象失败（与本文件里 LqRibbon 那条
+          # 「降级必须可见、但不能把不需要凭据也能拿到的信息一起丢掉」同一处置）。
+          if command -v gdb >/dev/null 2>&1; then
+            echo "崩溃栈捕获可用调试器：$(command -v gdb)"
+          elif command -v lldb >/dev/null 2>&1; then
+            echo "崩溃栈捕获可用调试器：$(command -v lldb)"
+          else
+            echo "::warning::本平台没有 gdb / lldb：崩溃套件只能答到「哪一条用例」，答不到「哪一行 C++」"
+          fi
           if [ "${RIBBON_AVAILABLE}" = "true" ]; then
             bash Code/Tests/run-tests.sh
           else
@@ -230,8 +247,11 @@ jobs:
       # （`-v2`）：崩溃的套件不写 `Totals:` 行，「它死在哪一条用例上」只能由
       # 补跑回答——`-v2` 里每个用例都有一行 `INFO : … entering`，跑完再写
       # `PASS`，于是有 entering 而没有 PASS 的那一条就是崩之前正在执行的用例。
-      # 补跑只在崩溃时发生，正常与断言失败的套件不会多出这两个文件
-      # （所以「有 verbose.txt」本身就是「这个套件崩过」的标记）。
+      # `crash-trace.txt` 是同一路上的第二步：补跑答「哪一条用例」，调试器答
+      # 「哪一行 C++」（ubuntu 腿的 `Tests/Folder` 被 glibc 的 `_FORTIFY_SOURCE`
+      # 抓住，只有调用栈能把 `Folder::compare()` 里那一串调用指到某一处）。
+      # 这两个产物都只在崩溃时出现，正常与断言失败的套件不会多出来
+      # （所以「有 verbose.txt / crash-trace.txt」本身就是「这个套件崩过」的标记）。
       - name: 上传测试日志
         if: always()
         uses: actions/upload-artifact@v4
@@ -244,6 +264,7 @@ jobs:
             _test-build/**/stderr.log
             _test-build/**/verbose.txt
             _test-build/**/verbose.stderr.log
+            _test-build/**/crash-trace.txt
           if-no-files-found: warn
 
       # ENG-004 第 4 条：可执行文件作为构建产物上传，便于手工验证。
