@@ -131,3 +131,16 @@ POSIX 分支不变。依据是 [Windows DWORD 定义](https://learn.microsoft.co
 
 时区证据是固定偏移、夏令时重复时钟语料及 TZ 进程测试，不是实际网络盘挂载。
 macOS / Windows 原生交互与正式工具链仍需各自验证。
+
+## PLAT-005 / #326：Windows 注册表后端编译
+
+值名排序的临时变量修正为 `QStringList`；在本编译单元任何头文件之前设置
+可覆盖的 Windows 目标缺省值，使旧 MinGW 能看到 `RegDeleteTreeW` 声明。
+显式目标版本保持不变，没有更改删除流程、错误处理或真实注册表数据。
+
+已验证：原文件编译失败可重现；修复后使用官方 Windows Qt 5.15.2 头文件与
+Debian i686 GCC 14 / MinGW-w64 v12 交叉编译为 i386 COFF，`-Werror` 通过；
+缺省 0x0600 与显式 0x0A00 均通过。独立 PE32 链接探针解析到 ADVAPI32.dll，
+未执行。Linux ShellIntegration 在独立构建目录 101 passed / 0 failed / 0 skipped。
+
+此证据不是 MinGW 8.1、完整 Windows 应用链接、实际注册表写入/删除或 Explorer 验收。
