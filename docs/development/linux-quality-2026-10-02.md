@@ -347,3 +347,21 @@ Linux PatchRegression 77/0/0；额外包装器真实执行 GNU patch --binary �
 Linux PathName 44 passed / 0 failed / 0 skipped；完整测试翻译单元使用官方
 Windows Qt 5.15.2 头及 i686 -Werror 编译通过。原生 Windows 的真实创建与
 显示结果仍待 CI；其它平台能力相关旧用例的跳过边界不变。
+
+## PLAT-002 / #325：Windows 当前元数据与存在性一致
+
+stat/exists 统一使用 access=0、共享读写删除、不跟随重解析点的句柄查询；
+目录枚举仅用搜索 API 取名称，再逐项 stat 取得当前元数据。子项查询错误或
+FindNext 中途错误明确报告不完整，不忽略 Snapshot/FolderMerge 的一致性条件。
+官方 FindFirstFileW 文档说明 NTFS 搜索属性可能过时，不能替代当前属性查询。
+
+b1e6786 原生 Windows 已确认 FILETIME 新用例全过，但 Snapshot/FolderMerge
+的目录复核仍失败；旧产物未记录具体变化字段，缓存机制仍须新原生用例验证。
+新增 FileMetadata 的卷根、打开写句柄 oracle、坏链/活链、属性、错误复位与
+1000 项枚举计时；每项额外元数据句柄的 Windows 性能开销尚未测定。
+
+Linux Snapshot 122、FolderMerge 31、SyncBaseline 116 全部通过；FileMetadata
+9 passed / 0 failed / 9 Windows 专属 skipped。八种目录变化必须拒绝的新增
+回归全部能抓住故意放宽的变异。三个完整 Windows 翻译单元用官方 Qt 5.15.2
+头/i686 -Werror 通过；原生 NTFS/权限/性能及跨平台 CI 仍待验收。
+详细依据与局限见 windows-metadata-2026-10-02.md。

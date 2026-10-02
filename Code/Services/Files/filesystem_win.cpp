@@ -84,7 +84,7 @@ LPCWSTR toWide(const QString &path)
 //      一起改的重复实现，比删掉更容易出问题。
 // 现在需要把 Win32 原始码变成可读文本时，用 errorDetail(fromWindowsError(code))。
 
-/// 把 WIN32_FIND_DATAW 的属性位翻译成 FileAttributes。
+/// 把 Win32 的属性位翻译成 FileAttributes。
 FileAttributes attributesFromWin32(DWORD win32Attributes)
 {
     FileAttributes attributes = FileAttribute::None;
@@ -103,7 +103,7 @@ FileAttributes attributesFromWin32(DWORD win32Attributes)
     return attributes;
 }
 
-FileInfo infoFromWin32(const QString &path, const WIN32_FIND_DATAW &data)
+FileInfo infoFromHandle(const QString &path, const BY_HANDLE_FILE_INFORMATION &data)
 {
     FileInfo info;
     info.path = path;
@@ -114,8 +114,8 @@ FileInfo infoFromWin32(const QString &path, const WIN32_FIND_DATAW &data)
     info.isSymLink = info.attributes.testFlag(FileAttribute::SymLink);
     info.isDirectory = (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 
-    // 大小由高低两个 32 位拼成。目录也给了这个字段，但它不代表目录内容的
-    // 总大小（Windows 一律低估），所以不要拿它当目录大小用。
+    // 大小由高低两个 32 位拼成；目录字段不代表其内容总大小。
+    // 保留系统原值，不能为绕过稳定性校验而忽略或清零。
     info.size = (static_cast<quint64>(data.nFileSizeHigh) << 32)
                 | static_cast<quint64>(data.nFileSizeLow);
 
@@ -126,11 +126,8 @@ FileInfo infoFromWin32(const QString &path, const WIN32_FIND_DATAW &data)
     return info;
 }
 
-/// 用 FindFirstFileW 读单个条目的元数据。
-///
-/// 用 FindFirstFile 而不是 GetFileAttributesEx，是为了让 stat 与
-/// enumerateDirectory 拿到**完全相同**的字段集合与语义——
-/// 两条路径若用不同 API，就可能出现「列表里的时间和属性面板里的时间不一致」。
+/// 链接类型与属性写入的预检；不能把搜索索引缓存用于稳定性校验。
+/// 当前大小、时间和属性由 stat 的 GetFileInformationByHandle 查询。
 bool findFirst(const QString &path, WIN32_FIND_DATAW *out, ErrorCode *error)
 {
     const HANDLE handle = ::FindFirstFileW(toWide(path), out);
@@ -184,12 +181,32 @@ public:
 
     FileInfo stat(const QString &path, ErrorCode *error) const override
     {
-        // FindFirstFileW 对符号链接返回的是链接自身的属性，
-        // 与 POSIX 的 lstat 语义一致（不是 GetFileAttributesEx 的跟随语义）。
-        WIN32_FIND_DATAW data;
-        if (!findFirst(path, &data, error))
+        // FindFirstFileW 的 NTFS 搜索索引可能仍是旧值；读取文件或枚举子目录
+        // 后缓存刷新，会把未变化的源误判成发生变化。当前元数据必须由句柄查询。
+        // access=0 只查询元数据，不请求内容读取、写入或额外权限。
+        // BACKUP_SEMANTICS 支持目录/卷根，OPEN_REPARSE_POINT 保持 lstat 的不跟随语义。
+        const HANDLE handle = ::CreateFileW(
+            toWide(toNativePath(path)), 0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            if (error)
+                *error = fromWindowsError(::GetLastError());
             return FileInfo();
-        return infoFromWin32(path, data);
+        }
+        BY_HANDLE_FILE_INFORMATION data{};
+        const BOOL ok = ::GetFileInformationByHandle(handle, &data);
+        // CloseHandle 可能改写线程错误码，必须先保存查询结果。
+        const DWORD code = ok ? ERROR_SUCCESS : ::GetLastError();
+        ::CloseHandle(handle);
+        if (!ok) {
+            if (error)
+                *error = fromWindowsError(code);
+            return FileInfo();
+        }
+        if (error)
+            *error = FileSystemError::None;
+        return infoFromHandle(path, data);
     }
 
     QString linkTarget(const QString &path, ErrorCode *error) const override
@@ -247,8 +264,8 @@ public:
 
     bool exists(const QString &path, ErrorCode *error) const override
     {
-        WIN32_FIND_DATAW data;
-        return findFirst(path, &data, error);
+        // 与 stat 共用卷根、长路径和不跟随链接语义，不能退回搜索索引查询。
+        return stat(path, error).exists;
     }
 
     QVector<FileInfo> enumerateDirectory(const QString &path, ErrorCode *error) const override
@@ -282,6 +299,7 @@ public:
 
         const QChar separator = QLatin1Char('\\');
         const bool pathEndsWithSeparator = normalized.endsWith(separator);
+        ErrorCode enumerationError;
 
         for (;;) {
             const QString name = QString::fromWCharArray(data.cFileName);
@@ -289,17 +307,29 @@ public:
             if (name != QLatin1String(".") && name != QLatin1String("..")) {
                 const QString childPath =
                     pathEndsWithSeparator ? normalized + name : normalized + separator + name;
-                entries.append(infoFromWin32(childPath, data));
+                // 搜索 API 只负责名称；与 POSIX readdir+lstat 一样逐项读取当前
+                // 元数据，避免多轮比较把搜索索引缓存与句柄当前值混在一起。
+                ErrorCode childError;
+                const auto child = stat(childPath, &childError);
+                if (childError.ok())
+                    entries.append(child);
+                else if (enumerationError.ok())
+                    enumerationError = childError;
             }
 
-            if (!::FindNextFileW(handle, &data))
+            if (!::FindNextFileW(handle, &data)) {
+                // 正常结束与读取失败必须区分；不能把不完整列表报告成完整目录。
+                const DWORD code = ::GetLastError();
+                if (code != ERROR_NO_MORE_FILES && enumerationError.ok())
+                    enumerationError = fromWindowsError(code);
                 break;
+            }
         }
 
         ::FindClose(handle);
 
         if (error)
-            *error = FileSystemError::None;
+            *error = enumerationError;
         return entries;
     }
 
