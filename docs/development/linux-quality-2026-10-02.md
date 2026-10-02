@@ -325,3 +325,14 @@ Folder 三轮全套各 68 passed / 0 failed / 0 skipped；最终又经新运行�
 Linux Cli 119 passed / 0 failed / 0 skipped；测试与 Windows 诊断翻译单元
 通过官方 Qt 5.15.2 头/i686 -Werror 编译，独立 PE 探针成功链接 DbgHelp。
 诊断自测、实际崩溃栈与 Windows 参数/内容四行结果需要原生 CI 确认。
+
+## PAT-006 / #265：Windows GNU patch 二进制往返
+
+ac47de0 原生 Windows 已确认 PatchApply 61/0/0，PatchRegression 的 Git apply
+通过，但 GNU patch 在 CRLF/mixed 字节夹具失败。按 GNU 官方选项文档，仅在
+Windows 的正向/反向 patch 调用添加 --binary；全部目标文件字节比较保留。
+macOS 系统 patch 参数不变，没有修改生成器或把换行差异当作成功。
+
+Linux PatchRegression 77/0/0；额外包装器真实执行 GNU patch --binary 的
+往返子集 4/0/0。Windows 头/i686 -Werror 编译通过；原生 Windows 修复后
+结果等待 CI。依据：https://www.gnu.org/software/diffutils/manual/html_node/patch-Options.html

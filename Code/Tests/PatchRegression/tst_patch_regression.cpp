@@ -794,6 +794,11 @@ private slots:
             QVERIFY2(writeBytes(root.filePath(file.oldPath), file.oldBytes), qPrintable(file.oldPath));
         const QString patchPath = patchLocation.filePath("generated.diff");
         QVERIFY(writeBytes(patchPath, generated.bytes));
+        QStringList patchOptions = {"-p1", "--batch"};
+#ifdef Q_OS_WIN
+        // Windows 的 GNU patch 默认文本模式会转换 CRLF；正反应用都必须保留原始字节。
+        patchOptions << "--binary";
+#endif
         if (tool == QStringLiteral("git")) {
             const auto init = runProcess(executable, {"init", "--quiet"}, root.path());
             QVERIFY2(init.finished && init.exitCode == 0, init.diagnosticOutput());
@@ -802,13 +807,13 @@ private slots:
             const auto applied = runProcess(executable, {"-c", "core.autocrlf=false", "apply", patchPath}, root.path());
             QVERIFY2(applied.finished && applied.exitCode == 0, applied.diagnosticOutput() + generated.bytes);
         } else {
-            const auto applied = runProcess(executable, {"-p1", "--batch", "-i", patchPath}, root.path());
+            const auto applied = runProcess(executable, patchOptions + QStringList{"-i", patchPath}, root.path());
             QVERIFY2(applied.finished && applied.exitCode == 0, applied.diagnosticOutput() + generated.bytes);
         }
         for (const auto &file : files) QCOMPARE(readBytes(root.filePath(file.newPath)), file.newBytes);
         const QStringList reverseArguments = tool == QStringLiteral("git")
             ? QStringList{"-c", "core.autocrlf=false", "apply", "--reverse", patchPath}
-            : QStringList{"-p1", "--batch", "-R", "-i", patchPath};
+            : patchOptions + QStringList{"-R", "-i", patchPath};
         const auto reversed = runProcess(executable, reverseArguments, root.path());
         QVERIFY2(reversed.finished && reversed.exitCode == 0, reversed.diagnosticOutput() + generated.bytes);
         for (const auto &file : files) QCOMPARE(readBytes(root.filePath(file.oldPath)), file.oldBytes);
