@@ -1,4 +1,5 @@
 #include "cliexecution.h"
+#include "processarguments.h"
 #include "linesimilarity.h"
 #include "textdocument.h"
 #include "../CliProbe/cliprobe.h"
@@ -7,6 +8,7 @@
 #include <QDirIterator>
 #include <QFile>
 #include <QJsonDocument>
+#include <QJsonArray>
 #include <QProcess>
 #include <QProcessEnvironment>
 #include <QSettings>
@@ -51,7 +53,7 @@ struct ProcessResult {
     QByteArray out, err;
 };
 
-ProcessResult runProbe(const QStringList &arguments, const QString &configRoot = {})
+ProcessResult runProbe(const QStringList &arguments, const QString &configRoot = {}, bool inspectArguments = false)
 {
     QProcess process;
     auto environment = QProcessEnvironment::systemEnvironment();
@@ -59,6 +61,8 @@ ProcessResult runProbe(const QStringList &arguments, const QString &configRoot =
     environment.remove(QStringLiteral("WAYLAND_DISPLAY"));
     environment.insert(QStringLiteral("QT_QPA_PLATFORM"), QStringLiteral("offscreen"));
     environment.insert(QStringLiteral("LQCOMPARE_CLI_PROBE_MODE"), QStringLiteral("1"));
+    if (inspectArguments)
+        environment.insert(QStringLiteral("LQCOMPARE_CLI_ARGUMENTS_PROBE_MODE"), QStringLiteral("1"));
     if (!configRoot.isEmpty()) {
         environment.insert(QStringLiteral("LQCOMPARE_CLI_TEST_CONFIG_HOME"), configRoot);
         environment.insert(QStringLiteral("XDG_CONFIG_HOME"), configRoot);
@@ -139,8 +143,17 @@ private slots:
     void realProcessExitCodes();
     void realProcessJsonAndUtf8_data();
     void realProcessJsonAndUtf8();
+    void realProcessArgumentRoundTrip_data();
+    void realProcessArgumentRoundTrip();
+    void realProcessUnicodeGuiClassification();
+    void realProcessWildcardStaysLiteral();
 #ifdef Q_OS_WIN
     void realProcessCrashDiagnostics();
+    void windowsCommandLineRules_data();
+    void windowsCommandLineRules();
+    void windowsCommandLineRejectsUnavailableOrTruncatedInput();
+#else
+    void initialArgumentsRejectMissingValues();
 #endif
     void realProcessHelpAndVersion();
     void realProcessSettingsAndInputsUnchanged();
@@ -907,26 +920,33 @@ void CliTests::realProcessExitCodes()
 
 void CliTests::realProcessJsonAndUtf8_data()
 {
-    QTest::addColumn<bool>("unicodePaths");
+    QTest::addColumn<QString>("leftName");
+    QTest::addColumn<QString>("rightName");
     QTest::addColumn<bool>("unicodeContent");
+    QTest::addColumn<bool>("namedInputs");
     // 分别验证参数传递与文件解码，避免一个中文用例把两条失败路径混在一起。
-    QTest::newRow("ascii") << false << false;
-    QTest::newRow("unicode-paths") << true << false;
-    QTest::newRow("unicode-content") << false << true;
-    QTest::newRow("unicode-paths-and-content") << true << true;
+    QTest::newRow("ascii") << "left file.txt" << "right file.txt" << false << false;
+    QTest::newRow("unicode-paths") << QStringLiteral("左 文件.txt") << QStringLiteral("右 文件.txt") << false << false;
+    QTest::newRow("unicode-content") << "left file.txt" << "right file.txt" << true << false;
+    QTest::newRow("unicode-paths-and-content") << QStringLiteral("左 文件.txt") << QStringLiteral("右 文件.txt") << true << false;
+    QTest::newRow("unicode-unquoted-paths") << QStringLiteral("左文件.txt") << QStringLiteral("右文件.txt") << true << false;
+    QTest::newRow("supplementary-paths") << QString::fromUtf8("左🚀.txt") << QString::fromUtf8("右🦊.txt") << true << false;
+    QTest::newRow("unicode-named-paths") << QStringLiteral("左 文件.txt") << QStringLiteral("右 文件.txt") << true << true;
 }
 
 void CliTests::realProcessJsonAndUtf8()
 {
-    QFETCH(bool, unicodePaths);
+    QFETCH(QString, leftName);
+    QFETCH(QString, rightName);
     QFETCH(bool, unicodeContent);
+    QFETCH(bool, namedInputs);
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
-    const QString l = dir.filePath(unicodePaths ? QString::fromUtf8("左 文件.txt") : QStringLiteral("left file.txt"));
-    const QString r = dir.filePath(unicodePaths ? QString::fromUtf8("右 文件.txt") : QStringLiteral("right file.txt"));
+    const QString l = dir.filePath(leftName), r = dir.filePath(rightName);
     QVERIFY(writeBytes(l, unicodeContent ? QString::fromUtf8("你好\n").toUtf8() : QByteArray("hello\n")));
     QVERIFY(writeBytes(r, unicodeContent ? QString::fromUtf8("世界\n").toUtf8() : QByteArray("world\n")));
-    const auto result = runProbe({"--silent", "--json", l, r});
+    const auto result = runProbe(namedInputs ? QStringList{"--silent", "--json", "--left=" + l, "--right", r}
+                                            : QStringList{"--silent", "--json", l, r});
     QVERIFY2(result.finished, result.err.constData());
     QVERIFY2(result.status == QProcess::NormalExit, result.err.constData());
     QCOMPARE(result.exitCode, 1);
@@ -944,7 +964,129 @@ void CliTests::realProcessJsonAndUtf8()
     QCOMPARE(QString::fromUtf8(result.out).toUtf8(), result.out);
 }
 
+void CliTests::realProcessArgumentRoundTrip_data()
+{
+    QTest::addColumn<QStringList>("arguments");
+    QTest::addColumn<bool>("headless");
+    QTest::newRow("unicode-gui") << QStringList{QStringLiteral("左 文件.txt"), QStringLiteral("右 文件.txt")} << false;
+    QTest::newRow("unicode-headless") << QStringList{"--silent", "--left=" + QString::fromUtf8("左🚀 文件.txt"),
+                                                       "--right", QString::fromUtf8("右🦊 文件.txt")} << true;
+    QTest::newRow("quotes-and-backslashes") << QStringList{QStringLiteral("C:\\目录\\a\"quoted\".txt"),
+                                                           QStringLiteral("C:\\目录 with space\\")} << false;
+    QTest::newRow("significant-spaces") << QStringList{QStringLiteral(" left file "), QStringLiteral(" right file ")} << false;
+    QTest::newRow("literal-wildcards") << QStringList{"--", "left*.txt", "right?.txt"} << false;
+    QTest::newRow("leading-switch-paths") << QStringList{"--", "--left", "@right"} << false;
+}
+
+void CliTests::realProcessArgumentRoundTrip()
+{
+    QFETCH(QStringList, arguments);
+    QFETCH(bool, headless);
+    const auto result = runProbe(arguments, {}, true);
+    QVERIFY2(result.finished, result.err.constData());
+    QVERIFY2(result.status == QProcess::NormalExit, result.err.constData());
+    QCOMPARE(result.exitCode, 0);
+    QVERIFY2(result.err.isEmpty(), result.err.constData());
+    const auto json = QJsonDocument::fromJson(result.out);
+    QVERIFY2(json.isObject(), result.out.constData());
+    const auto before = json.object().value("before").toArray();
+    const auto after = json.object().value("after").toArray();
+    QCOMPARE(before.size(), arguments.size() + 1);
+    QCOMPARE(after, before);
+    QVERIFY(!before.first().toString().isEmpty());
+    for (int index = 0; index < arguments.size(); ++index)
+        QCOMPARE(before.at(index + 1).toString(), arguments.at(index));
+    QCOMPARE(json.object().value("parsed").toBool(), true);
+    QCOMPARE(json.object().value("headless").toBool(), headless);
+}
+
+void CliTests::realProcessWildcardStaysLiteral()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    QVERIFY(writeBytes(dir.filePath("left-one.txt"), "one\n"));
+    QVERIFY(writeBytes(dir.filePath("left-two.txt"), "two\n"));
+    const QString right = dir.filePath("right.txt"), pattern = dir.filePath("left-*.txt");
+    QVERIFY(writeBytes(right, "right\n"));
+    const auto before = fileSnapshot(dir.path());
+    // 通配展开仍未实现：不能让 CRT 把一个参数悄悄变为多个文件或导致 Qt 越界。
+    const auto result = runProbe({"--silent", "--json", pattern, right});
+    QVERIFY2(result.finished, result.err.constData());
+    QVERIFY2(result.status == QProcess::NormalExit, result.err.constData());
+    QCOMPARE(result.exitCode, int(Cli::DataError));
+    const auto summary = QJsonDocument::fromJson(result.out).object();
+    QCOMPARE(summary.value("status").toString(), QStringLiteral("error"));
+    QVERIFY(summary.value("error").toString().contains(pattern));
+    QCOMPARE(fileSnapshot(dir.path()), before);
+}
+
+void CliTests::realProcessUnicodeGuiClassification()
+{
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    const QString left = dir.filePath(QStringLiteral("左 文件.txt"));
+    const QString right = dir.filePath(QStringLiteral("右 文件.txt"));
+    QVERIFY(writeBytes(left, "left\n"));
+    QVERIFY(writeBytes(right, "right\n"));
+    // 文件必须真实存在，才能覆盖 MinGW 将窄字符 '?' 展开成多个文件的条件。
+    const auto result = runProbe({left, right}, {}, true);
+    QVERIFY2(result.finished, result.err.constData());
+    QVERIFY2(result.status == QProcess::NormalExit, result.err.constData());
+    QCOMPARE(result.exitCode, 0);
+    const auto summary = QJsonDocument::fromJson(result.out).object();
+    QCOMPARE(summary.value("parsed").toBool(), true);
+    QCOMPARE(summary.value("headless").toBool(), false);
+    const auto before = summary.value("before").toArray();
+    QCOMPARE(before.size(), 3);
+    QCOMPARE(before.at(1).toString(), left);
+    QCOMPARE(before.at(2).toString(), right);
+    QCOMPARE(summary.value("after").toArray(), before);
+}
+
 #ifdef Q_OS_WIN
+void CliTests::windowsCommandLineRules_data()
+{
+    QTest::addColumn<QString>("commandLine");
+    QTest::addColumn<QStringList>("expected");
+    QTest::newRow("quoted-executable") << QStringLiteral("\"C:\\应用 程序\\compare.exe\" --silent \"左 文件\" \"右 文件\"")
+        << QStringList{QStringLiteral("C:\\应用 程序\\compare.exe"), "--silent", QStringLiteral("左 文件"), QStringLiteral("右 文件")};
+    QTest::newRow("empty-and-whitespace") << QStringLiteral("compare.exe \"\" \"  a  \"   ")
+        << QStringList{"compare.exe", "", "  a  "};
+    QTest::newRow("leading-whitespace") << QStringLiteral("  compare.exe left right")
+        << QStringList{"", "compare.exe", "left", "right"};
+    QTest::newRow("literal-wildcards") << QStringLiteral("compare.exe *.txt ?.txt")
+        << QStringList{"compare.exe", "*.txt", "?.txt"};
+    QTest::newRow("odd-backslashes-before-quote") << QStringLiteral("compare.exe a\\\"b")
+        << QStringList{"compare.exe", "a\"b"};
+    QTest::newRow("even-backslashes-before-quote") << QStringLiteral("compare.exe \"C:\\folder with space\\\\\"")
+        << QStringList{"compare.exe", "C:\\folder with space\\"};
+    QTest::newRow("supplementary") << QString::fromUtf8("compare.exe --left=左🚀.txt --right=右🦊.txt")
+        << QStringList{"compare.exe", QString::fromUtf8("--left=左🚀.txt"), QString::fromUtf8("--right=右🦊.txt")};
+}
+
+void CliTests::windowsCommandLineRules()
+{
+    QFETCH(QString, commandLine);
+    QFETCH(QStringList, expected);
+    const auto result = Cli::windowsCommandLineArguments(commandLine);
+    QVERIFY2(result.ok(), qPrintable(result.error));
+    QCOMPARE(result.values, expected);
+}
+
+void CliTests::windowsCommandLineRejectsUnavailableOrTruncatedInput()
+{
+    for (const auto &commandLine : {QString(), QStringLiteral("compare.exe left") + QChar(0) + QStringLiteral(" right")}) {
+        const auto result = Cli::windowsCommandLineArguments(commandLine);
+        QVERIFY(!result.ok());
+        QVERIFY(result.values.isEmpty());
+    }
+    // Win32 对显式空串的约定是当前可执行文件；不能把它与缺失的指针混淆。
+    const auto empty = Cli::windowsCommandLineArguments(QStringLiteral(""));
+    QVERIFY2(empty.ok(), qPrintable(empty.error));
+    QCOMPARE(empty.values.size(), 1);
+    QVERIFY(!empty.values.first().isEmpty());
+}
+
 void CliTests::realProcessCrashDiagnostics()
 {
     // 不允许外部探针把本测试程序专用的故障注入开关当成普通 CLI 参数。
@@ -956,6 +1098,16 @@ void CliTests::realProcessCrashDiagnostics()
     QCOMPARE(static_cast<quint32>(result.exitCode), quint32(0xc0000005));
     QVERIFY2(result.err.contains("CLI probe unhandled Windows exception 0xc0000005"), result.err.constData());
     QVERIFY2(result.err.contains("#0 0x"), result.err.constData());
+}
+#else
+void CliTests::initialArgumentsRejectMissingValues()
+{
+    QVERIFY(!Cli::initialProcessArguments(0, nullptr).ok());
+    char executable[] = "compare";
+    char *incomplete[] = {executable, nullptr};
+    const auto result = Cli::initialProcessArguments(2, incomplete);
+    QVERIFY(!result.ok());
+    QVERIFY(result.values.isEmpty());
 }
 #endif
 
@@ -1036,15 +1188,31 @@ void CliTests::realProcessScriptFailureHasLineNumber()
 
 int main(int argc, char **argv)
 {
+    const bool probe = qEnvironmentVariableIsSet("LQCOMPARE_CLI_PROBE_MODE");
 #ifdef Q_OS_WIN
-    if (qEnvironmentVariableIsSet("LQCOMPARE_CLI_PROBE_MODE")) {
+    if (probe) {
         installProbeCrashDiagnostics(argc);
         if (argc == 2 && QByteArray(argv[1]) == "--test-probe-crash-diagnostics")
             triggerProbeCrashForTest();
     }
 #endif
+    const auto initialArguments = probe ? Cli::initialProcessArguments(argc, argv) : Cli::ProcessArguments();
     QCoreApplication app(argc, argv);
-    if (qEnvironmentVariableIsSet("LQCOMPARE_CLI_PROBE_MODE")) return runCliProbe(app);
+    if (probe && qEnvironmentVariableIsSet("LQCOMPARE_CLI_ARGUMENTS_PROBE_MODE")) {
+        const auto arguments = Cli::processArguments();
+        if (!initialArguments.ok() || !arguments.ok()) return Cli::UsageError;
+        const auto parsed = Cli::parse(initialArguments.values.mid(1));
+        const QJsonObject summary{{"before", QJsonArray::fromStringList(initialArguments.values)},
+                                  {"after", QJsonArray::fromStringList(arguments.values)},
+                                  {"parsed", parsed.ok()},
+                                  {"headless", parsed.ok() && Cli::requiresHeadless(parsed.request)}};
+        QFile output;
+        if (!output.open(stdout, QIODevice::WriteOnly)) return Cli::DataError;
+        const QByteArray bytes = QJsonDocument(summary).toJson(QJsonDocument::Compact);
+        if (output.write(bytes) != bytes.size() || !output.flush()) return Cli::DataError;
+        return Cli::Equal;
+    }
+    if (probe) return runCliProbe(app);
     CliTests tests;
     return QTest::qExec(&tests, argc, argv);
 }

@@ -433,3 +433,23 @@ VcsView 的探测调用计数不能证明首轮 diff 已开始；Windows 实测�
 
 受控延迟夹具精确复现旧actual2/expected1；修订后全套18/0/0，聚焦30轮全过。
 完整测试以官方Windows Qt5.15.2头/i686 -Werror编译通过；原生Windows待CI。
+
+## CLI-001 / #290：Windows 直接读取宽命令行
+
+659359e 原生诊断确认：两个 Unicode 路径使 MinGW 窄 CRT argc 变成7，而宽命令行
+实际上只有5参数；Qt5.15.2旧 arguments() 路径发生访问异常。纯Unicode内容
+通过，崩溃诊断自身通过。共享 processArguments 入口在 Windows 直接使用
+GetCommandLineW / CommandLineToArgvW，保留可执行文件、空参数、引号/反斜杠、
+Unicode及字面通配符；解析失败明确报错，不返回半份参数，不全局改CRT glob。
+
+App早期GUI/无界面分类、正式解析与两种CLI探针共用该入口；POSIX维持Qt解码。
+Linux CLI 131/0/0，ASan/UBSan同为131/0/0；完整Linux产品重新构建通过，真实
+位置/命名UnicodeJSON退出1、help退出0、非法参数退出2，均可在无效QPA配置下
+运行。Unicode GUI离屏启动存活到测试结束，输入字节不变。
+
+新增服务、测试及真实App入口通过官方Windows Qt5.15.2头/i686 -Werror。
+这不是Windows原生功能通过；引号/反斜杠规则、GUI分类与Unicode路径还需CI。
+内存分配失败保留系统码并明确失败，但没有做OOM故障注入。
+
+依据：https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-commandlinetoargvw
+及 https://learn.microsoft.com/en-us/windows/win32/api/processenv/nf-processenv-getcommandlinew
