@@ -25,14 +25,17 @@
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMessageBox>
-#include <QPaintEngine>
 #include <QPainter>
 #include <QPointer>
+#include <QProxyStyle>
 #include <QPushButton>
 #include <QSettings>
+#include <QScreen>
 #include <QShortcut>
 #include <QSignalSpy>
 #include <QStandardPaths>
+#include <QStyleFactory>
+#include <QStyleHints>
 #include <QTabBar>
 #include <QTemporaryDir>
 #include <QTest>
@@ -78,6 +81,13 @@ QJsonArray recentSessions()
     return QJsonDocument::fromJson(QSettings().value(QStringLiteral("sessions/recent")).toByteArray()).array();
 }
 
+// 只在需要遍历所有控件的测试内模拟完整键盘导航，离开作用域即恢复平台偏好。
+struct FullKeyboardNavigation {
+    Qt::TabFocusBehavior previous = QGuiApplication::styleHints()->tabFocusBehavior();
+    FullKeyboardNavigation() { QGuiApplication::styleHints()->setTabFocusBehavior(Qt::TabFocusAllControls); }
+    ~FullKeyboardNavigation() { QGuiApplication::styleHints()->setTabFocusBehavior(previous); }
+};
+
 enum class SearchConfirmation { Button, Return, RepeatedReturn, KeyboardYes };
 struct SearchResult { int dialogs = 0; QString text; Qt::TextFormat format = Qt::AutoText; };
 
@@ -93,8 +103,22 @@ SearchResult submitSearch(QLineEdit *search, const QString &query, QMessageBox::
     QObject::connect(&responder, &QTimer::timeout, [&] {
         auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
         if (!box) return;
-        if (box->windowTitle() != QStringLiteral("Command Search") || !box->button(answer))
-            qFatal("Unexpected command-search dialog");
+        // macOS 按平台规范忽略 QMessageBox 标题，仍严格校验拥有者、按钮与正文。
+        // https://doc.qt.io/archives/qt-5.15/qmessagebox.html#setWindowTitle
+        const auto buttons = answer == QMessageBox::Ok ? QMessageBox::StandardButtons(QMessageBox::Ok)
+            : QMessageBox::StandardButtons(QMessageBox::Yes | QMessageBox::No);
+        const bool expectedBody = buttons == QMessageBox::Ok
+            ? (box->text() == QStringLiteral("No command matches \"%1\".").arg(query.trimmed())
+               || box->text().startsWith(QStringLiteral("Matching commands:\n\n")))
+            : (box->text().startsWith(QStringLiteral("Command: "))
+               && box->text().endsWith(QStringLiteral("\n\nRun it now?")));
+        if (box->parentWidget() != search->window() || box->standardButtons() != buttons || !expectedBody)
+            qFatal("Unexpected command-search dialog: title=%s buttons=%x text=%s",
+                   qPrintable(box->windowTitle()), int(box->standardButtons()), qPrintable(box->text()));
+#ifndef Q_OS_MACOS
+        if (box->windowTitle() != QStringLiteral("Command Search"))
+            qFatal("Unexpected command-search title: %s", qPrintable(box->windowTitle()));
+#endif
         ++result.dialogs; result.text = box->text(); result.format = box->textFormat();
         if (reenter) {
             // 直接向后方控件发送嵌套输入，验证模态期间也不会重复打开确认框。
@@ -102,6 +126,7 @@ SearchResult submitSearch(QLineEdit *search, const QString &query, QMessageBox::
         }
         if (beforeAnswer) beforeAnswer();
         if (confirmation == SearchConfirmation::KeyboardYes) {
+            FullKeyboardNavigation navigation;
             auto *no = box->button(QMessageBox::No), *yes = box->button(QMessageBox::Yes);
             box->activateWindow(); QCoreApplication::processEvents(); no->setFocus();
             for (int i = 0; i < 8 && !yes->hasFocus(); ++i)
@@ -150,65 +175,57 @@ QColor tabBackground(QTabBar *tabs, int index)
     return image.toImage().pixelColor(origin * image.devicePixelRatio());
 }
 
-// 观察真实控件提交给 QPainter 的文本颜色，不改变字体、样式或布局。
-// 屏幕抓图仍单独验证实际字形；该探针只负责抗锯齿之前的指定前景色。
-class TabTextPaintProbe : public QPaintDevice
+// QStyleSheetStyle 将实际文字及解析后的颜色交给原生样式 drawItemText。
+// 只记录并原样转发；继续使用真实栅格引擎，支持 macOS 的原生焦点绘制。
+class TabTextPaintStyle : public QProxyStyle
 {
 public:
-    struct Engine : QPaintEngine {
-        Engine() : QPaintEngine(AllFeatures) {}
-        QString label;
-        QList<QColor> colors;
-        bool begin(QPaintDevice *) override { return true; }
-        bool end() override { return true; }
-        Type type() const override { return User; }
-        void updateState(const QPaintEngineState &) override {}
-        void drawPixmap(const QRectF &, const QPixmap &, const QRectF &) override {}
-        void drawPath(const QPainterPath &) override {}
-        void drawPolygon(const QPointF *, int, PolygonDrawMode) override {}
-        void drawTextItem(const QPointF &, const QTextItem &item) override
-        {
-            if (item.text() == label) colors.append(painter()->pen().color());
-        }
-    };
-    explicit TabTextPaintProbe(QTabBar *tabs, int index) : m_tabs(tabs)
+    explicit TabTextPaintStyle(QStyle *nativeStyle) : QProxyStyle(nativeStyle) {}
+    QString label;
+    mutable QList<QColor> colors;
+    void drawItemText(QPainter *painter, const QRect &rect, int flags,
+                      const QPalette &palette, bool enabled, const QString &text,
+                      QPalette::ColorRole role = QPalette::NoRole) const override
     {
-        engine.label = tabs->tabText(index);
+        if (text == label)
+            colors.append(role == QPalette::NoRole ? painter->pen().color()
+                          : palette.color(enabled ? QPalette::Normal : QPalette::Disabled, role));
+        QProxyStyle::drawItemText(painter, rect, flags, palette, enabled, text, role);
     }
-    QPaintEngine *paintEngine() const override { return &engine; }
-    mutable Engine engine;
-protected:
-    int metric(PaintDeviceMetric metric) const override
-    {
-        switch (metric) {
-        case PdmWidth: return m_tabs->width();
-        case PdmHeight: return m_tabs->height();
-        case PdmWidthMM: return m_tabs->widthMM();
-        case PdmHeightMM: return m_tabs->heightMM();
-        case PdmNumColors: return m_tabs->colorCount();
-        case PdmDepth: return m_tabs->depth();
-        case PdmDpiX: return m_tabs->logicalDpiX();
-        case PdmDpiY: return m_tabs->logicalDpiY();
-        case PdmPhysicalDpiX: return m_tabs->physicalDpiX();
-        case PdmPhysicalDpiY: return m_tabs->physicalDpiY();
-        case PdmDevicePixelRatio: return m_tabs->devicePixelRatio();
-        case PdmDevicePixelRatioScaled: return qRound(m_tabs->devicePixelRatioF() * devicePixelRatioFScale());
-        }
-        return 0;
-    }
-private:
-    QTabBar *m_tabs;
 };
 
 // WCAG 1.4.3 比较指定的前景/背景色，不把抗锯齿造成的混色当作前景色：
 // https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html
 // 同时保留真实栅格的文字证据，排除边框及选中/焦点标记。
-void verifyTabPixels(QTabBar *tabs, int index, const QColor &foreground, const QColor &background)
+void verifyTabPixels(QTabBar *tabs, int index, const QColor &paletteForeground, const QColor &background)
 {
-    TabTextPaintProbe probe(tabs, index);
-    tabs->render(&probe);
-    QVERIFY2(!probe.engine.colors.isEmpty(), qPrintable("No text paint for " + tabs->tabText(index)));
-    for (const QColor &painted : probe.engine.colors) {
+    // 产品样式表使用 QColor::name() 的默认 HexRgb，指定色因此是不透明 RGB；
+    // macOS 原生 Text 常含 alpha，不能把输入调色板 alpha 当作 CSS 绘制契约。
+    const QColor foreground = QColor::fromRgb(paletteForeground.rgb());
+    const QImage before = tabs->grab().toImage();
+    const QFont font = tabs->font();
+    QList<QRect> rectangles;
+    for (int i = 0; i < tabs->count(); ++i) rectangles << tabs->tabRect(i);
+    QVERIFY(!tabs->testAttribute(Qt::WA_SetStyle));
+    QStyle *native = QStyleFactory::create(QApplication::style()->objectName());
+    QVERIFY2(native, "The current native style must be available; no substitute style is allowed");
+    TabTextPaintStyle probe(native);
+    probe.label = tabs->tabText(index);
+    struct RestoreStyle {
+        QTabBar *tabs;
+        ~RestoreStyle() { if (tabs) tabs->setStyle(nullptr); }
+    } restore{tabs};
+    tabs->setStyle(&probe);
+    const QImage observed = tabs->grab().toImage();
+    QCOMPARE(observed, before);
+    QCOMPARE(tabs->font(), font);
+    for (int i = 0; i < tabs->count(); ++i) QCOMPARE(tabs->tabRect(i), rectangles[i]);
+    tabs->setStyle(nullptr);
+    restore.tabs = nullptr;
+    QCOMPARE(tabs->grab().toImage(), before);
+    QVERIFY(!tabs->testAttribute(Qt::WA_SetStyle));
+    QVERIFY2(!probe.colors.isEmpty(), qPrintable("No full text paint for " + tabs->tabText(index)));
+    for (const QColor &painted : probe.colors) {
         QCOMPARE(painted.rgba(), foreground.rgba());
         QVERIFY2(contrast(painted, background) >= 4.5,
                  qPrintable(QStringLiteral("%1: foreground/background contrast %2:1 is below 4.5:1")
@@ -247,6 +264,7 @@ private:
     QTemporaryDir m_settings;
     QString m_oldOrganization;
     QString m_oldApplication;
+    Qt::TabFocusBehavior m_tabFocusBehavior;
 
 private slots:
     void initTestCase()
@@ -264,6 +282,7 @@ private slots:
     }
     void init()
     {
+        m_tabFocusBehavior = QGuiApplication::styleHints()->tabFocusBehavior();
         CommandRegistry::instance().clear();
         QSettings settings;
         settings.clear();
@@ -274,6 +293,7 @@ private slots:
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         QCoreApplication::processEvents();
         QVERIFY(!QApplication::activeModalWidget());
+        QCOMPARE(QGuiApplication::styleHints()->tabFocusBehavior(), m_tabFocusBehavior);
         CommandRegistry::instance().clear();
     }
     void cleanupTestCase()
@@ -295,11 +315,15 @@ private slots:
             QVERIFY2(button, qPrintable(id));
             QVERIFY2(button->isEnabled(), qPrintable(id));
         }
-        // Unsupported catalog entries remain visible as disabled choices.
+        // 注册表和版本资源有真实工厂，但目录契约限定为 Windows 专属。
         for (const QString &id : {QStringLiteral("registry"), QStringLiteral("version")}) {
             auto *button = area->homePage()->findChild<QPushButton *>(QStringLiteral("newSession-") + id);
             QVERIFY2(button, qPrintable(id));
+#ifdef Q_OS_WIN
+            QVERIFY2(button->isEnabled(), qPrintable(id));
+#else
             QVERIFY2(!button->isEnabled(), qPrintable(id));
+#endif
         }
         const QStringList ids = {"file.open", "file.save", "edit.undo", "edit.redo", "nav.prevdiff", "nav.nextdiff"};
         for (const auto &id : ids) {
@@ -462,6 +486,66 @@ private slots:
         }
     }
 
+    void ribbonTabsSerializePaletteRgb_data()
+    {
+        QTest::addColumn<int>("alpha");
+        for (int alpha : {0, 128, 216, 255})
+            QTest::newRow(qPrintable(QString::number(alpha))) << alpha;
+    }
+
+    void ribbonTabsSerializePaletteRgb()
+    {
+        QFETCH(int, alpha);
+        struct RestorePalette {
+            QPalette palette = QApplication::palette();
+            ~RestorePalette() { QApplication::setPalette(palette); }
+        } restore;
+        QPalette palette = restore.palette;
+        palette.setColor(QPalette::Window, QColor(240, 240, 240));
+        palette.setColor(QPalette::Base, Qt::white);
+        palette.setColor(QPalette::WindowText, QColor(0, 0, 0, alpha));
+        palette.setColor(QPalette::Text, QColor(0, 0, 0, alpha));
+        QApplication::setPalette(palette);
+        MainWindow window;
+        window.resize(1440, 900); window.show(); window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto *tabs = window.ribbonBar()->findChild<QTabBar *>(QStringLiteral("lqRibbonTabBar"));
+        QVERIFY(tabs);
+        QTest::mouseMove(&window, QPoint(1400, 800));
+        QTRY_VERIFY(!tabs->underMouse());
+        tabs->clearFocus();
+        verifyTabPixels(tabs, 0, palette.color(QPalette::Text), palette.color(QPalette::Base));
+        verifyTabPixels(tabs, 1, palette.color(QPalette::WindowText), palette.color(QPalette::Window));
+        QCOMPARE(QApplication::palette().color(QPalette::Text).alpha(), alpha);
+    }
+
+    void ribbonSelectionKeepsCompleteLabels()
+    {
+        MainWindow window;
+        window.resize(1440, 900); window.show(); window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto *tabs = window.ribbonBar()->findChild<QTabBar *>(QStringLiteral("lqRibbonTabBar"));
+        QVERIFY(tabs);
+        // macOS 默认会省略超宽文本；在所有平台主动覆盖这条真实布局路径。
+        tabs->setElideMode(Qt::ElideRight);
+        tabs->setTabText(1, QStringLiteral("Comparison commands"));
+        QTest::mouseMove(&window, QPoint(1400, 800));
+        QTRY_VERIFY(!tabs->underMouse());
+        tabs->clearFocus();
+        const QPalette palette = QApplication::palette();
+        for (int i = 0; i < tabs->count(); ++i) {
+            const QRect before = tabs->tabRect(i);
+            tabs->setCurrentIndex(i);
+            QCOMPARE(tabs->tabRect(i), before);
+            verifyTabPixels(tabs, i, palette.color(QPalette::Text), palette.color(QPalette::Base));
+            tabs->setFocus(Qt::TabFocusReason);
+            QTRY_VERIFY(tabs->hasFocus());
+            QCOMPARE(tabs->tabRect(i), before);
+            verifyTabPixels(tabs, i, palette.color(QPalette::Text), palette.color(QPalette::Base));
+            tabs->clearFocus();
+        }
+    }
+
     void ribbonHoverRemainsReadableWithUnpairedPaletteRoles()
     {
         struct RestorePalette {
@@ -523,8 +607,16 @@ private slots:
         QTemporaryDir directory;
         Settings::OptionsRepository options({directory.path(), false});
         Options::OptionsRuntime runtime(&options);
-        MainWindow window;
-        window.show(); window.activateWindow();
+        // 宽画布验证布局，不要求 CI 的物理屏幕容纳 1920 像素窗口。
+        // 原生鼠标/键盘验证由独立的屏幕内窗口完成，裁切部分不注入输入。
+        QWidget host;
+        host.resize(480, 600);
+        MainWindow window(&host);
+        // QMainWindow 构造时强制顶层标志；仅逻辑画布显式嵌入宿主。
+        window.setParent(&host, Qt::Widget);
+        QVERIFY(!window.isWindow());
+        window.show(); host.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&host));
         auto *search = window.findChild<QLineEdit *>(QStringLiteral("commandSearch"));
         auto *tabs = window.ribbonBar()->findChild<QTabBar *>(QStringLiteral("lqRibbonTabBar"));
         QVERIFY(search && tabs);
@@ -574,30 +666,100 @@ private slots:
                         QCOMPARE(window.ribbonBar()->isFrameThemeEnabled(), frameTheme);
                         QCOMPARE(window.ribbonBar()->styleSheet(), libraryStyle);
                     }
-                    // 对用户可见的标签逐个作鼠标命中检查，防止透明控件继续截获点击。
+                    QVERIFY(window.width() > host.width());
+                    QVERIFY(window.visibleRegion().boundingRect().width() < window.width());
+                    // 这里只检查逻辑命中区域，不能把屏幕外坐标的直投事件当作用户操作。
                     for (int i = 0; i < tabs->count(); ++i) {
                         const QPoint center = tabs->mapTo(&window, tabs->tabRect(i).center());
-                        if (!window.rect().contains(center)) continue;
-                        QVERIFY(window.childAt(center) != search);
-                        QTest::mouseClick(tabs, Qt::LeftButton, Qt::NoModifier, tabs->tabRect(i).center());
-                        QCOMPARE(tabs->currentIndex(), i);
+                        if (window.rect().contains(center)) QVERIFY(window.childAt(center) != search);
                     }
-                    tabs->setCurrentIndex(0);
-                    search->setFocus(Qt::TabFocusReason);
-                    QTRY_VERIFY(search->hasFocus());
-                    QTest::keyClick(search, Qt::Key_Tab);
-                    QTRY_VERIFY(tabs->hasFocus());
-                    QTest::keyClick(tabs, Qt::Key_Backtab);
-                    QTRY_VERIFY(search->hasFocus());
-                    search->setText(QStringLiteral("draft command"));
-                    QTest::keyClick(search, Qt::Key_Escape);
-                    QVERIFY(search->text().isEmpty()); QVERIFY(!search->hasFocus());
-                    QVERIFY(!QApplication::activeModalWidget());
-                    qInfo() << "Search layout" << theme << "font" << points << "width" << width
+                    qInfo() << "Search logical canvas layout" << theme << "font" << points << "width" << width
                             << "search" << QRect(search->mapTo(&window, QPoint()), search->size())
                             << "tabs" << QRect(tabs->mapTo(&window, QPoint()), tabs->size());
                     if (!evidence.isEmpty()) {
-                        QVERIFY(window.grab().save(QStringLiteral("%1/%2-%3pt-%4.png")
+                        QVERIFY(window.grab().save(QStringLiteral("%1/canvas-%2-%3pt-%4.png")
+                                                  .arg(evidence, theme).arg(points).arg(width)));
+                    }
+                }
+            }
+        }
+    }
+
+    void commandSearchAcceptsNativeInputWithinScreen()
+    {
+        FullKeyboardNavigation navigation;
+        struct RestoreApplication {
+            QPalette palette = QApplication::palette();
+            QFont font = QApplication::font();
+            ~RestoreApplication() { QApplication::setPalette(palette); QApplication::setFont(font); }
+        } restore;
+        QTemporaryDir directory;
+        Settings::OptionsRepository options({directory.path(), false});
+        Options::OptionsRuntime runtime(&options);
+        MainWindow window;
+        const QRect available = QGuiApplication::primaryScreen()->availableGeometry();
+        window.resize(qMin(800, available.width() - 64), qMin(600, available.height() - 96));
+        window.move(available.topLeft() + QPoint(24, 32));
+        window.show(); window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto *search = window.findChild<QLineEdit *>(QStringLiteral("commandSearch"));
+        auto *tabs = window.ribbonBar()->findChild<QTabBar *>(QStringLiteral("lqRibbonTabBar"));
+        QVERIFY(search && tabs);
+        const auto flags = window.windowFlags();
+        const bool frameTheme = window.ribbonBar()->isFrameThemeEnabled();
+        const QString libraryStyle = window.ribbonBar()->styleSheet();
+        for (const QString &theme : {QStringLiteral("light"), QStringLiteral("dark")}) {
+            QVERIFY(options.apply({{QStringLiteral("display.theme"), theme}}).ok);
+            for (int points : {8, 16}) {
+                QFont font = restore.font; font.setPointSize(points); QApplication::setFont(font);
+                for (int requested : {800, 1024}) {
+                    const int width = qMin(requested, available.width() - 64);
+                    window.resize(width, qMin(600, available.height() - 96));
+                    for (bool collapsed : {false, true, false}) {
+                        window.ribbonBar()->setMinimized(collapsed);
+                        QCoreApplication::processEvents();
+                        QCOMPARE(window.width(), width);
+                        QCOMPARE(window.windowFlags(), flags);
+                        QCOMPARE(window.ribbonBar()->isFrameThemeEnabled(), frameTheme);
+                        QCOMPARE(window.ribbonBar()->styleSheet(), libraryStyle);
+                        QVERIFY(available.contains(window.frameGeometry()));
+                        QVERIFY(QRegion(search->rect()).subtracted(search->visibleRegion()).isEmpty());
+                        const QRect searchRect(search->mapToGlobal(QPoint()), search->size());
+                        QVERIFY(available.contains(searchRect));
+                        int visibleTabs = 0;
+                        for (int i = 0; i < tabs->count(); ++i) {
+                            const QRect rect = tabs->tabRect(i);
+                            if (!QRegion(rect).subtracted(tabs->visibleRegion()).isEmpty()) continue;
+                            const QRect global(tabs->mapToGlobal(rect.topLeft()), rect.size());
+                            QVERIFY(available.contains(global));
+                            const QRect inWindow(tabs->mapTo(&window, rect.topLeft()), rect.size());
+                            QVERIFY(window.rect().contains(inWindow));
+                            for (QWidget *ancestor = tabs->parentWidget(); ancestor; ancestor = ancestor->parentWidget())
+                                QVERIFY(ancestor->rect().contains(QRect(tabs->mapTo(ancestor, rect.topLeft()), rect.size())));
+                            QVERIFY(window.childAt(inWindow.center()) != search);
+                            QTest::mouseClick(tabs, Qt::LeftButton, Qt::NoModifier, rect.center());
+                            QCOMPARE(tabs->currentIndex(), i);
+                            ++visibleTabs;
+                        }
+                        QVERIFY(visibleTabs >= 2);
+                        tabs->setCurrentIndex(0);
+                        search->setFocus(Qt::TabFocusReason);
+                        QTRY_VERIFY(search->hasFocus());
+                        QTest::keyClick(search, Qt::Key_Tab);
+                        QTRY_VERIFY(tabs->hasFocus());
+                        QTest::keyClick(tabs, Qt::Key_Backtab);
+                        QTRY_VERIFY(search->hasFocus());
+                        search->setText(QStringLiteral("draft command"));
+                        QTest::keyClick(search, Qt::Key_Escape);
+                        QVERIFY(search->text().isEmpty()); QVERIFY(!search->hasFocus());
+                        QVERIFY(!QApplication::activeModalWidget());
+                    }
+                    qInfo() << "Search screen-bounded native input" << theme << "font" << points
+                            << "width" << width << "screen" << available;
+                    const QString evidence = qEnvironmentVariable("LQCOMPARE_SEARCH_SCREENSHOT_DIR");
+                    if (!evidence.isEmpty()) {
+                        QVERIFY(QDir().mkpath(evidence));
+                        QVERIFY(window.grab().save(QStringLiteral("%1/native-%2-%3pt-%4.png")
                                                   .arg(evidence, theme).arg(points).arg(width)));
                     }
                 }

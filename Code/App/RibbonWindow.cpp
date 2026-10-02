@@ -107,7 +107,9 @@ void RibbonWindow::updateTabAppearance()
     const auto color = [&palette](QPalette::ColorRole role) { return palette.color(role).name(); };
     tabs->setStyleSheet(QStringLiteral(
         "QTabBar#lqRibbonTabBar { background: %1; }"
-        "QTabBar#lqRibbonTabBar::tab { color: %2; background: %1; border-radius: 0px; }"
+        // 所有状态预留同样的边框，选中或聚焦不能挤掉正文末尾字符。
+        "QTabBar#lqRibbonTabBar::tab { color: %2; background: %1; border-radius: 0px;"
+        " border: 1px solid transparent; border-bottom-width: 2px; }"
         "QTabBar#lqRibbonTabBar::tab:selected {"
         " color: %3; background: %4; border-radius: 0px;"
         " border-left-color: %5; border-right-color: %5; border-top-color: %5;"
