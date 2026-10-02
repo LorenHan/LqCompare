@@ -259,7 +259,9 @@ public:
 
         if (error)
             *error = FileSystemError::None;
-        return PathUtils::normalize(raw, windowsStyle());
+        // NT 的 \??\C:\ / \??\UNC\ 前缀不是 Qt 的普通绝对路径空间。
+        // 先转换已知命名空间，再沿用现有分隔符规范化，才能识别绝对目标循环。
+        return PathUtils::normalize(WindowsReparse::toWin32Target(raw), windowsStyle());
     }
 
     bool exists(const QString &path, ErrorCode *error) const override

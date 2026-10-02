@@ -20,6 +20,10 @@ constexpr int MaximumBufferSize = 16 * 1024;
 /// 不访问文件系统、不解析相对路径，也不依赖主机的字节序或 wchar_t 宽度。
 QString target(const QByteArray& buffer, quint32 returnedSize);
 
+/// 仅把已知 DOS/UNC 替代名称的 NT 前缀转换为等价 Win32 路径。
+/// 保留原始解析契约；不解析相对目标、不改已有扩展前缀，也不猜测其它 NT 命名空间。
+QString toWin32Target(const QString& target);
+
 } // namespace WindowsReparse
 } // namespace Files
 } // namespace LqCompare

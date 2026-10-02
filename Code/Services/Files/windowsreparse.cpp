@@ -76,6 +76,31 @@ QString target(const QByteArray& buffer, quint32 returnedSize) {
     return result;
 }
 
+QString toWin32Target(const QString& target) {
+    // 替代名称采用 NT 命名空间，不能直接让 Qt 与普通 C:\ / UNC 扫描根比较。
+    // 仅识别有明确 Win32 对应的两类；Volume GUID、Device 等命名空间保留原样。
+    const QString ntPrefix = QStringLiteral("\\??\\");
+    if (!target.startsWith(ntPrefix))
+        return target;
+
+    const QString path = target.mid(ntPrefix.size());
+    if (path.size() >= 3 && path.at(1) == QLatin1Char(':')
+        && path.at(2) == QLatin1Char('\\')) {
+        const ushort letter = path.at(0).unicode();
+        if ((letter >= 'A' && letter <= 'Z') || (letter >= 'a' && letter <= 'z'))
+            return path;
+    }
+    if (path.startsWith(QStringLiteral("UNC\\"), Qt::CaseInsensitive)) {
+        const QString suffix = path.mid(4);
+        const int serverEnd = suffix.indexOf(QLatin1Char('\\'));
+        // server/share 两段必须存在，不能把截断的 NT 名称误变成网络根。
+        if (serverEnd > 0 && serverEnd + 1 < suffix.size()
+            && suffix.at(serverEnd + 1) != QLatin1Char('\\'))
+            return QStringLiteral("\\\\") + suffix;
+    }
+    return target;
+}
+
 } // namespace WindowsReparse
 } // namespace Files
 } // namespace LqCompare

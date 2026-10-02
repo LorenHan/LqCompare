@@ -52,6 +52,8 @@ class TstWindowsReparse : public QObject {
 private slots:
     void targetPreservesStoredUtf16_data();
     void targetPreservesStoredUtf16();
+    void targetNamespaceConversion_data();
+    void targetNamespaceConversion();
     void rejectsTruncatedReturn_data();
     void rejectsTruncatedReturn();
     void rejectsMalformedBuffer_data();
@@ -108,6 +110,62 @@ void TstWindowsReparse::targetPreservesStoredUtf16() {
     QFETCH(QByteArray, bytes);
     QFETCH(QString, expected);
     QCOMPARE(WindowsReparse::target(bytes, bytes.size()), expected);
+}
+
+
+void TstWindowsReparse::targetNamespaceConversion_data() {
+    QTest::addColumn<QString>("raw");
+    QTest::addColumn<QString>("expected");
+    QTest::newRow("nt-drive-absolute")
+        << QStringLiteral("\\??\\C:\\目录\\file.txt") << QStringLiteral("C:\\目录\\file.txt");
+    QTest::newRow("nt-drive-root") << QStringLiteral("\\??\\D:\\") << QStringLiteral("D:\\");
+    QTest::newRow("nt-lowercase-drive")
+        << QStringLiteral("\\??\\c:\\目录") << QStringLiteral("c:\\目录");
+    QTest::newRow("nt-unc-share-root")
+        << QStringLiteral("\\??\\UNC\\server\\share") << QStringLiteral("\\\\server\\share");
+    QTest::newRow("nt-unc-descendant")
+        << QStringLiteral("\\??\\UNC\\server\\share\\目录\\file")
+        << QStringLiteral("\\\\server\\share\\目录\\file");
+    QTest::newRow("nt-unc-case-insensitive-prefix")
+        << QStringLiteral("\\??\\unc\\Server\\Share\\file")
+        << QStringLiteral("\\\\Server\\Share\\file");
+    // 只替换命名空间前缀；相对片段和 UTF-16 码元不在这个边界解析或重编码。
+    QTest::newRow("nt-drive-keeps-segments")
+        << QStringLiteral("\\??\\C:\\a\\..\\b") << QStringLiteral("C:\\a\\..\\b");
+    const QString unpaired = QStringLiteral("C:\\target-") + QChar(0xd800);
+    QTest::newRow("nt-drive-keeps-utf16") << QStringLiteral("\\??\\") + unpaired << unpaired;
+    const QStringList preserved = {
+        QString(), QStringLiteral("..\\目录\\target"), QStringLiteral("."),
+        QStringLiteral("C:relative"), QStringLiteral("C:\\plain\\target"),
+        QStringLiteral("\\root-relative"), QStringLiteral("/posix/target"),
+        QStringLiteral("\\\\server\\share\\target"),
+        QStringLiteral("\\\\?\\C:\\long\\target"),
+        QStringLiteral("\\\\?\\UNC\\server\\share\\target"),
+        QStringLiteral("\\Device\\HarddiskVolume1\\target"),
+        QStringLiteral("\\??\\Volume{1234}\\target"), QStringLiteral("\\??\\PIPE\\name"),
+        QStringLiteral("\\??\\C:relative"), QStringLiteral("\\??\\C:"),
+        QStringLiteral("\\??\\1:\\target"), QStringLiteral("\\??\\中:\\target"),
+        QStringLiteral("\\??\\UNC\\"), QStringLiteral("\\??\\UNC\\server"),
+        QStringLiteral("\\??\\UNC\\server\\"), QStringLiteral("\\??\\UNC\\\\share"),
+        QStringLiteral("\\??\\UNC\\server\\\\target"), QStringLiteral("\\??\\")
+    };
+    for (int index = 0; index < preserved.size(); ++index)
+        QTest::newRow(qPrintable(QStringLiteral("preserve-%1").arg(index)))
+            << preserved.at(index) << preserved.at(index);
+}
+
+void TstWindowsReparse::targetNamespaceConversion() {
+    QFETCH(QString, raw);
+    QFETCH(QString, expected);
+    QCOMPARE(WindowsReparse::toWin32Target(raw), expected);
+    if (raw.isEmpty())
+        return;
+    // 与实际解析串联：原字节目标仍逐字保留，只有调用转换函数后才进入 Win32 空间。
+    for (const quint32 tag : {WindowsReparse::SymbolicLinkTag, WindowsReparse::MountPointTag}) {
+        const QByteArray bytes = reparseBuffer(tag, raw);
+        QCOMPARE(WindowsReparse::target(bytes, bytes.size()), raw);
+        QCOMPARE(WindowsReparse::toWin32Target(WindowsReparse::target(bytes, bytes.size())), expected);
+    }
 }
 
 void TstWindowsReparse::rejectsTruncatedReturn_data() {

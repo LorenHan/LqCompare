@@ -475,3 +475,15 @@ Windows原生Qt平台暴露 dark→system 后 palette 不完全相等。保留�
 Linux OptionsDialog24/0/0（诊断护栏遍历63个group-role组合）；完整测试经
 官方Windows Qt5.15.2头/i686 -Werror编译通过。需下一原生Windows结果确定
 startup polish 与实际恢复逻辑的责任边界，然后再实施有证据的修复。
+
+## PLAT-002 / #325：绝对链接目标的 NT/Win32 路径边界
+
+Windows重解析点替代名称的 \??\C:\ / \??\UNC\server\share 前缀不能直接
+与普通扫描根比较，532c8d2 的绝对循环链接因而漏标错误。新增纯转换，仅把
+已知盘符/完整UNC名称映射为等价Win32路径，再使用原有路径规范化。相对目标、
+已有扩展前缀、未知NT命名空间及原始UTF-16解析契约保持不变，不跟随链接。
+
+Linux WindowsReparse106/0/0；关闭转换的变异精确触发8条失败，实际PathUtils
+探针证明原drive/UNC目标均与扫描根不匹配，转换后身份相符。Linux Folder68/0/0。
+完整Win32文件系统、helper与测试经官方Qt5.15.2头/i686 -Werror编译通过。
+原生绝对循环检测、UNC/符号链接行为仍待此次Windows CI。
