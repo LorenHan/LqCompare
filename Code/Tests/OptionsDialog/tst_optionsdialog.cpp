@@ -2,6 +2,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDataStream>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -11,6 +12,7 @@
 #include <QLineEdit>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QStyle>
 #include <QTemporaryDir>
 
 #include "optionsdialog.h"
@@ -18,6 +20,59 @@
 #include "logging.h"
 
 using namespace LqCompare;
+
+namespace {
+QString describeBrush(const QBrush &brush)
+{
+    // 除颜色外还保留填充、渐变、纹理与变换的序列化值，避免「颜色相同」掩盖画刷差异。
+    QByteArray bytes;
+    QDataStream stream(&bytes, QIODevice::WriteOnly);
+    stream.setVersion(QDataStream::Qt_5_15);
+    stream << brush;
+    return QStringLiteral("color=%1 style=%2 data=%3")
+            .arg(brush.color().name(QColor::HexArgb))
+            .arg(int(brush.style()))
+            .arg(QString::fromLatin1(bytes.toHex()));
+}
+
+QString paletteRestorationDiagnostics(const QPalette &original, const QPalette &startup,
+                                     const QPalette &dark, const QPalette &restored)
+{
+    QStringList lines;
+    lines << QStringLiteral("Qt=%1 platform=%2 style=%3 (%4)")
+             .arg(QString::fromLatin1(qVersion()), QApplication::platformName(),
+                  QApplication::style()->objectName(),
+                  QString::fromLatin1(QApplication::style()->metaObject()->className()));
+    // Qt 5 的相等比较不比较 resolve mask / current group。这里仅把它们作为
+    // 重新 resolve、原生 style polish 的线索，不把更改它们当作修复办法。
+    const auto state = [](const QString &name, const QPalette &palette) {
+        return QStringLiteral("%1: resolve=0x%2 currentGroup=%3")
+                .arg(name).arg(palette.resolve(), 0, 16).arg(int(palette.currentColorGroup()));
+    };
+    lines << state(QStringLiteral("original"), original)
+          << state(QStringLiteral("startup"), startup)
+          << state(QStringLiteral("dark"), dark)
+          << state(QStringLiteral("restored"), restored);
+    const QMetaEnum groups = QMetaEnum::fromType<QPalette::ColorGroup>();
+    const QMetaEnum roles = QMetaEnum::fromType<QPalette::ColorRole>();
+    for (int group = 0; group < QPalette::NColorGroups; ++group) {
+        for (int role = 0; role < QPalette::NColorRoles; ++role) {
+            const auto colorGroup = QPalette::ColorGroup(group);
+            const auto colorRole = QPalette::ColorRole(role);
+            if (original.brush(colorGroup, colorRole) == restored.brush(colorGroup, colorRole))
+                continue;
+            lines << QStringLiteral("%1/%2: original={%3} startup={%4} dark={%5} restored={%6}")
+                     .arg(QString::fromLatin1(groups.valueToKey(group)),
+                          QString::fromLatin1(roles.valueToKey(role)),
+                          describeBrush(original.brush(colorGroup, colorRole)),
+                          describeBrush(startup.brush(colorGroup, colorRole)),
+                          describeBrush(dark.brush(colorGroup, colorRole)),
+                          describeBrush(restored.brush(colorGroup, colorRole)));
+        }
+    }
+    return lines.join(QLatin1Char('\n'));
+}
+}
 
 class ProbeDialog : public Options::OptionsDialog {
 public:
@@ -252,12 +307,14 @@ private slots:
         const QFont originalFont = QApplication::font();
         const QPalette originalPalette = QApplication::palette();
         Options::OptionsRuntime runtime(&repository);
+        const QPalette startupPalette = QApplication::palette();
         QCOMPARE(Log::logFile(), temp.path() + QStringLiteral("/logs/lqcompare.log"));
         QSignalSpy fontChanged(&runtime, &Options::OptionsRuntime::contentFontChanged);
         QVERIFY(repository.apply({{QStringLiteral("display.theme"), QStringLiteral("dark")},
                                   {QStringLiteral("display.uiFontSize"), 16},
                                   {QStringLiteral("display.contentFontSize"), 19},
                                   {QStringLiteral("logging.level"), QStringLiteral("debug")}}).ok);
+        const QPalette darkPalette = QApplication::palette();
         QCOMPARE(QApplication::font().pointSize(), 16);
         QVERIFY(QApplication::palette().color(QPalette::Window).lightness() < 80);
         QCOMPARE(runtime.contentFont().pointSize(), 19);
@@ -276,8 +333,40 @@ private slots:
         QVERIFY(repository.apply({{QStringLiteral("display.theme"), QStringLiteral("system")},
                                   {QStringLiteral("display.uiFontSize"), 0}}).ok);
         QCOMPARE(QApplication::font(), originalFont);
-        QCOMPARE(QApplication::palette(), originalPalette);
+        const QPalette restoredPalette = QApplication::palette();
+        if (restoredPalette != originalPalette) {
+            const QString diagnostics = paletteRestorationDiagnostics(originalPalette, startupPalette,
+                                                                      darkPalette, restoredPalette);
+            // 每个差异单独记一行，避免测试框架截断整块失败说明。
+            for (const QString &line : diagnostics.split(QLatin1Char('\n')))
+                qWarning().noquote() << line;
+        }
+        QCOMPARE(restoredPalette, originalPalette);
         QVERIFY(runtime.lastError().isEmpty());
+    }
+    void paletteDiagnosticsCoverEveryBrush() {
+        const QPalette original = QApplication::palette();
+        const QMetaEnum groups = QMetaEnum::fromType<QPalette::ColorGroup>();
+        const QMetaEnum roles = QMetaEnum::fromType<QPalette::ColorRole>();
+        // 包括 Disabled、Inactive 与 NoRole；只改画刷填充，颜色仍相同，
+        // 防止诊断退化成只比较当前组或 RGB 值而漏掉真正的相等性失败。
+        for (int group = 0; group < QPalette::NColorGroups; ++group) {
+            for (int role = 0; role < QPalette::NColorRoles; ++role) {
+                const auto colorGroup = QPalette::ColorGroup(group);
+                const auto colorRole = QPalette::ColorRole(role);
+                QPalette changed = original;
+                QBrush brush = changed.brush(colorGroup, colorRole);
+                brush.setStyle(brush.style() == Qt::Dense1Pattern ? Qt::Dense2Pattern : Qt::Dense1Pattern);
+                changed.setBrush(colorGroup, colorRole, brush);
+                QVERIFY(changed != original);
+                const QString diagnostics = paletteRestorationDiagnostics(original, original, original, changed);
+                const QString label = QStringLiteral("%1/%2:")
+                        .arg(QString::fromLatin1(groups.valueToKey(group)),
+                             QString::fromLatin1(roles.valueToKey(role)));
+                QVERIFY2(diagnostics.contains(label), qPrintable(diagnostics));
+                QVERIFY(describeBrush(brush) != describeBrush(original.brush(colorGroup, colorRole)));
+            }
+        }
     }
     void displayChangesPreserveCommandLineLoggingOverride() {
         QTemporaryDir temp;

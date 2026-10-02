@@ -464,3 +464,14 @@ Linux CLI 131/0/0，ASan/UBSan同为131/0/0；完整Linux产品重新构建通�
 没有改合并输出生产逻辑或放宽“父目录已更换必须拒绝保存”。Linux MergeOutput
 20/0/0；完整测试通过官方Windows Qt5.15.2头/i686 -Werror编译。原生Windows
 仍待CI；依据：https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-removedirectoryw
+
+## OPT-004 / #316：原生主题恢复的逐画刷诊断
+
+Windows原生Qt平台暴露 dark→system 后 palette 不完全相等。保留精确相等
+断言，新增启动应用/深色/恢复三阶段逐group/role画刷诊断，连填充、渐变、纹理
+和变换都记录；仅RGB相等不能证明palette恢复正确。当前原生产物缺少具体差异，
+没有凭猜测修改主题逻辑，也没有放宽断言。
+
+Linux OptionsDialog24/0/0（诊断护栏遍历63个group-role组合）；完整测试经
+官方Windows Qt5.15.2头/i686 -Werror编译通过。需下一原生Windows结果确定
+startup polish 与实际恢复逻辑的责任边界，然后再实施有证据的修复。
