@@ -453,3 +453,14 @@ Linux CLI 131/0/0，ASan/UBSan同为131/0/0；完整Linux产品重新构建通�
 
 依据：https://learn.microsoft.com/en-us/windows/win32/api/shellapi/nf-shellapi-commandlinetoargvw
 及 https://learn.microsoft.com/en-us/windows/win32/api/processenv/nf-processenv-getcommandlinew
+
+## MRG-013 / #104：Windows 目录链接夹具的安全解链
+
+原生测试的父目录重定向场景此前在 QFile::remove(directoryLink) 失败，未走到
+生产保存保护断言。Windows 夹具改为先核对目录重解析点，再用 RemoveDirectoryW
+仅解除链接；POSIX仍用unlink式行为。新增拒绝普通目录/普通文件的夹具护栏，
+目标两侧字节前后严格保持，结束时显式解链便于临时目录清理。
+
+没有改合并输出生产逻辑或放宽“父目录已更换必须拒绝保存”。Linux MergeOutput
+20/0/0；完整测试通过官方Windows Qt5.15.2头/i686 -Werror编译。原生Windows
+仍待CI；依据：https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-removedirectoryw
