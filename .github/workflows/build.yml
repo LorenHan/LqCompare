@@ -26,6 +26,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# 同一 PR 仅保留最新快照，避免连续小提交占满三平台运行器。
+# 工作流名称与 PR 号共同隔离；main push / 手工触发使用唯一 run_id，不取消彼此。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   checks:
     name: Repository checks
