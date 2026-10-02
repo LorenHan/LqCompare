@@ -141,11 +141,11 @@ MainWindow::MainWindow(QWidget *parent) : RibbonWindow(parent)
 MainWindow::~MainWindow()
 {
     Log::removeSink(m_logSink);
-    if (m_sessions) {
-        disconnect(m_sessions, nullptr, this, nullptr);
-        for (int i = 0; i < m_sessions->count(); ++i)
-            if (auto *session = m_sessions->sessionAt(i)) disconnect(session, nullptr, this, nullptr);
-    }
+    if (m_sessions) disconnect(m_sessions, nullptr, this, nullptr);
+    // 已关闭的标签仍可能等待 DeferredDelete。先断开所有跟踪会话，避免
+    // QWidget 析构子对象时，destroyed 回调访问已经析构的 m_documents。
+    for (auto it = m_documents.cbegin(); it != m_documents.cend(); ++it)
+        disconnect(it.key(), nullptr, this, nullptr);
     CommandRegistry::instance().clear();
 }
 

@@ -58,3 +58,17 @@ PosixFileSystem::linkTarget → Folder::compare`。这与旧 Qt 的
 
 正式 Qt 5.15.2 上的原始崩溃是否消失仍待 CI；本机新版 Qt 结果不能冒充该证据。
 Windows 的链接 API 没有改动，新增 POSIX 专属用例在 Windows 明确跳过。
+
+## SESS-018 / #52：关闭标签后立即退出
+
+Linux 的真实 AppIntegration 基线在打开并关闭五种会话后崩溃。ASAN 确认：
+已关闭标签的会话尚在等待 `DeferredDelete`；窗口成员 `m_documents` 已经析构，
+随后 Qt 删除剩余子会话时，`destroyed` 回调仍访问该哈希表，形成 use-after-free。
+
+窗口析构改为断开所有仍被跟踪的会话，而非只断开仍显示的标签。回归覆盖
+仍打开、部分关闭、全部关闭三种状态，要求窗口退出后会话与视图均已销毁。
+这只是会话关闭生命周期修复，不代表 #52 所有产品标准均已完成。
+
+已验证：ASAN 基线在「关闭一个标签」行重现；修复后完整 AppIntegration
+17 passed / 0 failed / 0 skipped，`detect_leaks=0`（不宣称检测了泄漏）。
+离屏截图已人工检查；Ribbon 对比度、拥挤和语言一致性仍是独立待改进项。

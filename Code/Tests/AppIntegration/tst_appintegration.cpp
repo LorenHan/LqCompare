@@ -198,6 +198,47 @@ private slots:
         QCOMPARE(area->sessionCount(), 0);
     }
 
+    void destroyingWindowBeforeDeferredSessionDeletion_data()
+    {
+        QTest::addColumn<int>("closedCount");
+        QTest::newRow("open-tabs") << 0;
+        QTest::newRow("one-closed-tab") << 1;
+        QTest::newRow("all-tabs-closed") << 3;
+    }
+
+    void destroyingWindowBeforeDeferredSessionDeletion()
+    {
+        QFETCH(int, closedCount);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto path = directory.filePath("text.txt");
+        writeFile(path, "contents\n");
+        QScopedPointer<MainWindow> window(new MainWindow);
+        auto *area = sessions(*window);
+        QVERIFY(area);
+        QList<QPointer<CompareSession>> trackedSessions;
+        QList<QPointer<QWidget>> trackedViews;
+        for (int i = 0; i < 3; ++i) {
+            auto *session = window->openComparison("text", path, path);
+            QVERIFY(session);
+            trackedSessions.append(session);
+            trackedViews.append(session->widget());
+        }
+        for (int i = 0; i < closedCount; ++i) {
+            QVERIFY(area->closeSession(area->indexOf(trackedViews.at(i))));
+            // DeferredDelete 尚未执行，已关闭会话仍然是窗口的子对象。
+            QVERIFY(!trackedSessions.at(i).isNull());
+            QCOMPARE(trackedSessions.at(i)->state(), CompareSession::State::Closed);
+        }
+        QCOMPARE(area->sessionCount(), 3 - closedCount);
+        // 故意不处理事件：关闭标签后立即退出，也必须先断开会话回调。
+        window.reset();
+        for (const auto &session : trackedSessions) QVERIFY(session.isNull());
+        for (const auto &view : trackedViews) QVERIFY(view.isNull());
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QCoreApplication::processEvents();
+    }
+
     void activeTabDirtyStateAndQatSaveTrackCurrentBuffer()
     {
         QTemporaryDir directory;
