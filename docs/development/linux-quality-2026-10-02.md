@@ -414,3 +414,13 @@ Apple 文件系统允许回溯 mtime 时前移创建时间；不据此猜测旧�
 仅改测试，新增 FileTime UTC 纳秒诊断。Linux FileSystem -Werror 全套69/0/1；
 官方 Windows Qt5.15.2头/i686 -Werror编译通过。macOS原生对照需要后续CI，
 未把 Linux 通过替代 macOS 验证。
+
+## PLAT-006 / #327：事件分派测试不依赖短周期定时器
+
+macOS 原生单实例套件的新夹具曾在50ms等待内没有收到10ms周期tick；Windows
+完整112项已通过。改为预先排队回调，断言等待前未派发、等待后已派发，预算仍
+是50ms。只修测试调度假设，不降低子进程输出/事件循环保障，也不加长超时。
+
+Linux 4路压力100轮各82/0/0；旧helper配相同测试79/3，故意用阻塞sleep取代
+事件循环的变异准确失败。完整翻译单元通过官方Windows Qt5.15.2头/i686
+-Werror。30项真实IPC仍未在此云主机执行，新macOS/Windows完整结果待CI。

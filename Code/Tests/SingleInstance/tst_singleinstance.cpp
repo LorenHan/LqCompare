@@ -1596,13 +1596,17 @@ void Tst_SingleInstance::childFinishWaitPreservesBufferedOutput()
 {
     ChildProcess child(QStringLiteral("fixture-ready-hold"), m_seed);
     QTRY_VERIFY_WITH_TIMEOUT(child.process()->bytesAvailable() > 0, 5000);
-    QTimer tick;
-    QSignalSpy ticks(&tick, &QTimer::timeout);
-    tick.start(10);
+    // 直接排队一个事件，验证事件分派本身；不依赖 CI 调度是否赶上短周期定时器。
+    bool eventDispatched = false;
+    QObject receiver;
+    QVERIFY(QMetaObject::invokeMethod(&receiver, [&eventDispatched]() {
+        eventDispatched = true;
+    }, Qt::QueuedConnection));
+    QVERIFY(!eventDispatched);
     // 等退出时即使超时，也应留下已输出的诊断，不能把它误报成空白。
     QVERIFY(!child.waitForFinished(50));
     // 首实例依靠父进程的事件循环回话，等待期间必须仍能分派事件。
-    QVERIFY(!ticks.isEmpty());
+    QVERIFY(eventDispatched);
     QVERIFY2(child.childOutput().contains(QStringLiteral("READY")),
              qPrintable(child.childOutput()));
     child.stop();
