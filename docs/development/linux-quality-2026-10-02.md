@@ -313,3 +313,15 @@ Folder 三轮全套各 68 passed / 0 failed / 0 skipped；最终又经新运行�
 变异都被断言抓住。官方 Windows Qt 5.15.2 头的 i686 编译成功；保留并单独
 豁免原有三条 dangling-reference 警告，不能宣称该翻译单元全警告为零。
 原生 Windows 链接权限、路径注入与完整弹窗回归仍以提交后的 CI 为准。
+
+## CLI-012 / #303：Windows Unicode 子进程崩溃取证
+
+将真实 JSON/UTF-8 用例拆成 ASCII、Unicode 路径、Unicode 内容、两者并存
+四行，同时严格核对 NormalExit、JSON 状态/路径/差异数与 UTF-8 往返。
+仅测试探针安装有界 Windows 崩溃栈记录（本地符号、最多 48 帧），保留
+原异常退出码；独立故障注入自测要求仍是 CrashExit / 0xC0000005。
+没有更改产品 CLI 行为，也未把原生崩溃标成解决。
+
+Linux Cli 119 passed / 0 failed / 0 skipped；测试与 Windows 诊断翻译单元
+通过官方 Qt 5.15.2 头/i686 -Werror 编译，独立 PE 探针成功链接 DbgHelp。
+诊断自测、实际崩溃栈与 Windows 参数/内容四行结果需要原生 CI 确认。

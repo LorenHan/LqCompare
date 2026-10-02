@@ -11,6 +11,9 @@
 #include <QProcessEnvironment>
 #include <QSettings>
 #include <QTemporaryDir>
+#ifdef Q_OS_WIN
+#include "probecrashdiagnostics.h"
+#endif
 #ifdef Q_OS_UNIX
 #include <unistd.h>
 #endif
@@ -75,6 +78,9 @@ ProcessResult runProbe(const QStringList &arguments, const QString &configRoot =
     result.out = process.readAllStandardOutput();
     result.err = process.readAllStandardError();
     if (!result.finished) result.err += process.errorString().toUtf8();
+    if (result.status != QProcess::NormalExit) {
+        result.err.prepend("CLI probe crashed (exit " + QByteArray::number(result.exitCode) + ")\n");
+    }
     return result;
 }
 
@@ -131,7 +137,11 @@ private slots:
     void explicitLogs();
     void realProcessExitCodes_data();
     void realProcessExitCodes();
+    void realProcessJsonAndUtf8_data();
     void realProcessJsonAndUtf8();
+#ifdef Q_OS_WIN
+    void realProcessCrashDiagnostics();
+#endif
     void realProcessHelpAndVersion();
     void realProcessSettingsAndInputsUnchanged();
     void realProcessScriptCompareAndReport();
@@ -895,24 +905,59 @@ void CliTests::realProcessExitCodes()
     }
 }
 
+void CliTests::realProcessJsonAndUtf8_data()
+{
+    QTest::addColumn<bool>("unicodePaths");
+    QTest::addColumn<bool>("unicodeContent");
+    // 分别验证参数传递与文件解码，避免一个中文用例把两条失败路径混在一起。
+    QTest::newRow("ascii") << false << false;
+    QTest::newRow("unicode-paths") << true << false;
+    QTest::newRow("unicode-content") << false << true;
+    QTest::newRow("unicode-paths-and-content") << true << true;
+}
+
 void CliTests::realProcessJsonAndUtf8()
 {
+    QFETCH(bool, unicodePaths);
+    QFETCH(bool, unicodeContent);
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
-    const QString l = dir.filePath(QString::fromUtf8("左 文件.txt")), r = dir.filePath(QString::fromUtf8("右 文件.txt"));
-    QVERIFY(writeBytes(l, QString::fromUtf8("你好\n").toUtf8()));
-    QVERIFY(writeBytes(r, QString::fromUtf8("世界\n").toUtf8()));
+    const QString l = dir.filePath(unicodePaths ? QString::fromUtf8("左 文件.txt") : QStringLiteral("left file.txt"));
+    const QString r = dir.filePath(unicodePaths ? QString::fromUtf8("右 文件.txt") : QStringLiteral("right file.txt"));
+    QVERIFY(writeBytes(l, unicodeContent ? QString::fromUtf8("你好\n").toUtf8() : QByteArray("hello\n")));
+    QVERIFY(writeBytes(r, unicodeContent ? QString::fromUtf8("世界\n").toUtf8() : QByteArray("world\n")));
     const auto result = runProbe({"--silent", "--json", l, r});
     QVERIFY2(result.finished, result.err.constData());
+    QVERIFY2(result.status == QProcess::NormalExit, result.err.constData());
     QCOMPARE(result.exitCode, 1);
     QVERIFY(result.err.isEmpty());
     QJsonParseError error;
     const auto json = QJsonDocument::fromJson(result.out, &error);
     QCOMPARE(error.error, QJsonParseError::NoError);
     QVERIFY(json.isObject());
-    QVERIFY(!json.object().isEmpty());
+    const auto summary = json.object();
+    QCOMPARE(summary.value("status").toString(), QStringLiteral("different"));
+    QCOMPARE(summary.value("exitCode").toInt(), 1);
+    QCOMPARE(summary.value("left").toString(), l);
+    QCOMPARE(summary.value("right").toString(), r);
+    QCOMPARE(summary.value("differences").toInt(), 1);
     QCOMPARE(QString::fromUtf8(result.out).toUtf8(), result.out);
 }
+
+#ifdef Q_OS_WIN
+void CliTests::realProcessCrashDiagnostics()
+{
+    // 不允许外部探针把本测试程序专用的故障注入开关当成普通 CLI 参数。
+    if (qEnvironmentVariableIsSet("LQCOMPARE_CLI_PROBE"))
+        QSKIP("Crash diagnostics belong to the self-contained QtTest probe.");
+    const auto result = runProbe({QStringLiteral("--test-probe-crash-diagnostics")});
+    QVERIFY2(result.finished, result.err.constData());
+    QCOMPARE(result.status, QProcess::CrashExit);
+    QCOMPARE(static_cast<quint32>(result.exitCode), quint32(0xc0000005));
+    QVERIFY2(result.err.contains("CLI probe unhandled Windows exception 0xc0000005"), result.err.constData());
+    QVERIFY2(result.err.contains("#0 0x"), result.err.constData());
+}
+#endif
 
 void CliTests::realProcessHelpAndVersion()
 {
@@ -991,6 +1036,13 @@ void CliTests::realProcessScriptFailureHasLineNumber()
 
 int main(int argc, char **argv)
 {
+#ifdef Q_OS_WIN
+    if (qEnvironmentVariableIsSet("LQCOMPARE_CLI_PROBE_MODE")) {
+        installProbeCrashDiagnostics(argc);
+        if (argc == 2 && QByteArray(argv[1]) == "--test-probe-crash-diagnostics")
+            triggerProbeCrashForTest();
+    }
+#endif
     QCoreApplication app(argc, argv);
     if (qEnvironmentVariableIsSet("LQCOMPARE_CLI_PROBE_MODE")) return runCliProbe(app);
     CliTests tests;
