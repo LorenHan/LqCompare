@@ -12,6 +12,7 @@
 #include <QPushButton>
 #include <QScopedPointer>
 #include <QThread>
+#include <QTemporaryDir>
 #include <QTreeWidget>
 #include <atomic>
 #include "vcsbackend.h"
@@ -197,11 +198,22 @@ private slots:
     void initTestCase()
     { qRegisterMetaType<LqCompare::Vcs::Comparison>(); }
 
+    void headAndIndexUseCorrectSourcesOffGuiThread_data()
+    {
+        QTest::addColumn<QString>("directoryTemplate");
+        QTest::newRow("native-root") << QDir::tempPath() + "/LqCompare-vcs-XXXXXX";
+        QTest::newRow("unicode-spaces-root") << QDir::tempPath() + QString::fromUtf8("/LqCompare 仓库-XXXXXX");
+    }
+
     void headAndIndexUseCorrectSourcesOffGuiThread()
     {
+        QFETCH(QString, directoryTemplate);
+        // 根路径必须是本机完整路径；/virtual 在 Windows 缺少盘符，会与 QFileInfo 的结果不一致。
+        QTemporaryDir directory(directoryTemplate);
+        QVERIFY(directory.isValid());
         auto backend = QSharedPointer<FakeBackend>::create();
         backend->setChanges({change("M")});
-        VcsView view("/virtual/repository", backend);
+        VcsView view(directory.path(), backend);
         auto *changes = view.findChild<QTreeWidget *>("vcsChanges");
         QVERIFY(changes);
         QTRY_COMPARE(changes->topLevelItemCount(), 1);
@@ -223,9 +235,11 @@ private slots:
 
     void missingGitDisablesVcsControls()
     {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
         auto backend = QSharedPointer<FakeBackend>::create();
         backend->setUnavailable({ErrorCode::Unavailable, "未检测到 git 可执行文件", {}});
-        VcsView view("/virtual/repository", backend);
+        VcsView view(directory.path(), backend);
         auto *status = view.findChild<QLabel *>("vcsStatus");
         auto *mode = view.findChild<QComboBox *>("vcsMode");
         auto *compare = view.findChild<QPushButton *>("vcsCompare");
@@ -243,10 +257,12 @@ private slots:
 
     void unbornHeadReportsErrorButIndexRemainsUsable()
     {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
         auto backend = QSharedPointer<FakeBackend>::create();
         backend->setHead(false);
         backend->setChanges({change("??")});
-        VcsView view("/virtual/unborn", backend);
+        VcsView view(directory.path(), backend);
         QSignalSpy errors(&view, &VcsView::errorOccurred);
         QTRY_VERIFY(!errors.isEmpty());
         QVERIFY(errors.last().at(0).toString().contains("HEAD"));
@@ -259,9 +275,11 @@ private slots:
 
     void detectionFailureIsVisible()
     {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
         auto backend = QSharedPointer<FakeBackend>::create();
         backend->setDetectionError({ErrorCode::NotRepository, "路径不属于 Git 仓库", "fixture detail"});
-        VcsView view("/virtual/not-a-repository", backend);
+        VcsView view(directory.path(), backend);
         QSignalSpy errors(&view, &VcsView::errorOccurred);
         QTRY_VERIFY(!errors.isEmpty());
         QVERIFY(errors.last().at(0).toString().contains("路径不属于 Git 仓库"));
@@ -274,9 +292,11 @@ private slots:
     // 而它的后果是用户在刚 git init 的目录里点刷新也永远看不到仓库。
     void repositoryDetectionIsCachedAcrossModeSwitchesButNotAcrossExplicitRefresh()
     {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
         auto backend = QSharedPointer<FakeBackend>::create();
         backend->setChanges({change("M")});
-        VcsView view("/virtual/repository", backend);
+        VcsView view(directory.path(), backend);
         // 等首轮加载**真的跑完**：`isBusy()` 在工作还没被排上之前就是 false，
         // 拿它当判据会在第一帧就通过，于是后面的计数断言全部落在 0 上（本轮实测踩到）。
         QTRY_COMPARE(backend->detectCalls(), 1);
@@ -335,9 +355,11 @@ private slots:
 
     void revisionsPreserveRenameAndSnapshotLifetime()
     {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
         auto backend = QSharedPointer<FakeBackend>::create();
         backend->setChanges({change("R100", "new name.txt", "old name.txt")});
-        QScopedPointer<VcsView> view(new VcsView("/virtual/repository", backend));
+        QScopedPointer<VcsView> view(new VcsView(directory.path(), backend));
         view->setMode(VcsView::Mode::Revisions);
         auto *left = view->findChild<QLineEdit *>("vcsLeftRevision");
         auto *right = view->findChild<QLineEdit *>("vcsRightRevision");
@@ -394,11 +416,13 @@ private slots:
     }
     void additionsAndDeletionsUseEmptySide()
     {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
         QFETCH(QString, status);
         QFETCH(bool, emptyLeft);
         auto backend = QSharedPointer<FakeBackend>::create();
         backend->setChanges({change(status)});
-        VcsView view("/virtual/repository", backend);
+        VcsView view(directory.path(), backend);
         auto *changes = view.findChild<QTreeWidget *>("vcsChanges");
         QTRY_COMPARE(changes->topLevelItemCount(), 1);
         QTRY_VERIFY(!view.isBusy());
@@ -420,11 +444,13 @@ private slots:
     }
     void historyUsesFirstParentOrEmptyRoot()
     {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
         QFETCH(QStringList, parents);
         auto backend = QSharedPointer<FakeBackend>::create();
         backend->setChanges({change(parents.isEmpty() ? "A" : "M")});
         backend->setCommits({commit("selected-commit", parents)});
-        VcsView view("/virtual/repository", backend);
+        VcsView view(directory.path(), backend);
         view.setMode(VcsView::Mode::History);
         QTRY_VERIFY(!backend->diffCalls().isEmpty());
         QTRY_VERIFY(!view.isBusy());
@@ -455,13 +481,15 @@ private slots:
 
     void historyPagesWithoutChangingSelectedCommit()
     {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
         auto backend = QSharedPointer<FakeBackend>::create();
         QVector<Commit> commits;
         for (int i = 0; i < 105; ++i)
             commits.append(commit(QString("commit-%1").arg(i), {QString("parent-%1").arg(i)}));
         backend->setCommits(commits);
         backend->setChanges({change("M")});
-        VcsView view("/virtual/repository", backend);
+        VcsView view(directory.path(), backend);
         view.setMode(VcsView::Mode::History);
         auto *list = view.findChild<QTreeWidget *>("vcsCommits");
         auto *more = view.findChild<QPushButton *>("vcsLoadMore");
@@ -495,10 +523,12 @@ private slots:
 
     void cancelAndRefreshIgnoreLateResults()
     {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
         auto backend = QSharedPointer<FakeBackend>::create();
         backend->setChanges({change("M", "stale.txt")});
         backend->blockNextDiff.store(true);
-        VcsView view("/virtual/old-repository", backend);
+        VcsView view(directory.path(), backend);
         QSignalSpy errors(&view, &VcsView::errorOccurred);
         QTRY_VERIFY(backend->blockedEntered.load());
         QVERIFY(view.isBusy());
@@ -506,12 +536,14 @@ private slots:
         QVERIFY(!view.isBusy());
         QTRY_VERIFY(backend->cancellationObserved.load());
         backend->setChanges({change("M", "fresh.txt")});
-        view.setPath("/virtual/new-repository");
+        QTemporaryDir replacement;
+        QVERIFY(replacement.isValid());
+        view.setPath(replacement.path());
         auto *changes = view.findChild<QTreeWidget *>("vcsChanges");
         QTRY_COMPARE(changes->topLevelItemCount(), 1);
         QTRY_COMPARE(changes->topLevelItem(0)->text(2), QString("fresh.txt"));
         QTRY_VERIFY(!view.isBusy());
-        QCOMPARE(backend->diffCalls().last().root, QString("/virtual/new-repository"));
+        QCOMPARE(backend->diffCalls().last().root, replacement.path());
         backend->releaseBlocked.store(true);
         QTRY_VERIFY(backend->blockedExited.load());
         QTest::qWait(50); // Allow the old worker's queued completion to be delivered.
@@ -522,10 +554,12 @@ private slots:
 
     void destroyingViewCancelsOutstandingWorker()
     {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
         auto backend = QSharedPointer<FakeBackend>::create();
         backend->setChanges({change("M")});
         backend->blockNextDiff.store(true);
-        QScopedPointer<VcsView> view(new VcsView("/virtual/repository", backend));
+        QScopedPointer<VcsView> view(new VcsView(directory.path(), backend));
         QTRY_VERIFY(backend->blockedEntered.load());
         view.reset();
         QTRY_VERIFY(backend->cancellationObserved.load());

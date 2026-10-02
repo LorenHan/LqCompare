@@ -218,3 +218,19 @@ core.autocrlf=true 精确复现 Windows 的首行解析失败，修订后全套�
 PatchApply 61、PatchRegression 77 项全部通过且无跳过，强制 autocrlf 的
 第二轮仍为 77 通过；两个完整测试翻译单元通过官方 Windows Qt 5.15.2 头与
 i686 的 -Werror 交叉编译。原生 Windows 权限及真实 Git/patch 执行仍以 CI 为准。
+
+## VCS-012 / #283：Git 历史路径与协议字节保真
+
+blame 历史文件名属于 Git 树命名空间，不再经本机 QDir::cleanPath 改写：
+Windows 也能保留历史名称中的字面反斜杠。仅元数据解析使用斜杠分量校验，
+拒绝空分量、绝对路径、点/父级分量及 NUL；实际文件访问仍保留原生路径和
+工作副本边界校验，没有放宽文件读取范围。
+
+伪 Git 子进程在 Windows 使用二进制 stdout，任意协议字节以 Base64 通过环境
+传递；覆盖 LF/CRLF、孤立 CR、NUL、Ctrl-Z、UTF-8，继续拒绝被整体转成 CRLF
+的错误协议。VcsView 改用真实本机临时根，覆盖中文/空格路径。
+
+Linux Vcs 79、VcsView 18、VcsBlameView 23 项全部通过且无跳过；C locale
+协议子集 36 项通过。旧 CRT 转换模拟精确复现 3 条失败，旧主机分隔符模拟
+复现 quoted-octal 路径失败。三个完整翻译单元用官方 Windows Qt 5.15.2 头
+与 i686 编译器通过 -Werror；原生 Windows 运行结果仍等待正式 CI。
