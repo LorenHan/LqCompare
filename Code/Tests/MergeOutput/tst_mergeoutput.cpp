@@ -1,3 +1,9 @@
+// 真实符号链接夹具使用 Vista 起提供的 API；在 Qt/CRT 头之前设置缺省目标。
+// 保留构建方显式提供的版本，不改变非 Windows 测试。
+#if defined(_WIN32) && !defined(_WIN32_WINNT)
+#define _WIN32_WINNT 0x0600
+#endif
+
 #include <QtTest>
 #include <QDateTime>
 #include <QDir>

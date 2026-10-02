@@ -181,3 +181,13 @@ Text 模式把 LF/CRLF 再次改写。开启脱敏仍走原来的 UTF-8 路径�
 新增 LF、CRLF、非 UTF-8/内嵌 NUL、空日志四类真实字节回归。原代码在 Linux
 非 UTF-8 行确实失败，修复后 LogDiagnostics 92 passed / 0 failed / 0 skipped。
 Windows 的原文换行失败由对应正式 CI 继续验证。
+
+## PLAT-001 / #322：合并输出的 Windows 链接测试夹具
+
+MergeOutput 的真实符号链接夹具也在 Qt/CRT 头文件之前设置可覆盖的 Vista
+API 缺省目标，解决旧 MinGW 隐藏 `CreateSymbolicLinkW` 声明的编译错误。
+不改生产保存逻辑，不改变构建方显式指定的目标版本。
+
+该完整测试源码使用官方 Windows Qt 5.15.2 头和 i686 编译器生成 i386 COFF，
+`-Wall -Wextra -Werror` 通过；Linux MergeOutput 全套 19 passed / 0 failed / 0 skipped。
+Windows 真正的链接权限与别名保护断言仍待原生 CI。
