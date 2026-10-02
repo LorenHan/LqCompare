@@ -26,11 +26,11 @@ on:
   pull_request:
   workflow_dispatch:
 
-# 同一 PR 仅保留最新快照，避免连续小提交占满三平台运行器。
-# 工作流名称与 PR 号共同隔离；main push / 手工触发使用唯一 run_id，不取消彼此。
+# 每个提交均需三平台验证及产物，不再以较新提交替换旧提交的排队项。
+# PR 使用实际 head SHA，其他触发使用 github.sha；只对相同源码快照去重。
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || format('run-{0}', github.run_id) }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
 
 jobs:
   checks:

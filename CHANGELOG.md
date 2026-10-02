@@ -29,6 +29,9 @@
 
 ### 修复
 
+- Windows 可执行资源改用从现有 SVG 确定性生成的多尺寸 ICO，修复 windres 无法构建主程序；
+  界面 SVG 不变（PLAT-001 / [#322](https://github.com/LorenHan/LqCompare/issues/322)）
+
 - 原生 Ribbon 悬停测试等待实际鼠标进入/离开；对真实绘制前景色检查未取整的
   4.5 对比度，并单独保留屏幕字形证据，避免低 DPI 抗锯齿造成误判
   （UI-001 / [#2](https://github.com/LorenHan/LqCompare/issues/2)，仅测试修正）
