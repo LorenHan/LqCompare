@@ -29,6 +29,10 @@
 
 ### 修复
 
+- 原生 Ribbon 悬停测试等待实际鼠标进入/离开；对真实绘制前景色检查未取整的
+  4.5 对比度，并单独保留屏幕字形证据，避免低 DPI 抗锯齿造成误判
+  （UI-001 / [#2](https://github.com/LorenHan/LqCompare/issues/2)，仅测试修正）
+
 - 命令搜索使用独立直角布局行，不再遮挡 Ribbon 标签；回车与放大镜都进入同一确认流程，
   防止重复按键误执行、过期查询和模态期间关闭窗口的生命周期崩溃
   （UI-004 / [#4](https://github.com/LorenHan/LqCompare/issues/4)）

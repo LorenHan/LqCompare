@@ -25,6 +25,8 @@
 #include <QKeyEvent>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QPaintEngine>
+#include <QPainter>
 #include <QPointer>
 #include <QPushButton>
 #include <QSettings>
@@ -148,10 +150,70 @@ QColor tabBackground(QTabBar *tabs, int index)
     return image.toImage().pixelColor(origin * image.devicePixelRatio());
 }
 
-// 读取实际栅格化文字，排除边框及选中/焦点标记。
-// 抗锯齿边缘像素不要求达到完整前景色的对比度。
+// 观察真实控件提交给 QPainter 的文本颜色，不改变字体、样式或布局。
+// 屏幕抓图仍单独验证实际字形；该探针只负责抗锯齿之前的指定前景色。
+class TabTextPaintProbe : public QPaintDevice
+{
+public:
+    struct Engine : QPaintEngine {
+        Engine() : QPaintEngine(AllFeatures) {}
+        QString label;
+        QList<QColor> colors;
+        bool begin(QPaintDevice *) override { return true; }
+        bool end() override { return true; }
+        Type type() const override { return User; }
+        void updateState(const QPaintEngineState &) override {}
+        void drawPixmap(const QRectF &, const QPixmap &, const QRectF &) override {}
+        void drawPath(const QPainterPath &) override {}
+        void drawPolygon(const QPointF *, int, PolygonDrawMode) override {}
+        void drawTextItem(const QPointF &, const QTextItem &item) override
+        {
+            if (item.text() == label) colors.append(painter()->pen().color());
+        }
+    };
+    explicit TabTextPaintProbe(QTabBar *tabs, int index) : m_tabs(tabs)
+    {
+        engine.label = tabs->tabText(index);
+    }
+    QPaintEngine *paintEngine() const override { return &engine; }
+    mutable Engine engine;
+protected:
+    int metric(PaintDeviceMetric metric) const override
+    {
+        switch (metric) {
+        case PdmWidth: return m_tabs->width();
+        case PdmHeight: return m_tabs->height();
+        case PdmWidthMM: return m_tabs->widthMM();
+        case PdmHeightMM: return m_tabs->heightMM();
+        case PdmNumColors: return m_tabs->colorCount();
+        case PdmDepth: return m_tabs->depth();
+        case PdmDpiX: return m_tabs->logicalDpiX();
+        case PdmDpiY: return m_tabs->logicalDpiY();
+        case PdmPhysicalDpiX: return m_tabs->physicalDpiX();
+        case PdmPhysicalDpiY: return m_tabs->physicalDpiY();
+        case PdmDevicePixelRatio: return m_tabs->devicePixelRatio();
+        case PdmDevicePixelRatioScaled: return qRound(m_tabs->devicePixelRatioF() * devicePixelRatioFScale());
+        }
+        return 0;
+    }
+private:
+    QTabBar *m_tabs;
+};
+
+// WCAG 1.4.3 比较指定的前景/背景色，不把抗锯齿造成的混色当作前景色：
+// https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html
+// 同时保留真实栅格的文字证据，排除边框及选中/焦点标记。
 void verifyTabPixels(QTabBar *tabs, int index, const QColor &foreground, const QColor &background)
 {
+    TabTextPaintProbe probe(tabs, index);
+    tabs->render(&probe);
+    QVERIFY2(!probe.engine.colors.isEmpty(), qPrintable("No text paint for " + tabs->tabText(index)));
+    for (const QColor &painted : probe.engine.colors) {
+        QCOMPARE(painted.rgba(), foreground.rgba());
+        QVERIFY2(contrast(painted, background) >= 4.5,
+                 qPrintable(QStringLiteral("%1: foreground/background contrast %2:1 is below 4.5:1")
+                            .arg(tabs->tabText(index)).arg(contrast(painted, background))));
+    }
     // 抓取完整窗口，以用户实际看到的背景测量透明标签，
     // 避免把空的透明位图误当作标签背景。
     const QPixmap pixmap = tabs->window()->grab();
@@ -160,22 +222,22 @@ void verifyTabPixels(QTabBar *tabs, int index, const QColor &foreground, const Q
     const QRect tab = tabs->tabRect(index).translated(tabs->mapTo(tabs->window(), QPoint()));
     QCOMPARE(image.pixelColor((tab.left() + 4) * scale, (tab.top() + 4) * scale).rgba(), background.rgba());
     const QRect text = tab.adjusted(10, 5, -10, -5);
-    int readableGlyphPixels = 0;
+    int glyphPixels = 0;
     double bestContrast = 1;
     for (int y = text.top() * scale; y <= text.bottom() * scale; ++y) {
         for (int x = text.left() * scale; x <= text.right() * scale; ++x) {
             const QColor pixel = image.pixelColor(x, y);
             const double ratio = contrast(pixel, background);
             bestContrast = qMax(bestContrast, ratio);
-            if (ratio >= 4.5 && qAbs(pixel.red() - foreground.red()) < 32
+            if (qAbs(pixel.red() - foreground.red()) < 32
                 && qAbs(pixel.green() - foreground.green()) < 32
                 && qAbs(pixel.blue() - foreground.blue()) < 32)
-                ++readableGlyphPixels;
+                ++glyphPixels;
         }
     }
-    QVERIFY2(readableGlyphPixels >= 3,
-             qPrintable(QStringLiteral("%1: only %2 readable glyph pixels, best contrast %3:1")
-                        .arg(tabs->tabText(index)).arg(readableGlyphPixels).arg(bestContrast)));
+    QVERIFY2(glyphPixels >= 3,
+             qPrintable(QStringLiteral("%1: only %2 foreground glyph pixels, best raster contrast %3:1")
+                        .arg(tabs->tabText(index)).arg(glyphPixels).arg(bestContrast)));
 }
 }
 
@@ -265,7 +327,7 @@ private slots:
         window.resize(1440, 900);
         window.show();
         window.activateWindow();
-        QTest::qWait(50);
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
         auto *ribbon = window.ribbonBar();
         auto *tabs = ribbon->findChild<QTabBar *>(QStringLiteral("lqRibbonTabBar"));
         QVERIFY(tabs);
@@ -296,6 +358,8 @@ private slots:
                 tabs->setCurrentIndex(0);
                 tabs->clearFocus();
                 QTest::mouseMove(&window, QPoint(window.width() - 10, window.height() - 10));
+                QTRY_VERIFY(!tabs->underMouse());
+                QTRY_COMPARE(tabBackground(tabs, 1).rgba(), palette.color(QPalette::Window).rgba());
                 const QRect normalFirst = tabs->tabRect(0), normalSecond = tabs->tabRect(1);
                 const int tabHeight = tabs->height();
                 verifyTabPixels(tabs, 0, palette.color(QPalette::Text), palette.color(QPalette::Base));
@@ -305,7 +369,8 @@ private slots:
                     QVERIFY(tabs->grab().save(evidence + "/" + theme + "-tabs.png"));
                 }
                 QTest::mouseMove(tabs, tabs->tabRect(1).center());
-                QCoreApplication::processEvents();
+                QTRY_VERIFY(tabs->underMouse());
+                QTRY_VERIFY(tabBackground(tabs, 1).rgba() != palette.color(QPalette::Window).rgba());
                 const QColor hover = tabBackground(tabs, 1);
                 QVERIFY(hover.rgba() != palette.color(QPalette::Window).rgba());
                 verifyTabPixels(tabs, 1, palette.color(QPalette::WindowText), hover);
@@ -406,6 +471,7 @@ private slots:
         MainWindow window;
         window.resize(1440, 900);
         window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
         auto *tabs = window.ribbonBar()->findChild<QTabBar *>(QStringLiteral("lqRibbonTabBar"));
         QVERIFY(tabs);
         // 首例检出不安全的 WindowText/Midlight 配对；第二例让完整强调色混色失效：
@@ -422,12 +488,17 @@ private slots:
             const QPalette applied = QApplication::palette();
             QTest::mouseMove(&window, QPoint(1400, 800));
             tabs->setCurrentIndex(0);
-            QCoreApplication::processEvents();
+            // QWidget 版本的 mouseMove 经由窗口服务器异步返回；单次 processEvents
+            // 不保证已收到移动。进入/离开都等待真实状态，不依赖固定睡眠时间。
+            // https://wiki.qt.io/Writing_good_tests#Widgets_and_Windows
+            QTRY_VERIFY(!tabs->underMouse());
+            QTRY_COMPARE(tabBackground(tabs, 1).rgba(), background.rgba());
             const QRect normal = tabs->tabRect(1);
             const int height = tabs->height();
             verifyTabPixels(tabs, 1, palette.color(QPalette::WindowText), background);
             QTest::mouseMove(tabs, tabs->tabRect(1).center());
-            QCoreApplication::processEvents();
+            QTRY_VERIFY(tabs->underMouse());
+            QTRY_VERIFY(tabBackground(tabs, 1).rgba() != background.rgba());
             const QColor hover = tabBackground(tabs, 1);
             QVERIFY(hover.rgba() != background.rgba());
             verifyTabPixels(tabs, 1, palette.color(QPalette::WindowText), hover);
