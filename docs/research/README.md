@@ -1,10 +1,13 @@
 # 竞品功能测绘
 
-本目录是 LqCompare 的**对标基线**：两份文档把两个竞品的功能面穷尽式测绘成
-「一个可独立验收的功能点」，供规格书（`docs/PRD-actions.md`）与 issue 拆分使用。
+本目录保存 LqCompare 的历史功能测绘与可追溯审计。请先读
+[2026-10-02 官方手册与修改记录审计](feature-parity-audit-2026-10-02.md)：
+旧测绘存在版本、工具提示及功能归属误判，不能把原始条目数量当作已认证覆盖率。
+规格与实现继续逐项核验，历史 ID 保留用于追溯。
 
 | 文档 | 对标对象 | 规模 | 用途 |
 | --- | --- | --- | --- |
+| [feature-parity-audit-2026-10-02.md](feature-parity-audit-2026-10-02.md) | 官方 BC5 / TortoiseGit 手册及修改记录 | 92 组行为映射到现有 369 条规格 | **最新勘误、缺口与验收入口**，不是功能已完成声明 |
 | [beyondcompare-features.md](beyondcompare-features.md) | Beyond Compare 5（Scooter Software） | 38 个功能域 / 1682 个功能点 | **功能面的主要依据** |
 | [tortoisegit-diff-features.md](tortoisegit-diff-features.md) | TortoiseGit 比对/合并界面与客户端 | 1166 个功能点 | Ribbon 布局与交互参考 |
 | [reference-projects.md](reference-projects.md) | kdiff3 / WinMerge / meld 等开源实现 | 4 个实现 | 算法、数据结构与测试方法的借鉴（**含许可证红线**） |
@@ -16,16 +19,15 @@
 
 - **功能面以 Beyond Compare 为准**。两个软件行为冲突时（例如「文件夹比对谁作为主视图」、
   「同步的删除策略默认值」），采用 Beyond Compare 的行为。
-- **界面形态以 Ribbon 为准**。TortoiseGitMerge 确实是 Ribbon 实现，但它只有 **1 个 Tab**，
-  靠 `ScalingPolicy` 依次收缩塞下 30 多个控件，社区还专门开过 issue 反对；
-  因此 LqCompare 采用**多页面**方案（10 页 / 45 组），只借鉴它的分组素材。
+- **沿用当前 Ribbon 架构，按任务上下文呈现紧凑控件**。多页面是本项目的设计选择，
+  不是竞品功能事实；优先保证差异区空间、工具提示、键盘操作和可访问性。
 
 ## 已知的重要结论（决策依据）
 
 1. **TortoiseGit 内置工具不支持文件夹比对**（官方原文明示）。因此信息架构必须反过来：
    **以文件夹比对为主视图，文件比对是它的子视图**。
-2. **TortoiseGitMerge 的 Ribbon 没有任何 tooltip**（`TortoiseGitMergeRibbon.xml` 里
-   `Command.TooltipTitle/Description` 全缺）。LqCompare 把「两段式 tooltip」做成启动自检项（UI-023）。
+2. **TortoiseGitMerge 有工具提示**，见[官方按钮说明](https://tortoisegit.org/docs/tortoisegitmerge/tmerge-dug-toolbar.html)。
+   XML 未出现某属性不能证明运行时没有提示。LqCompare 的两段式 tooltip 是自身标准（UI-023）。
 3. **TortoiseGit 的 Log / Commit / Revision Graph 都不是 Ribbon**，是经典 Win32 对话框。
    它有很强的比对资产（日志图列 + 分支徽标语义色、修订图可导出 SVG/PNG、Blame 按龄连续着色、
    图像 XOR 差异），但没 Ribbon 化——这是 LqCompare 的差异化空间。

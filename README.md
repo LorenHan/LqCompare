@@ -6,8 +6,8 @@ Qt 5.15.2 / C++17 的**文件与文件夹比对工具**。功能面以 **Beyond 
 界面使用 **LqRibbon**（与 [Ailecium](https://github.com/LorenHan/Ailecium) 同一套 Ribbon 外壳），
 代码分层为 `App → Views → Services`。
 
-> **状态**：规格已冻结、工程骨架已跑通。功能实现按 issue 逐条推进。
-> 当前界面上每个按钮都已就位，未实现者点击后会告诉你它对应哪条规格条目。
+> **状态**：功能实现与跨平台回归按 issue 逐条推进。当前实现和验证边界见下方质量记录。
+> 未实现入口禁用并显示原因；按钮数量、规格数量和测试工程数量都不代表功能覆盖率。
 
 ---
 
@@ -15,6 +15,8 @@ Qt 5.15.2 / C++17 的**文件与文件夹比对工具**。功能面以 **Beyond 
 
 | 文档 | 内容 |
 | --- | --- |
+| [docs/research/feature-parity-audit-2026-10-02.md](docs/research/feature-parity-audit-2026-10-02.md) | **最新官方手册与修改记录审计**：功能映射、已知缺口、旧测绘勘误及分阶段验收 |
+| [docs/development/linux-quality-2026-10-02.md](docs/development/linux-quality-2026-10-02.md) | **最新开发与验证记录**：Linux 实测、跨平台 CI 边界、逐个小功能交付 |
 | [docs/PRD-actions.md](docs/PRD-actions.md) | **产品规格正文**。369 个条目，每条都有入口/作用对象/行为边界与可核对的完成标准 |
 | [docs/github/issue-index.md](docs/github/issue-index.md) | 全部条目对应的 GitHub issue 索引（按功能域分组） |
 | [docs/research/beyondcompare-features.md](docs/research/beyondcompare-features.md) | Beyond Compare 5 全功能测绘（38 个功能域、1682 个功能点） |
@@ -30,7 +32,7 @@ Qt 5.15.2 / C++17 的**文件与文件夹比对工具**。功能面以 **Beyond 
 
 | 项目 | 取值 |
 | --- | --- |
-| Qt | 5.15.2（`error()` 强制，不接受其它版本） |
+| Qt | 交付与 CI 基线 5.15.2；qmake 当前接受 Qt 5.15.x，本轮 Linux 开发另验 5.15.15 |
 | C++ | C++17 |
 | 构建 | qmake（按模块以 `.pri` 组织） |
 | 交付目标 | Windows MinGW 8.1.0 32 位 |
