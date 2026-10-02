@@ -203,3 +203,18 @@ Windows 的 8 条名称过滤/过滤栈失败来自测试隐含 POSIX 前提，�
 新增本机默认护栏在该故意错误的 Linux 默认变异中另报 3+1 失败，证明不是
 拿被测函数生成预期值的假绿。生产默认行为未改：过滤器 Windows 策略不敏感，
 POSIX 策略敏感；此策略模拟不是原生 Windows 运行证据。
+
+## PAT-006 / #265：补丁的真实跨平台夹具
+
+补丁测试改用真正的 POSIX / Windows 符号链接，明确核对链接类型与拒绝诊断，
+只有 Windows 明确缺少符号链接权限才跳过；目录拒绝用例独立执行。磁盘夹具
+使用平台合法文件名，所有平台仍保留内存中的引号/Unicode/JSON 往返，POSIX
+继续创建含双引号的真实文件。
+
+真实 Git 的 stderr 警告不再混进补丁 stdout。旧源码在 Linux 通过进程级
+core.autocrlf=true 精确复现 Windows 的首行解析失败，修订后全套再验通过。
+生产补丁解析器与安全检查未改，没有通过忽略警告文本来放宽补丁格式。
+
+PatchApply 61、PatchRegression 77 项全部通过且无跳过，强制 autocrlf 的
+第二轮仍为 77 通过；两个完整测试翻译单元通过官方 Windows Qt 5.15.2 头与
+i686 的 -Werror 交叉编译。原生 Windows 权限及真实 Git/patch 执行仍以 CI 为准。

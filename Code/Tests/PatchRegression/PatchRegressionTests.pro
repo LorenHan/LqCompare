@@ -7,6 +7,7 @@ TARGET = tst_patch_regression
 include(../../Services/Text/text.pri)
 include(../../Services/Patch/patch.pri)
 SOURCES += tst_patch_regression.cpp
+HEADERS += ../Support/patchtestsymlink.h
 DISTFILES += fixtures/git-index.diff fixtures/svn-index.diff \
              fixtures/gnu.diff fixtures/hg.diff fixtures/truncated.diff
 DESTDIR = $$OUT_PWD/bin

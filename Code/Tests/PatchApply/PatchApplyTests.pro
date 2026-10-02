@@ -21,5 +21,6 @@ include(../../Services/Text/text.pri)
 include(../../Services/Patch/patch.pri)
 
 SOURCES += tst_patchapply.cpp
+HEADERS += ../Support/patchtestsymlink.h
 
 DESTDIR = $$OUT_PWD/bin
