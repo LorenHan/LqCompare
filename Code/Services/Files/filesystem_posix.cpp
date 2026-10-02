@@ -9,6 +9,7 @@
 
 #include <cerrno>
 #include <cstring>
+#include <vector>
 
 #include <dirent.h>
 #include <fcntl.h>      // AT_FDCWD、AT_SYMLINK_NOFOLLOW
@@ -197,38 +198,42 @@ public:
 
     QString linkTarget(const QString &path, ErrorCode *error) const override
     {
-        // PATH_MAX 是系统对单次 readlink 缓冲的实际上限。不写死 4096：
-        // 用动态增长的小缓冲循环读，避免在极长链接上截断。
-        static constexpr int kInitialBufferSize = 256;
-        static constexpr int kMaxBufferSize = 64 * 1024;
+        // 不假定链接目标的长度：缓冲填满时扩容重读，直到读完或达到上限。
+        static constexpr size_t kInitialBufferSize = 256;
+        static constexpr size_t kMaxBufferSize = 64 * 1024;
 
         const QByteArray native = toNative(path);
-        QByteArray buffer(kInitialBufferSize, Qt::Uninitialized);
+        // Qt 5.15.2 的 QArrayData 指针计算会触发新版 GCC/glibc 的对象大小检查
+        // （QTBUG-103782）。系统调用使用独立字节缓冲，保留 FORTIFY 检查；
+        // 读完后才用 QByteArray 解码，不依赖旧 Qt 的内部存储布局。
+        std::vector<char> buffer(kInitialBufferSize);
 
         for (;;) {
+            char *const destination = buffer.data();
+            const size_t capacity = buffer.size();
             errno = 0;
-            const ssize_t length = ::readlink(native.constData(), buffer.data(), buffer.size());
+            const ssize_t length = ::readlink(native.constData(), destination, capacity);
             if (length < 0) {
                 if (error)
                     *error = fromSystemError(errno);
                 return QString();
             }
-            if (length < buffer.size()) {
+            if (static_cast<size_t>(length) < capacity) {
                 // 没填满缓冲，说明读完了。
                 // 注意必须按 length 截断后再解码：readlink 不写结尾的 '\0'，
-                // 直接拿整个 buffer 解码会把后面的未初始化内容也读进来。
+                // 直接拿整个 buffer 解码会把不属于目标的尾部字节也读进来。
                 if (error)
                     *error = FileSystemError::None;
-                return QFile::decodeName(QByteArray(buffer.constData(), static_cast<int>(length)));
+                return QFile::decodeName(QByteArray(destination, static_cast<int>(length)));
             }
-            if (buffer.size() >= kMaxBufferSize) {
+            if (capacity >= kMaxBufferSize) {
                 // 不再无限增长：能到 64KB 的链接已经是异常输入了，
                 // 与其让内存一直涨，不如明确报「名称超长」。
                 if (error)
                     *error = FileSystemError::InvalidName;
                 return QString();
             }
-            buffer.resize(buffer.size() * 2);
+            buffer.resize(capacity * 2);
         }
     }
 

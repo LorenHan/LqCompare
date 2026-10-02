@@ -9,6 +9,9 @@
 
 #include <cerrno>
 #include <memory>
+#ifndef Q_OS_WIN
+#include <unistd.h>
+#endif
 
 using namespace LqCompare::Files;
 
@@ -784,6 +787,82 @@ void TstFileSystem::nativeFileSystemReadsRealDirectory()
     // 对文件调用枚举要明确报 NotDirectory。
     QCOMPARE(fileSystem->enumerateDirectory(root + QStringLiteral("/hello.txt"), &error).size(), 0);
     QCOMPARE(error, FileSystemError::NotDirectory);
+}
+
+void TstFileSystem::nativeLinkTargetPreservesStoredTarget_data()
+{
+    QTest::addColumn<QString>("target");
+    // 卡住第一次分配与扩容的两侧；恰好填满时必须再读，不能截断或多解码字节。
+    QTest::newRow("one-byte") << QStringLiteral("x");
+    for (const int length : {255, 256, 257, 512, 513}) {
+        const QByteArray name = QByteArray::number(length) + "-bytes";
+        QTest::newRow(name.constData()) << QString(length, QLatin1Char('x'));
+    }
+    QTest::newRow("relative-dangling") << QStringLiteral("../sub/missing");
+    // 按编码后的字节数越过 512，字符数却不足 256，防止把字符数当缓冲长度。
+    const QString unicodeTarget = QStringLiteral("目录/").repeated(80)
+        + QStringLiteral("不存在.txt");
+    QVERIFY(unicodeTarget.toUtf8().size() > 512);
+    QTest::newRow("unicode-dangling") << unicodeTarget;
+}
+
+void TstFileSystem::nativeLinkTargetPreservesStoredTarget()
+{
+#ifdef Q_OS_WIN
+    QSKIP("POSIX readlink regression; Windows symbolic links require separate privileges.");
+#else
+    QFETCH(QString, target);
+    QTemporaryDir temporaryDir;
+    QVERIFY(temporaryDir.isValid());
+    const QString link = temporaryDir.filePath(QStringLiteral("链接"));
+    const QByteArray nativeTarget = QFile::encodeName(target);
+    const QByteArray nativeLink = QFile::encodeName(link);
+    // 直接存入相对目标，不能让测试辅助函数先解析或规范化它。
+    QCOMPARE(::symlink(nativeTarget.constData(), nativeLink.constData()), 0);
+
+    const std::unique_ptr<FileSystem> fileSystem(createNativeFileSystem());
+    ErrorCode error = fromSystemError(EACCES);
+    QCOMPARE(fileSystem->linkTarget(link, &error), target);
+    QCOMPARE(error, FileSystemError::None);
+    QVERIFY(!error.hasRawCode());
+    QCOMPARE(error.raw, qint64(0));
+    QCOMPARE(fileSystem->linkTarget(link, nullptr), target);
+#endif
+}
+
+void TstFileSystem::nativeLinkTargetReportsErrors()
+{
+#ifdef Q_OS_WIN
+    QSKIP("POSIX readlink error codes are platform-specific.");
+#else
+    QTemporaryDir temporaryDir;
+    QVERIFY(temporaryDir.isValid());
+    const QString regularPath = temporaryDir.filePath(QStringLiteral("ordinary.txt"));
+    QFile regularFile(regularPath);
+    QVERIFY(regularFile.open(QIODevice::WriteOnly));
+    regularFile.close();
+    const std::unique_ptr<FileSystem> fileSystem(createNativeFileSystem());
+
+    ErrorCode error;
+    const QString missing = temporaryDir.filePath(QStringLiteral("missing"));
+    QVERIFY(fileSystem->linkTarget(missing, &error).isEmpty());
+    QCOMPARE(error, FileSystemError::NotFound);
+    QCOMPARE(error.domain, ErrorDomain::Posix);
+    QCOMPARE(error.raw, qint64(ENOENT));
+    QVERIFY(fileSystem->linkTarget(missing, nullptr).isEmpty());
+
+    // POSIX 不允许创建空目标链接；这里覆盖空路径失败，不能伪造成功夹具。
+    QVERIFY(fileSystem->linkTarget(QString(), &error).isEmpty());
+    QCOMPARE(error, FileSystemError::NotFound);
+    QCOMPARE(error.raw, qint64(ENOENT));
+
+    QVERIFY(fileSystem->linkTarget(regularPath, &error).isEmpty());
+    // EINVAL 的成因不限于名称错误，沿用错误分类层的 Unknown 契约。
+    QCOMPARE(error, FileSystemError::Unknown);
+    QCOMPARE(error.domain, ErrorDomain::Posix);
+    QCOMPARE(error.raw, qint64(EINVAL));
+    QVERIFY(fileSystem->linkTarget(regularPath, nullptr).isEmpty());
+#endif
 }
 
 // Q_OBJECT 声明在头文件里，因此这里不需要 #include "xxx.moc"：

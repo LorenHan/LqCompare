@@ -38,3 +38,23 @@ Qt 5.15.2 的正式矩阵由 CI 验证，不能由本机 Qt 5.15.15 替代。
 对应本轮基线提交：macOS 套件作业成功；Ubuntu 的 Folder 套件崩溃；
 Windows 存在构建和断言失败。该次 CI 因未取得私有 LqRibbon 依赖，
 三个系统均未构建或打包主程序，不能称为三平台产品通过。
+
+## PLAT-002 / #325：POSIX 符号链接读取
+
+基线 Ubuntu 产物已取得真实调用栈：`__readlink_chk →
+PosixFileSystem::linkTarget → Folder::compare`。这与旧 Qt 的
+[QArrayData 对象大小计算问题及官方修复](https://github.com/qt/qtbase/commit/2778f020218a503235638be558d86a05c38302ef)
+吻合。修复只把系统调用的接收缓冲改为 `std::vector<char>`，不关闭 FORTIFY，
+不改变链接不跟随、最大 64 KiB、按实际返回长度解码与原始错误码契约。
+
+已验证：
+
+- Linux Qt 5.15.15 / GCC 14.2，显式 `-O2 -D_FORTIFY_SOURCE=3`
+- FileSystem 全套 59 passed / 0 failed / 0 skipped
+- 新增真实 POSIX 链接测试：1、255、256、257、512、513 字节、相对悬空及
+  长 Unicode 目标；错误复位、空错误输出指针、缺失/空路径与普通文件错误
+- 将完整读取条件故意改错的独立变异，被 4 条数据行检出；最终源码重新构建并通过
+- `git diff --check` 通过，该独立构建无警告
+
+正式 Qt 5.15.2 上的原始崩溃是否消失仍待 CI；本机新版 Qt 结果不能冒充该证据。
+Windows 的链接 API 没有改动，新增 POSIX 专属用例在 Windows 明确跳过。

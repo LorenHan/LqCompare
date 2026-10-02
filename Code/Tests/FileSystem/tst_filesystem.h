@@ -82,6 +82,9 @@ private slots:
     // --- 真实实现（本机平台）----------------------------------------------
     void nativeFileSystemReportsItsPlatform();
     void nativeFileSystemReadsRealDirectory();
+    void nativeLinkTargetPreservesStoredTarget_data();
+    void nativeLinkTargetPreservesStoredTarget();
+    void nativeLinkTargetReportsErrors();
 };
 
 // 回收站（PLAT-003）的用例在 Code/Tests/Trash 里。
