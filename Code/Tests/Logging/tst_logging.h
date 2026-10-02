@@ -58,6 +58,8 @@ private slots:
     void fileTargetRejectsUnwritablePath();
     void emptyPathDisablesFileTarget();
     void fileTargetReceivesExactlyWhatConsoleWould();
+    void fileTargetUsesUtf8RegardlessOfLocale_data();
+    void fileTargetUsesUtf8RegardlessOfLocale();
 
     // ---------- D 耗时辅助（标准第 5 条） ----------
     void stopwatchReportsElapsedOnScopeExit();

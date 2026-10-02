@@ -144,3 +144,14 @@ Debian i686 GCC 14 / MinGW-w64 v12 交叉编译为 i386 COFF，`-Werror` 通过�
 未执行。Linux ShellIntegration 在独立构建目录 101 passed / 0 failed / 0 skipped。
 
 此证据不是 MinGW 8.1、完整 Windows 应用链接、实际注册表写入/删除或 Explorer 验收。
+
+## ENG-006 / #338：文件日志的 UTF-8 保真
+
+Windows CI 中中文日志变成问号。文件端的 `QTextStream` 曾使用本机默认编码，
+而诊断读取固定按 UTF-8 解码。文件写入现在明确选择 UTF-8，保留原来的追加与
+换行方式，不改变控制台代码页或用户系统设置。
+
+新增测试在同一 Linux 二进制内分别模拟 UTF-8、Windows-1252、GB18030 默认编码，
+核对中文、繁体、重音字符与 emoji 的真实输出字节以及无 BOM。原代码两组失败，
+修复后 Logging 全套 46 passed / 0 failed / 0 skipped，失败时也恢复测试进程编码。
+真实 Windows CI 的对应回归仍按此次提交单独核对。

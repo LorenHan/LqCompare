@@ -174,6 +174,8 @@ void appendRecord(Level levelValue, const QString &category, const QString &mess
             QFile file(logFilePath());
             if (file.open(QIODevice::Append | QIODevice::Text)) {
                 QTextStream stream(&file);
+                // 日志与诊断读取统一使用 UTF-8，不随 Windows 默认代码页丢失字符。
+                stream.setCodec("UTF-8");
                 stream << text << '\n';
             }
         }
