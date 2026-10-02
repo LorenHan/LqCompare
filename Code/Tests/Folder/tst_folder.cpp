@@ -27,6 +27,8 @@
 #include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSet>
+#include <QScreen>
+#include <QScrollArea>
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QTemporaryDir>
@@ -1838,7 +1840,12 @@ private slots:
         orphan.timeRelation = Folder::TimeRelation::Unknown;
         orphan.status = Folder::Status::LeftOnly;
         result.entries.append(orphan);
+        // 固定画布作为子控件，避免原生桌面把 1380 像素的顶层窗口夹到屏幕宽度。
+        // 宿主按可用屏幕显示并允许滚动，时间列仍在同一指定宽度下严格验收。
+        QScrollArea host;
         FolderCompareView view;
+        host.setWidget(&view);
+        host.setWidgetResizable(false);
         view.setPaths(QStringLiteral("/comparison/left"), QStringLiteral("/comparison/right"));
         view.setResult(result);
         auto *model = view.leftTree()->model();
@@ -1882,8 +1889,12 @@ private slots:
         view.setOptions(Folder::Options());
         view.findChild<QToolButton *>(QStringLiteral("folderOptionsToggle"))->setChecked(true);
         view.resize(1380, 640);
+        host.resize(view.size().boundedTo(QGuiApplication::primaryScreen()->availableGeometry().size()));
+        host.show();
         view.show();
         QTest::qWait(20);
+        QVERIFY(view.isVisible());
+        QVERIFY(!view.isWindow());
         QCOMPARE(view.width(), 1380);
         for (auto *tree : {view.leftTree(), view.rightTree()})
             QVERIFY(tree->columnViewportPosition(column) + tree->columnWidth(column)
