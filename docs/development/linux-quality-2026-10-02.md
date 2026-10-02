@@ -265,3 +265,16 @@ SyncBaseline 116，共 302 passed / 0 failed / 1 Windows 专属 skipped。
 纯换算启用 UBSan 和 -Werror；三时区重跑结果一致。生产 Win32、helper、纯
 测试和 FileSystem 测试四个翻译单元通过官方 Qt 5.15.2 头/i686 -Werror，
 旧的两处 FILETIME 溢出编译警告已消除。原生 Windows MinGW8 仍待正式 CI。
+
+## PLAT-008 / #330：Windows 目录类型错误的诊断
+
+ERROR_DIRECTORY（267）现在归为 NotDirectory，并保留 Win32 原码与符号名称，
+避免把对普通文件的目录枚举报成 Unknown。官方值由 Windows SDK static_assert
+校验；目录非空仍保持原分类，未混成可重试的 Busy。
+
+新增纯分类/诊断断言在旧源码上明确失败，修复后 FileSystem 69 passed /
+0 failed / 1 Windows 专属 skipped；真实 Linux 枚举检查仍在全套执行。
+完整 filesystem.cpp 以官方 Windows Qt 5.15.2 头和 i686 -Werror 编译通过。
+Windows 实际文件枚举行为仍由正式 CI 对原用例验证。
+
+错误码依据：https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-

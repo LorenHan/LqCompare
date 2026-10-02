@@ -189,6 +189,7 @@ constexpr unsigned long InvalidName = 123;             ///< ERROR_INVALID_NAME
 constexpr unsigned long DiskFull = 112;                ///< ERROR_DISK_FULL
 constexpr unsigned long FilenameExceededRange = 206;   ///< ERROR_FILENAME_EXCED_RANGE
 constexpr unsigned long DirectoryNotEmpty = 145;       ///< ERROR_DIR_NOT_EMPTY
+constexpr unsigned long Directory = 267;              ///< ERROR_DIRECTORY
 } // namespace Win32Error
 
 /// 把 Win32 错误码归类（PRD: PLAT-002、PLAT-008）。

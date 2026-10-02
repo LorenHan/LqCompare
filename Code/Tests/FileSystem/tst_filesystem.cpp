@@ -432,6 +432,13 @@ void TstFileSystem::classifyWindowsAccessDeniedIsNotBusy()
 void TstFileSystem::classifyWindowsErrorCodes()
 {
     QCOMPARE(classifyWindowsErrorCode(0), FileSystemError::None);
+    // 对普通文件枚举目录的真实 Win32 返回值，不能落到无意义的 Unknown。
+    QCOMPARE(classifyWindowsErrorCode(267), FileSystemError::NotDirectory);
+    const ErrorCode directoryError = fromWindowsError(267);
+    QCOMPARE(directoryError.raw, qint64(267));
+    QCOMPARE(directoryError.domain, ErrorDomain::Win32);
+    QCOMPARE(errorDetail(directoryError), QStringLiteral("Win32 267（ERROR_DIRECTORY）"));
+    QVERIFY(!isRetryable(directoryError.category));
     QCOMPARE(classifyWindowsErrorCode(Win32Error::FileNotFound), FileSystemError::NotFound);
     QCOMPARE(classifyWindowsErrorCode(Win32Error::PathNotFound), FileSystemError::NotFound);
     QCOMPARE(classifyWindowsErrorCode(Win32Error::WriteProtect), FileSystemError::ReadOnly);
