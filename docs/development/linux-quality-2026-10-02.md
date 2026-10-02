@@ -91,3 +91,22 @@ Linux 的真实 AppIntegration 基线在打开并关闭五种会话后崩溃。A
   在前一提交 `ca66cde` 已成功：3786 passed / 0 failed / 2 skipped，原 Folder
   崩溃不再出现。该 CI 排除 AppIntegration、CommandActions，并跳过主程序构建/打包
 - 上述两类验证互补；macOS、Windows 的本轮结果仍需单独读取，不据此推断通过
+
+## PLAT-001 / #322：Windows 文本/合并文件标识构建
+
+Windows 基线的 14 个套件在 `textdocument.cpp` 编译失败：`DWORD` 直接传给
+`QByteArray::number` 有重载歧义，且 `QDir` 缺少直接 include。文本保存和合并
+输出的同类标识/变更令牌统一显式转换为 `qulonglong`，保留无符号十进制值；
+POSIX 分支不变。依据是 [Windows DWORD 定义](https://learn.microsoft.com/en-us/windows/win32/winprog/windows-data-types)
+和 [Qt 的 number 重载](https://doc.qt.io/archives/qt-5.15/qbytearray.html#number)。
+
+提交前验证：
+
+- 从两份生产源码提取实际格式表达式，以 `unsigned long` 字段构建编译探针：
+  原代码明确报重载歧义；修复后构建并运行通过
+- 探针核对 0、2147483647、2147483648、4294967295，以及混合字段顺序与分隔符
+- Linux Text / TextRules / TextView 合计 88 passed；MergeOutput 19 passed
+
+上述探针验证的是 C++ 重载与格式，不是假扮 Windows 文件系统。实际 Win32
+调用及完整 MinGW 8.1 构建仍由此次推送后的 Windows CI 判定；重解析点和注册表
+的其它已知构建失败另行处理，不在此提交宣称全部修好。
