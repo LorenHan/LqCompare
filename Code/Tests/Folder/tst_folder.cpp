@@ -1,3 +1,5 @@
+#include "../Support/patchtestsymlink.h"
+
 #include <QtTest>
 
 #include "entrystatus.h"
@@ -88,7 +90,35 @@ struct Pair
     Pair() { QDir().mkpath(left); QDir().mkpath(right); }
 };
 
-// Keep real files for content I/O while injecting metadata/enumeration failures.
+// 注入条件和原生枚举结果必须使用同一套路径键：Qt 夹具使用正斜杠，Windows
+// 枚举器返回反斜杠。只在 Windows 语义下转换，POSIX 的反斜杠仍是合法文件名。
+// separator 可显式传入，让非 Windows 主机也能验证注入器的双向键转换。
+QString fixturePathKey(QString path, QChar separator = QDir::separator())
+{
+    if (separator == QLatin1Char('\\'))
+        path.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    return path;
+}
+
+template<typename Value>
+class FixturePathMap
+{
+public:
+    explicit FixturePathMap(QChar separator = QDir::separator()) : m_separator(separator) {}
+
+    void insert(const QString &path, const Value &value)
+    { m_values.insert(fixturePathKey(path, m_separator), value); }
+    bool contains(const QString &path) const
+    { return m_values.contains(fixturePathKey(path, m_separator)); }
+    Value value(const QString &path, const Value &fallback = Value()) const
+    { return m_values.value(fixturePathKey(path, m_separator), fallback); }
+
+private:
+    const QChar m_separator;
+    QHash<QString, Value> m_values;
+};
+
+// 内容仍读真实文件，只注入元数据和枚举错误。
 class FaultFileSystem : public Files::FileSystem
 {
 public:
@@ -96,13 +126,13 @@ public:
     QString unreadableDirectory;
     QString unreadableFile;
     QString changingFile;
-    QHash<QString, QString> aliases;
+    FixturePathMap<QString> aliases;
     // DIR-008 第 1 条要造一个「申报尺寸相同、实际读起来更短」的右侧：
     // physicalPaths 把逻辑路径指向另一个**真的**文件，frozenInfo 让申报的元数据
     // 在整场比较里保持第一次读到的样子（否则「大小相等」这条前置当场就不成立，
     // 循环压根进不去，那个 break 也就无从观察）。
-    QHash<QString, QString> physicalPaths;
-    QHash<QString, Files::FileInfo> frozenInfo;
+    FixturePathMap<QString> physicalPaths;
+    FixturePathMap<Files::FileInfo> frozenInfo;
     mutable int fileStats = 0;
     Qt::CaseSensitivity caseSensitivity() const override { return native->caseSensitivity(); }
     QChar separator() const override { return native->separator(); }
@@ -116,11 +146,11 @@ public:
     {
         if (frozenInfo.contains(p))
             return frozenInfo.value(p);
-        if (p == unreadableFile) {
+        if (fixturePathKey(p) == fixturePathKey(unreadableFile)) {
             if (e) *e = Files::FileSystemError::PermissionDenied;
             return {};
         }
-        if (p == changingFile && ++fileStats == 2)
+        if (fixturePathKey(p) == fixturePathKey(changingFile) && ++fileStats == 2)
             writeFile(p, QByteArray("changed while comparing"));
         auto info = native->stat(p, e);
         if (aliases.contains(p)) info.name = aliases.value(p);
@@ -130,7 +160,7 @@ public:
     bool exists(const QString &p, Files::ErrorCode *e) const override { return native->exists(p, e); }
     QVector<Files::FileInfo> enumerateDirectory(const QString &p, Files::ErrorCode *e) const override
     {
-        if (p == unreadableDirectory) {
+        if (fixturePathKey(p) == fixturePathKey(unreadableDirectory)) {
             if (e) *e = Files::FileSystemError::PermissionDenied;
             return {};
         }
@@ -183,6 +213,47 @@ class FolderTests : public QObject
 {
     Q_OBJECT
 private slots:
+    void faultFixturePathKeysFollowTargetSeparators_data()
+    {
+        QTest::addColumn<QString>("configured");
+        QTest::addColumn<QString>("queried");
+        QTest::addColumn<QChar>("separator");
+        QTest::addColumn<bool>("matches");
+        const QString qtPath = QStringLiteral("C:/scan/文件.txt");
+        const QString winPath = QStringLiteral("C:\\scan\\文件.txt");
+        QTest::newRow("windows-qt-to-native") << qtPath << winPath << QChar('\\') << true;
+        QTest::newRow("windows-native-to-qt") << winPath << qtPath << QChar('\\') << true;
+        QTest::newRow("windows-different-file")
+            << qtPath << QStringLiteral("C:/scan/另一文件.txt") << QChar('\\') << false;
+        QTest::newRow("posix-literal-backslash")
+            << QStringLiteral("/scan/a\\b") << QStringLiteral("/scan/a\\b") << QChar('/') << true;
+        QTest::newRow("posix-backslash-is-not-directory")
+            << QStringLiteral("/scan/a\\b") << QStringLiteral("/scan/a/b") << QChar('/') << false;
+        QTest::newRow("posix-directory-is-not-backslash")
+            << QStringLiteral("/scan/a/b") << QStringLiteral("/scan/a\\b") << QChar('/') << false;
+    }
+
+    void faultFixturePathKeysFollowTargetSeparators()
+    {
+        QFETCH(QString, configured);
+        QFETCH(QString, queried);
+        QFETCH(QChar, separator);
+        QFETCH(bool, matches);
+        // 标量条件和三个映射共用规则，插入端与查询端都要规范化。
+        QCOMPARE(fixturePathKey(configured, separator) == fixturePathKey(queried, separator), matches);
+        FixturePathMap<QString> paths(separator);
+        paths.insert(configured, QStringLiteral("injected"));
+        QCOMPARE(paths.contains(queried), matches);
+        QCOMPARE(paths.value(queried, QStringLiteral("untouched")),
+                 matches ? QStringLiteral("injected") : QStringLiteral("untouched"));
+        if (separator == QDir::separator()) {
+            QCOMPARE(fixturePathKey(configured) == fixturePathKey(queried), matches);
+            FixturePathMap<QString> nativePaths;
+            nativePaths.insert(configured, QStringLiteral("injected"));
+            QCOMPARE(nativePaths.contains(queried), matches);
+        }
+    }
+
     void recursivePairsAndStates()
     {
         Pair pair;
@@ -503,17 +574,14 @@ private slots:
 
     void linksAreComparedWithoutFollowing()
     {
-#ifdef Q_OS_WIN
-        QSKIP("Creating symbolic links on Windows requires a privileged test account.");
-#else
         Pair pair;
-        QVERIFY(QFile::link(pair.left, pair.left + "/cycle"));
-        QVERIFY(QFile::link(pair.right, pair.right + "/cycle"));
-        QVERIFY(QFile::link(pair.temp.path() + "/missing", pair.left + "/dangling"));
-        QVERIFY(QFile::link(pair.temp.path() + "/missing", pair.right + "/dangling"));
+        LQCOMPARE_REQUIRE_PATCH_SYMLINK(pair.left, pair.left + "/cycle", true);
+        LQCOMPARE_REQUIRE_PATCH_SYMLINK(pair.right, pair.right + "/cycle", true);
+        LQCOMPARE_REQUIRE_PATCH_SYMLINK(pair.temp.path() + "/missing", pair.left + "/dangling", false);
+        LQCOMPARE_REQUIRE_PATCH_SYMLINK(pair.temp.path() + "/missing", pair.right + "/dangling", false);
         // 指向自己所在子树内部的链接：不是循环，两侧目标串相同，照常判相同。
-        QVERIFY(QFile::link(QStringLiteral("sub/nested"), pair.left + "/inward"));
-        QVERIFY(QFile::link(QStringLiteral("sub/nested"), pair.right + "/inward"));
+        LQCOMPARE_REQUIRE_PATCH_SYMLINK(QStringLiteral("sub/nested"), pair.left + "/inward", true);
+        LQCOMPARE_REQUIRE_PATCH_SYMLINK(QStringLiteral("sub/nested"), pair.right + "/inward", true);
         const auto result = Folder::compare(pair.left, pair.right);
         QCOMPARE(result.entries.size(), 3);
         // 「不跟随」是终止递归的**手段**，DIR-003 第 5 条要的是「检测到并记下来」：
@@ -529,7 +597,6 @@ private slots:
         QCOMPARE(findEntry(result, "inward")->status, Folder::Status::Same);
         // 结构性错误必须自报：整次比较不能声称自己完整。
         QVERIFY(!result.complete);
-#endif
     }
 
     void recursionTierTableAndMappingStayConsistent()
@@ -739,7 +806,10 @@ private slots:
     {
         // 纯函数先按形状铺一张表：判据是「解析出来的目标等于链接自身、
         // 或是链接自身的严格上级」——它同时覆盖三种表面不同、实质相同的情形。
-        const QString root = QStringLiteral("/scan/root");
+        // Windows 的 /scan/root 是当前盘根相对路径，QFileInfo::absolutePath 会补盘符。
+        // 夹具必须从真正的文件系统根构造，保证链接和目标都在同一种绝对路径空间。
+        const QString filesystemRoot = QDir::rootPath();
+        const QString root = filesystemRoot + QStringLiteral("scan/root");
         struct Row
         {
             const char *relative;
@@ -765,8 +835,11 @@ private slots:
         };
         QStringList failures;
         for (const auto &row : rows) {
+            QString target = QString::fromUtf8(row.target);
+            if (target.startsWith(QLatin1Char('/')))
+                target = filesystemRoot + target.mid(1);
             const bool detected = Folder::linkTargetReentersAncestor(
-                root, QString::fromUtf8(row.relative), QString::fromUtf8(row.target));
+                root, QString::fromUtf8(row.relative), target);
             if (detected != row.cycle) {
                 failures << QStringLiteral("%1 → 「%2」（%3）：期望 %4，实际 %5")
                                 .arg(QString::fromUtf8(row.relative),
@@ -778,21 +851,20 @@ private slots:
         }
         QVERIFY2(failures.isEmpty(), qPrintable(failures.join(QStringLiteral("\n"))));
 
-#ifndef Q_OS_WIN
         // 引擎侧：真的造出循环链接，它必须是一条**错误条目**，而且整次比较
         // 自报不完整；而指向自己下级子树的链接必须照常比较、不被误伤。
         Pair pair;
-        // 先把目录建出来，再建链接：`QFile::link` 不会替你造父目录。
+        // 先把目录建出来，再建原生符号链接；Windows 的 QFile::link 是快捷方式。
         QVERIFY(writeFile(pair.left + "/a/keep.txt", "keep"));
         QVERIFY(writeFile(pair.right + "/a/keep.txt", "keep"));
         QVERIFY(writeFile(pair.left + "/sub/file.txt", "x"));
         QVERIFY(writeFile(pair.right + "/sub/file.txt", "x"));
-        QVERIFY(QFile::link(QStringLiteral("."), pair.left + "/self"));
-        QVERIFY(QFile::link(QStringLiteral("."), pair.right + "/self"));
-        QVERIFY(QFile::link(QStringLiteral(".."), pair.left + "/a/up"));
-        QVERIFY(QFile::link(QStringLiteral(".."), pair.right + "/a/up"));
-        QVERIFY(QFile::link(QStringLiteral("sub"), pair.left + "/down"));
-        QVERIFY(QFile::link(QStringLiteral("sub"), pair.right + "/down"));
+        LQCOMPARE_REQUIRE_PATCH_SYMLINK(QStringLiteral("."), pair.left + "/self", true);
+        LQCOMPARE_REQUIRE_PATCH_SYMLINK(QStringLiteral("."), pair.right + "/self", true);
+        LQCOMPARE_REQUIRE_PATCH_SYMLINK(QStringLiteral(".."), pair.left + "/a/up", true);
+        LQCOMPARE_REQUIRE_PATCH_SYMLINK(QStringLiteral(".."), pair.right + "/a/up", true);
+        LQCOMPARE_REQUIRE_PATCH_SYMLINK(QStringLiteral("sub"), pair.left + "/down", true);
+        LQCOMPARE_REQUIRE_PATCH_SYMLINK(QStringLiteral("sub"), pair.right + "/down", true);
         const auto result = Folder::compare(pair.left, pair.right);
         QCOMPARE(findEntry(result, "self")->status, Folder::Status::Error);
         QCOMPARE(findEntry(result, "a/up")->status, Folder::Status::Error);
@@ -802,7 +874,6 @@ private slots:
         QCOMPARE(findEntry(result, "down")->status, Folder::Status::Same);
         QCOMPARE(findEntry(result, "a/keep.txt")->status, Folder::Status::Same);
         QVERIFY(!result.complete);
-#endif
     }
 
     void recursionControlsDriveOptionsAndRescan()
@@ -1037,7 +1108,7 @@ private slots:
         QVERIFY(same.isValid());
         QVERIFY(QMetaObject::invokeMethod(tree, "activated", Q_ARG(QModelIndex, same)));
         QCOMPARE(activated.count(), 1);
-        QCOMPARE(activated.first().first().toString(), pair.left + "/sub/same");
+        QCOMPARE(QDir::fromNativeSeparators(activated.first().first().toString()), pair.left + "/sub/same");
         auto *filter = view->findChild<QComboBox *>(QStringLiteral("folderStatusFilter"));
         QVERIFY(filter);
         filter->setCurrentIndex(filter->findData(int(Folder::Status::Different)));
@@ -1181,8 +1252,8 @@ private slots:
         QVERIFY(file);
         QCOMPARE(file->status, Folder::Status::Same);
         QVERIFY(file->nameCaseDifference);
-        QCOMPARE(file->left.info.path, pair.left + "/SRC/ReadMe.txt");
-        QCOMPARE(file->right.info.path, pair.right + "/src/readme.txt");
+        QCOMPARE(QDir::fromNativeSeparators(file->left.info.path), pair.left + "/SRC/ReadMe.txt");
+        QCOMPARE(QDir::fromNativeSeparators(file->right.info.path), pair.right + "/src/readme.txt");
         QVERIFY(findEntry(result, "SRC")->hasIncludedDescendants);
     }
 
@@ -1405,7 +1476,7 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 5000);
         const auto *report = findEntry(restored.result(), QStringLiteral("Report.TXT"));
         QVERIFY(report);
-        QCOMPARE(report->right.info.path, pair.right + "/report.txt"); // Restored ignore-case pairing.
+        QCOMPARE(QDir::fromNativeSeparators(report->right.info.path), pair.right + "/report.txt"); // Restored ignore-case pairing.
         QCOMPARE(report->status, Folder::Status::Unknown); // Restored content comparison disabled.
         QCOMPARE(report->timeRelation, Folder::TimeRelation::Unknown);
         QVERIFY(!restored.result().timestampsCompared);

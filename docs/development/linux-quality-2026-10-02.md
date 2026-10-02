@@ -299,3 +299,17 @@ Qt 官方源码：
 - https://github.com/qt/qtbase/blob/v5.15.2/src/plugins/platforms/offscreen/qoffscreenintegration.h
 - https://github.com/qt/qtbase/blob/v5.15.2/src/gui/kernel/qplatformintegration.cpp
 - https://github.com/qt/qtbase/blob/v5.15.2/src/widgets/dialogs/qmessagebox.cpp
+
+## PLAT-010 / #332：目录比较的原生路径夹具
+
+错误注入的标量与映射在插入/查询两端使用目标平台的分隔符规则；POSIX
+字面反斜杠仍是文件名，不误当目录。路径预期保留大小写与身份检查，只统一
+本机分隔符。循环链接纯表使用本机真实绝对根，真实链接用例不再把 Windows
+快捷方式当符号链接，也不再一概跳过 Windows。
+
+Folder 三轮全套各 68 passed / 0 failed / 0 skipped；最终又经新运行器验证
+68/0/0、平台 offscreen。此 68 项证据对应本节夹具与上节运行器的组合源码。
+独立纯夹具验证 18/0，旧原始键、只规范化一端、无条件替换 POSIX 反斜杠等
+变异都被断言抓住。官方 Windows Qt 5.15.2 头的 i686 编译成功；保留并单独
+豁免原有三条 dangling-reference 警告，不能宣称该翻译单元全警告为零。
+原生 Windows 链接权限、路径注入与完整弹窗回归仍以提交后的 CI 为准。
