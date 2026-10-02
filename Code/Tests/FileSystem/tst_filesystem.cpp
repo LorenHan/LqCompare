@@ -13,10 +13,23 @@
 #ifndef Q_OS_WIN
 #include <unistd.h>
 #endif
+#ifdef Q_OS_MACOS
+#include <fcntl.h>
+#include <sys/stat.h>
+#endif
 
 using namespace LqCompare::Files;
 
 namespace QTest {
+
+// 时间比较失败时要保留原始纳秒值；只有「不相等」无法诊断平台的 birthtime 行为。
+template <>
+char *toString(const FileTime &time)
+{
+    if (!time.isValid())
+        return qstrdup("invalid FileTime");
+    return qstrdup(qPrintable(QStringLiteral("UTC %1 ns").arg(time.nanosecondsSinceEpoch())));
+}
 
 /// 让失败信息里直接显示错误标识（"busy"、"permission-denied"），
 /// 而不是「Compared values are not the same」。
@@ -859,21 +872,57 @@ void TstFileSystem::nativeTimesPreserveUnspecifiedFields()
     const FileTime modified = FileTime::fromSecondsSinceEpoch(1700000000);
     const FileTime accessed = FileTime::fromSecondsSinceEpoch(1600000000);
     ErrorCode error;
+    // 先向未来修改 mtime：三平台都必须保留创建时间，避免把 macOS 的回溯规则
+    // 扩大成「在 macOS 上不检查创建时间」。
+    const FileTime forward = FileTime::fromDateTime(QDateTime::currentDateTimeUtc().addDays(1));
+    QVERIFY2(fileSystem->setTimes(path, forward, accessed, &error), qPrintable(errorReport(error)));
+    FileInfo info = fileSystem->stat(path);
+    QCOMPARE(info.lastModified, forward);
+    QCOMPARE(info.lastAccessed, accessed);
+    QCOMPARE(info.created, originalCreated);
+
     QVERIFY2(fileSystem->setTimes(path, modified, accessed, &error), qPrintable(errorReport(error)));
 
     // 无效值是「保留」，有效的 Unix 纪元 0 则必须确实写入，二者不能混淆。
     const FileTime epoch = FileTime::fromNanosecondsSinceEpoch(0);
     QVERIFY2(fileSystem->setTimes(path, epoch, FileTime(), &error), qPrintable(errorReport(error)));
-    FileInfo info = fileSystem->stat(path);
+    info = fileSystem->stat(path);
     QCOMPARE(info.lastModified, epoch);
     QCOMPARE(info.lastAccessed, accessed);
-    QCOMPARE(info.created, originalCreated);
+
+    FileTime expectedCreated = originalCreated;
+#ifdef Q_OS_MACOS
+    // macOS 的文件系统可能随向过去修改 mtime 一起前移 birthtime。Apple 的
+    // HFS 实现明确如此；不能把 Windows 的创建时间不变规则强加给它：
+    // https://github.com/apple-oss-distributions/hfs/blob/main/core/hfs_vnops.c#L1471-L1482
+    // 在同一临时目录用原生 API 建立独立对照，也兼容不前移 birthtime 的挂载盘。
+    QFile reference(temporaryDir.filePath(QStringLiteral("native-times.txt")));
+    QVERIFY(reference.open(QIODevice::WriteOnly));
+    reference.close();
+    const QByteArray nativeReference = QFile::encodeName(reference.fileName());
+    struct stat before;
+    struct stat after;
+    QCOMPARE(::stat(nativeReference.constData(), &before), 0);
+    struct timespec times[2] = {{1600000000, 0}, {1700000000, 0}};
+    QCOMPARE(::utimensat(AT_FDCWD, nativeReference.constData(), times, AT_SYMLINK_NOFOLLOW), 0);
+    times[0].tv_nsec = UTIME_OMIT;
+    times[1].tv_sec = 0;
+    QCOMPARE(::utimensat(AT_FDCWD, nativeReference.constData(), times, AT_SYMLINK_NOFOLLOW), 0);
+    QCOMPARE(::stat(nativeReference.constData(), &after), 0);
+    if (before.st_birthtimespec.tv_sec != after.st_birthtimespec.tv_sec
+        || before.st_birthtimespec.tv_nsec != after.st_birthtimespec.tv_nsec) {
+        expectedCreated = FileTime::fromUnixTime(after.st_birthtimespec.tv_sec,
+                                                 after.st_birthtimespec.tv_nsec);
+    }
+#endif
+    // Windows 仍严格等于最初创建时间；macOS 只允许与原生对照相同的回溯结果。
+    QCOMPARE(info.created, expectedCreated);
 
     QVERIFY2(fileSystem->setTimes(path, FileTime(), epoch, &error), qPrintable(errorReport(error)));
     info = fileSystem->stat(path);
     QCOMPARE(info.lastModified, epoch);
     QCOMPARE(info.lastAccessed, epoch);
-    QCOMPARE(info.created, originalCreated);
+    QCOMPARE(info.created, expectedCreated);
 
     error = fromSystemError(EACCES);
     QVERIFY2(fileSystem->setTimes(path, FileTime(), FileTime(), &error), qPrintable(errorReport(error)));
@@ -882,8 +931,12 @@ void TstFileSystem::nativeTimesPreserveUnspecifiedFields()
     info = fileSystem->stat(path);
     QCOMPARE(info.lastModified, epoch);
     QCOMPARE(info.lastAccessed, epoch);
-    QCOMPARE(info.created, originalCreated);
+    QCOMPARE(info.created, expectedCreated);
     QVERIFY(fileSystem->setTimes(path, modified, FileTime(), nullptr));
+    info = fileSystem->stat(path);
+    QCOMPARE(info.lastModified, modified);
+    QCOMPARE(info.lastAccessed, epoch);
+    QCOMPARE(info.created, expectedCreated);
 }
 
 void TstFileSystem::nativeTimesReportMissingPath()
