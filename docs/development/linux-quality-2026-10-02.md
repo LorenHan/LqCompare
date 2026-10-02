@@ -191,3 +191,15 @@ API 缺省目标，解决旧 MinGW 隐藏 `CreateSymbolicLinkW` 声明的编译�
 该完整测试源码使用官方 Windows Qt 5.15.2 头和 i686 编译器生成 i386 COFF，
 `-Wall -Wextra -Werror` 通过；Linux MergeOutput 全套 19 passed / 0 failed / 0 skipped。
 Windows 真正的链接权限与别名保护断言仍待原生 CI。
+
+## PLAT-010 / #332：过滤器的平台策略测试矩阵
+
+Windows 的 8 条名称过滤/过滤栈失败来自测试隐含 POSIX 前提，生产匹配代码
+不需要修改。测试显式覆盖 POSIX 与 Windows 两套策略、覆盖/清除大小写规则、
+三层逐层匹配和平台往返重解析；本机默认另用编译目标独立断言。
+
+原生 Linux：NameFilter 101、FilterStack 90 全部通过且无跳过。隔离副本只把
+默认策略改为 Windows，原测试精确复现 5+3 条失败；修订后的跨平台用例全过。
+新增本机默认护栏在该故意错误的 Linux 默认变异中另报 3+1 失败，证明不是
+拿被测函数生成预期值的假绿。生产默认行为未改：过滤器 Windows 策略不敏感，
+POSIX 策略敏感；此策略模拟不是原生 Windows 运行证据。

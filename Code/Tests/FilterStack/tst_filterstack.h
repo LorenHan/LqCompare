@@ -69,10 +69,15 @@ private slots:
     void activeLayersListsOnlyTheActiveOnes();
     void setLayerStateReparsesFromTheDeclaration();
     void setLayerStateForcesTheLayerField();
+    void caseSensitivityOverrideAppliesToEveryLayer_data();
     void caseSensitivityOverrideAppliesToEveryLayer();
+    void caseOverrideSurvivesLaterDeclarations_data();
     void caseOverrideSurvivesLaterDeclarations();
+    void switchingPlatformReparsesEveryLayer_data();
     void switchingPlatformReparsesEveryLayer();
+    void clearingCaseOverrideReturnsToPlatformDefault_data();
     void clearingCaseOverrideReturnsToPlatformDefault();
+    void nativePlatformDefaultMatchesHost();
     void settingTheSamePlatformIsANoOp();
 
     // ---------- D 表达式与面板（第 3 条） ----------
