@@ -71,6 +71,8 @@ public:
         result.leftRoot = cleanRoot(leftRoot);
         result.rightRoot = cleanRoot(rightRoot);
         result.scanMaskDeclaration = options.scanMaskDeclaration;
+        result.timestampsCompared = options.compareTimestamps;
+        result.timeToleranceMs = options.timeToleranceMs;
         // 有效基线才置位：界面与报表靠这一位解释「为什么这一条不是两侧均改」。
         result.baselineApplied = baseline != nullptr && validateBaselineView(*baseline).isEmpty();
         const auto parsed = Filter::MaskFilter::parse(options.scanMaskDeclaration);
@@ -445,7 +447,8 @@ private:
             // 三个维度的补齐顺序是刻意的：先让主状态定稿（上面全部早退分支都跑完），
             // 再补时间关系与基线细化。基线细化会改写主状态，因此它必须在最后；
             // 而它又只作用在叶子上（目录的结论由子条目汇总，见第 5 条）。
-            entry.timeRelation = timeRelationFor(entry);
+            entry.timeRelation = options.compareTimestamps
+                ? timeRelationFor(entry, options.timeToleranceMs) : TimeRelation::Unknown;
             if (baseline && !entry.isDirectory())
                 applyBaselineStatus(entry, *baseline);
             const int index = result.entries.size();
@@ -531,7 +534,10 @@ Result compare(const QString &leftRoot, const QString &rightRoot, const Options 
                const Files::FileSystem *fileSystem, const BaselineView *baseline)
 {
     std::unique_ptr<Files::FileSystem> native(fileSystem ? nullptr : Files::createNativeFileSystem());
-    return Comparison(options, cancelled, progress, fileSystem ? *fileSystem : *native, baseline)
+    // 非界面调用也只产生一份有效容差，计算与结果说明不能各用一套值。
+    Options effectiveOptions = options;
+    effectiveOptions.timeToleranceMs = qMax(0, effectiveOptions.timeToleranceMs);
+    return Comparison(effectiveOptions, cancelled, progress, fileSystem ? *fileSystem : *native, baseline)
         .run(leftRoot, rightRoot);
 }
 

@@ -7,6 +7,16 @@ namespace Folder {
 
 namespace {
 
+TimeDifference timeDifference(const Files::FileTime &left, const Files::FileTime &right)
+{
+    if (!left.isValid() || !right.isValid())
+        return {};
+    const qint64 l = left.nanosecondsSinceEpoch();
+    const qint64 r = right.nanosecondsSinceEpoch();
+    // 无符号减法避免跨纪元、极端时间戳的有符号溢出。
+    return {true, l < r, l < r ? quint64(r) - quint64(l) : quint64(l) - quint64(r)};
+}
+
 // 主状态的全部取值。校验函数拿它当参照，被校验的表是参数——
 // 「从模块内部的表读数据」会让一份故意写坏的表喂进去也永远绿。
 QVector<Status> allStatusValues()
@@ -320,24 +330,29 @@ QStringList validateTimeRelationTable(const QVector<TimeRelationDescriptor> &tab
 TimeRelation compareTimes(const Files::FileTime &left, const Files::FileTime &right,
                           qint64 toleranceMs)
 {
-    if (!left.isValid() || !right.isValid())
+    const auto delta = timeDifference(left, right);
+    if (!delta.valid)
         return TimeRelation::Unknown;
-    if (toleranceMs > 0) {
-        const qint64 delta = left.nanosecondsSinceEpoch() - right.nanosecondsSinceEpoch();
-        const qint64 tolerance = toleranceMs * 1000000;
-        if (delta <= tolerance && delta >= -tolerance)
-            return TimeRelation::Same;
-    }
-    if (left == right)
+    const quint64 tolerance = quint64(qMax(qint64(0), toleranceMs));
+    // 除法判闭区间，避免把毫秒乘成纳秒时溢出。
+    if (delta.nanoseconds / 1000000 < tolerance
+        || (delta.nanoseconds / 1000000 == tolerance && delta.nanoseconds % 1000000 == 0))
         return TimeRelation::Same;
-    return left > right ? TimeRelation::LeftNewer : TimeRelation::RightNewer;
+    return delta.negative ? TimeRelation::RightNewer : TimeRelation::LeftNewer;
+}
+
+TimeDifference timeDifferenceFor(const Entry &entry)
+{
+    if (!entry.left.exists() || !entry.right.exists())
+        return {};
+    return timeDifference(entry.left.info.lastModified, entry.right.info.lastModified);
 }
 
 TimeRelation timeRelationFor(const Entry &entry, qint64 toleranceMs)
 {
     // 「两侧都真实存在」这条前置只在这里说一次。孤儿项没有时间关系可言：
     // 把「缺失」当成「很旧」会凭空造出一个左右较新的结论。
-    if (!entry.left.exists() || !entry.right.exists())
+    if (!timeDifferenceFor(entry).valid)
         return TimeRelation::Unknown;
     return compareTimes(entry.left.info.lastModified, entry.right.info.lastModified, toleranceMs);
 }
@@ -532,7 +547,10 @@ QVector<ReasonLine> statusReasonLines(const Entry &entry, const Options &options
                            : contentEvidenceCoversWholeContent(entry.contentEvidence)
                            ? QObject::tr("已比较完，结论不是相同")
                            : QObject::tr("尚未看完内容")));
-    criterion(QObject::tr("时间关系：%1").arg(timeRelationLabel(entry.timeRelation)));
+    criterion(options.compareTimestamps
+        ? QObject::tr("时间关系：%1（UTC，容差 %2 ms）")
+            .arg(timeRelationLabel(entry.timeRelation)).arg(options.timeToleranceMs)
+        : QObject::tr("时间关系：已忽略时间戳。"));
     if (entry.excludedByMask)
         criterion(QObject::tr("扫描掩码：未命中包含规则。%1").arg(entry.filterReason));
     else

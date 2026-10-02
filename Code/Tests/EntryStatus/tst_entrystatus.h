@@ -24,6 +24,7 @@ private slots:
     // C 时间关系
     void timeRelationIsIndependentOfStatus();
     void compareTimesHonoursToleranceAndInvalidInput();
+    void timestampDifferenceCoversFullRangeAndNanosecondBoundary();
     void orphanEntriesHaveNoTimeRelation();
 
     // D 存在性与孤儿项

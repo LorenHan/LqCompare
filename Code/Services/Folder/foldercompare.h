@@ -148,6 +148,9 @@ struct Options
     // 字段只能加在末尾：本结构体在仓库里存在按位置聚合初始化的写法，
     // 插在中间会把既有调用点的值整体错位（与 OptionDefinition 同一条纪律）。
     qint64 compareFirstBytes = 0;
+    // 时间只影响独立的时间关系，绝不据此判定内容相同。
+    bool compareTimestamps = true;
+    int timeToleranceMs = 2000;
 };
 
 struct Result
@@ -164,6 +167,9 @@ struct Result
     // 本次比较是否真的用上了有效基线（DIR-011 第 3 条）。界面要拿它解释
     // 「为什么这一条不是两侧均改」——没有这一位，界面只能靠猜。
     bool baselineApplied = false;
+    // 保存本次扫描的开关，避免未提交的选项改写已有结果的含义。
+    bool timestampsCompared = Options().compareTimestamps;
+    int timeToleranceMs = Options().timeToleranceMs;
 };
 
 using Progress = std::function<void(int entries, const QString &relativePath)>;

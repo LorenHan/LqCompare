@@ -2,6 +2,8 @@
 
 #include "entrystatus.h"
 
+#include <limits>
+
 #include <QFile>
 #include <QSet>
 #include <functional>
@@ -325,6 +327,37 @@ void EntryStatusTests::compareTimesHonoursToleranceAndInvalidInput()
 
     QCOMPARE(Folder::timeRelationLabel(Folder::TimeRelation::LeftNewer), QStringLiteral("左侧较新"));
     QCOMPARE(Folder::timeRelationLabel(Folder::TimeRelation::RightNewer), QStringLiteral("右侧较新"));
+}
+
+void EntryStatusTests::timestampDifferenceCoversFullRangeAndNanosecondBoundary()
+{
+    const auto minimum = Files::FileTime::fromNanosecondsSinceEpoch(std::numeric_limits<qint64>::min());
+    const auto maximum = Files::FileTime::fromNanosecondsSinceEpoch(std::numeric_limits<qint64>::max());
+    QCOMPARE(Folder::compareTimes(maximum, minimum, 2000), Folder::TimeRelation::LeftNewer);
+    QCOMPARE(Folder::compareTimes(minimum, maximum, 2000), Folder::TimeRelation::RightNewer);
+    QCOMPARE(Folder::compareTimes(minimum, maximum, std::numeric_limits<qint64>::max()),
+             Folder::TimeRelation::Same);
+    const auto zero = Files::FileTime::fromNanosecondsSinceEpoch(0);
+    const auto boundary = Files::FileTime::fromNanosecondsSinceEpoch(2000000000);
+    const auto outside = Files::FileTime::fromNanosecondsSinceEpoch(2000000001);
+    QCOMPARE(Folder::compareTimes(zero, boundary, 2000), Folder::TimeRelation::Same);
+    QCOMPARE(Folder::compareTimes(zero, outside, 2000), Folder::TimeRelation::RightNewer);
+    QCOMPARE(Folder::compareTimes(outside, zero, 2000), Folder::TimeRelation::LeftNewer);
+    QCOMPARE(Folder::compareTimes(outside, zero, -1), Folder::TimeRelation::LeftNewer);
+
+    Folder::Entry entry;
+    entry.left.info.exists = entry.right.info.exists = true;
+    entry.left.info.lastModified = minimum;
+    entry.right.info.lastModified = maximum;
+    const auto difference = Folder::timeDifferenceFor(entry);
+    QVERIFY(difference.valid);
+    QVERIFY(difference.negative);
+    QCOMPARE(difference.nanoseconds, std::numeric_limits<quint64>::max());
+    entry.left.info.exists = false;
+    QVERIFY(!Folder::timeDifferenceFor(entry).valid);
+    entry.left.info.exists = true;
+    entry.left.info.lastModified = {};
+    QVERIFY(!Folder::timeDifferenceFor(entry).valid);
 }
 
 void EntryStatusTests::orphanEntriesHaveNoTimeRelation()

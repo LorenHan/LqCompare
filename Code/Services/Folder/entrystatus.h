@@ -103,6 +103,14 @@ TimeRelation compareTimes(const Files::FileTime &left, const Files::FileTime &ri
                           qint64 toleranceMs = 0);
 // 「两侧都必须是真实存在的条目」这条前置只在这里说一次。
 TimeRelation timeRelationFor(const Entry &entry, qint64 toleranceMs = 0);
+// 左减右的精确差值；符号与无符号幅度分开，覆盖整个 UTC 纳秒范围。
+struct TimeDifference
+{
+    bool valid = false;
+    bool negative = false;
+    quint64 nanoseconds = 0;
+};
+TimeDifference timeDifferenceFor(const Entry &entry);
 QStringList validateTimeRelationTable(const QVector<TimeRelationDescriptor> &table);
 
 // ---------------------------------------------------------------------------

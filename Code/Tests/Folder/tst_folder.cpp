@@ -13,8 +13,10 @@
 #include <QComboBox>
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QDoubleSpinBox>
 #include <QDir>
 #include <QFile>
+#include <QHeaderView>
 #include <QIcon>
 #include <QImage>
 #include <QLineEdit>
@@ -26,9 +28,11 @@
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QTemporaryDir>
+#include <QToolButton>
 #include <QTreeView>
 
 #include <algorithm>
+#include <limits>
 
 using namespace LqCompare;
 
@@ -169,7 +173,8 @@ bool sameOptions(const Folder::Options &a, const Folder::Options &b)
     return a.recursive == b.recursive && a.compareContent == b.compareContent
         && a.maximumDepth == b.maximumDepth && a.scanMaskDeclaration == b.scanMaskDeclaration
         && a.nameCaseSensitivity == b.nameCaseSensitivity
-        && a.compareFirstBytes == b.compareFirstBytes;
+        && a.compareFirstBytes == b.compareFirstBytes
+        && a.compareTimestamps == b.compareTimestamps && a.timeToleranceMs == b.timeToleranceMs;
 }
 
 } // namespace
@@ -1349,6 +1354,8 @@ private slots:
         chosen.compareContent = false;
         chosen.maximumDepth = 7;
         chosen.compareFirstBytes = 4096;
+        chosen.compareTimestamps = false;
+        chosen.timeToleranceMs = 1750;
 
         FolderCompareSession original(pair.left, pair.right);
         std::unique_ptr<QWidget> originalWidget(original.createWidget());
@@ -1359,10 +1366,12 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(originalFinished.count(), 1, 5000);
         QVERIFY(sameOptions(original.comparisonOptions(), chosen));
         const QVariantMap values = savedSettings(original.sessionSettings());
-        QCOMPARE(values.size(), 6);
+        QCOMPARE(values.size(), 8);
         QCOMPARE(values.value(QStringLiteral("folder.scanMaskDeclaration")).toString(), chosen.scanMaskDeclaration);
         QCOMPARE(values.value(QStringLiteral("folder.nameCaseSensitivity")).toInt(), int(Qt::CaseInsensitive));
         QCOMPARE(values.value(QStringLiteral("folder.compareFirstBytes")).toLongLong(), qint64(4096));
+        QCOMPARE(values.value(QStringLiteral("folder.compareTimestamps")).toBool(), false);
+        QCOMPARE(values.value(QStringLiteral("folder.timeToleranceMs")).toInt(), 1750);
 
         original.view()->findChild<QCheckBox *>(QStringLiteral("folderHideEmpty"))->setChecked(true);
         original.view()->findChild<QCheckBox *>(QStringLiteral("folderHideExcluded"))->setChecked(false);
@@ -1398,6 +1407,8 @@ private slots:
         QVERIFY(report);
         QCOMPARE(report->right.info.path, pair.right + "/report.txt"); // Restored ignore-case pairing.
         QCOMPARE(report->status, Folder::Status::Unknown); // Restored content comparison disabled.
+        QCOMPARE(report->timeRelation, Folder::TimeRelation::Unknown);
+        QVERIFY(!restored.result().timestampsCompared);
         QVERIFY(!findEntry(restored.result(), "ignored.txt")->inComparison()); // Restored mask.
         QVERIFY(!findEntry(restored.result(), "sub/deep.txt")); // Restored nonrecursive scope.
 
@@ -1435,6 +1446,9 @@ private slots:
         next.maximumDepth = -1;
         invalid.append(next);
         next.maximumDepth = 257;
+        invalid.append(next);
+        next = accepted;
+        next.timeToleranceMs = -1;
         invalid.append(next);
         for (const auto &options : invalid) {
             QString error;
@@ -1479,6 +1493,350 @@ private slots:
         session.sessionSettings()->clear();
         QVERIFY(sameOptions(session.comparisonOptions(), Folder::Options()));
         QVERIFY(sameOptions(session.view()->options(), Folder::Options()));
+    }
+
+    // DIR-005：同一批真实内容配固定元数据，时间开关不改变内容证据。
+    void timestampOptionsControlEngineWithoutChangingContent()
+    {
+        Pair pair;
+        FaultFileSystem fs;
+        const qint64 base = 1700000000000000000LL;
+        for (const QString &name : {QStringLiteral("boundary"), QStringLiteral("outside"),
+                                   QStringLiteral("different")}) {
+            for (const auto &root : {pair.left, pair.right}) {
+                const QString path = root + "/" + name;
+                QVERIFY(writeFile(path, root == pair.right && name == "different" ? "DIFF" : "same"));
+                auto info = fs.native->stat(path);
+                const qint64 delta = root == pair.left
+                    ? name == "outside" ? 2000000001LL : 2000000000LL : 0;
+                info.lastModified = Files::FileTime::fromNanosecondsSinceEpoch(base + delta);
+                fs.frozenInfo.insert(path, info);
+            }
+        }
+        Folder::Options options;
+        QVERIFY(options.compareTimestamps);
+        QCOMPARE(options.timeToleranceMs, 2000);
+        const auto initial = Folder::compare(pair.left, pair.right, options, nullptr, {}, &fs);
+        QCOMPARE(findEntry(initial, "boundary")->timeRelation, Folder::TimeRelation::Same);
+        QCOMPARE(findEntry(initial, "outside")->timeRelation, Folder::TimeRelation::LeftNewer);
+        QCOMPARE(findEntry(initial, "different")->timeRelation, Folder::TimeRelation::Same);
+        QCOMPARE(findEntry(initial, "different")->status, Folder::Status::Different);
+        QVERIFY(initial.timestampsCompared);
+        options.timeToleranceMs = 0;
+        const auto strict = Folder::compare(pair.left, pair.right, options, nullptr, {}, &fs);
+        QCOMPARE(findEntry(strict, "boundary")->timeRelation, Folder::TimeRelation::LeftNewer);
+        options.timeToleranceMs = -1;
+        const auto normalized = Folder::compare(pair.left, pair.right, options, nullptr, {}, &fs);
+        QCOMPARE(normalized.timeToleranceMs, 0);
+        QCOMPARE(findEntry(normalized, "boundary")->timeRelation, Folder::TimeRelation::LeftNewer);
+        FolderCompareView normalizedView;
+        normalizedView.setResult(normalized);
+        QVERIFY(normalizedView.statusExplanation(indexNamed(normalizedView.leftTree()->model(), "boundary"))
+                .contains(QStringLiteral("容差 0 ms")));
+        options.compareTimestamps = false;
+        const auto ignored = Folder::compare(pair.left, pair.right, options, nullptr, {}, &fs);
+        QVERIFY(!ignored.timestampsCompared);
+        for (int i = 0; i < ignored.entries.size(); ++i) {
+            QCOMPARE(ignored.entries.at(i).timeRelation, Folder::TimeRelation::Unknown);
+            QCOMPARE(ignored.entries.at(i).status, initial.entries.at(i).status);
+            QCOMPARE(ignored.entries.at(i).contentEvidence, initial.entries.at(i).contentEvidence);
+        }
+        options.compareContent = false;
+        const auto metadata = Folder::compare(pair.left, pair.right, options, nullptr, {}, &fs);
+        QCOMPARE(findEntry(metadata, "boundary")->status, Folder::Status::Unknown);
+    }
+
+    void crossTimezoneMountAndDaylightSavingUseUtcInstants()
+    {
+        Pair pair;
+        FaultFileSystem fs;
+        struct Sample { const char *name; const char *left; const char *right; Folder::TimeRelation expected; };
+        const Sample samples[] = {
+            {"network-share", "2026-01-15T08:00:00+08:00", "2026-01-14T16:00:00-08:00", Folder::TimeRelation::Same},
+            {"spring-forward", "2026-03-08T01:30:00-05:00", "2026-03-08T08:30:00+02:00", Folder::TimeRelation::Same},
+            {"autumn-same-instant", "2026-11-01T01:30:00-04:00", "2026-11-01T06:30:00+01:00", Folder::TimeRelation::Same},
+            {"autumn-repeated-clock", "2026-11-01T01:30:00-04:00", "2026-11-01T01:30:00-05:00", Folder::TimeRelation::RightNewer}
+        };
+        for (const auto &sample : samples) {
+            for (int side = 0; side < 2; ++side) {
+                const QString path = (side ? pair.right : pair.left) + "/" + sample.name;
+                QVERIFY(writeFile(path, "same"));
+                auto info = fs.native->stat(path);
+                const auto date = QDateTime::fromString(QString::fromLatin1(side ? sample.right : sample.left), Qt::ISODate);
+                QVERIFY(date.isValid());
+                info.lastModified = Files::FileTime::fromDateTime(date);
+                fs.frozenInfo.insert(path, info);
+            }
+        }
+        const auto result = Folder::compare(pair.left, pair.right, {}, nullptr, {}, &fs);
+        QVERIFY(result.complete);
+        for (const auto &sample : samples) {
+            const auto *entry = findEntry(result, QString::fromLatin1(sample.name));
+            QVERIFY(entry);
+            QCOMPARE(entry->timeRelation, sample.expected);
+            QCOMPARE(entry->status, Folder::Status::Same);
+        }
+    }
+
+    void timestampControlsPreserveOptionsAndApplyPresetAtomically()
+    {
+        FolderCompareView view;
+        auto *enabled = view.findChild<QCheckBox *>(QStringLiteral("folderCompareTimestamps"));
+        auto *tolerance = view.findChild<QDoubleSpinBox *>(QStringLiteral("folderTimeTolerance"));
+        auto *preset = view.findChild<QPushButton *>(QStringLiteral("folderIgnoreTimePreset"));
+        QVERIFY(enabled && tolerance && preset);
+        QVERIFY(enabled->isChecked());
+        QCOMPARE(tolerance->value(), 2.0);
+        QVERIFY(!tolerance->accessibleName().isEmpty());
+        QSignalSpy rescan(&view, &FolderCompareView::rescanRequested);
+        Folder::Options chosen;
+        chosen.compareContent = false;
+        chosen.compareFirstBytes = 17;
+        chosen.maximumDepth = 9;
+        chosen.scanMaskDeclaration = QStringLiteral("*.txt");
+        chosen.timeToleranceMs = 1751;
+        view.setOptions(chosen);
+        QCOMPARE(rescan.count(), 0);
+        QVERIFY(sameOptions(view.options(), chosen));
+        QVector<Folder::Options> observed;
+        connect(&view, &FolderCompareView::rescanRequested, &view, [&] { observed.append(view.options()); });
+        preset->click();
+        QCOMPARE(rescan.count(), 1);
+        QCOMPARE(observed.size(), 1);
+        chosen.compareTimestamps = false;
+        chosen.compareContent = true;
+        chosen.compareFirstBytes = 0;
+        QVERIFY(sameOptions(observed.first(), chosen));
+        QVERIFY(sameOptions(view.options(), chosen));
+        QVERIFY(!tolerance->isEnabled());
+        preset->click();
+        QCOMPARE(rescan.count(), 1);
+        enabled->setChecked(true);
+        QCOMPARE(rescan.count(), 2);
+        QCOMPARE(tolerance->value(), 1.751);
+        QVERIFY(tolerance->isEnabled());
+        chosen.compareTimestamps = true;
+        chosen.timeToleranceMs = std::numeric_limits<int>::max();
+        view.setOptions(chosen);
+        QCOMPARE(rescan.count(), 2);
+        QVERIFY(sameOptions(view.options(), chosen));
+    }
+
+    void liveTimeChangesUseCurrentSessionPathsAndLatestOptions()
+    {
+        Pair pair;
+        QVERIFY(writeFile(pair.left + "/tail.txt", "same-A"));
+        QVERIFY(writeFile(pair.right + "/tail.txt", "same-B"));
+        std::unique_ptr<Files::FileSystem> fs(Files::createNativeFileSystem());
+        QVERIFY(fs->setTimes(pair.left + "/tail.txt", Files::FileTime::fromSecondsSinceEpoch(1700000003), {}));
+        QVERIFY(fs->setTimes(pair.right + "/tail.txt", Files::FileTime::fromSecondsSinceEpoch(1700000000), {}));
+        FolderCompareSession session(pair.left, pair.right);
+        Folder::Options chosen;
+        chosen.compareFirstBytes = 4;
+        QVERIFY(session.setComparisonOptions(chosen));
+        std::unique_ptr<QWidget> widget(session.createWidget());
+        auto *view = session.view();
+        auto *enabled = view->findChild<QCheckBox *>(QStringLiteral("folderCompareTimestamps"));
+        auto *tolerance = view->findChild<QDoubleSpinBox *>(QStringLiteral("folderTimeTolerance"));
+        auto *preset = view->findChild<QPushButton *>(QStringLiteral("folderIgnoreTimePreset"));
+        QSignalSpy finished(&session, &FolderCompareSession::scanFinished);
+        QSignalSpy paths(&session, &FolderCompareSession::pathsChanged);
+        QVERIFY(session.open());
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 5000);
+        QCOMPARE(session.result().entries.first().timeRelation, Folder::TimeRelation::LeftNewer);
+        QCOMPARE(session.result().entries.first().status, Folder::Status::Unknown);
+        view->findChild<QLineEdit *>(QStringLiteral("folderLeftPath"))->setText(pair.temp.path() + "/unsubmitted");
+        tolerance->setValue(4.0);
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 2, 5000);
+        QCOMPARE(session.result().entries.first().timeRelation, Folder::TimeRelation::Same);
+        QCOMPARE(session.comparisonOptions().timeToleranceMs, 4000);
+        QVERIFY(session.reload());
+        QVERIFY(session.isScanning());
+        enabled->setChecked(false);
+        enabled->setChecked(true);
+        tolerance->setValue(0.0);
+        preset->click();
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 3, 5000);
+        QVERIFY(!session.isScanning());
+        QCOMPARE(paths.count(), 0);
+        QCOMPARE(session.leftPath(), pair.left);
+        QCOMPARE(session.result().leftRoot, pair.left);
+        QVERIFY(!session.result().timestampsCompared);
+        QCOMPARE(session.result().entries.first().timeRelation, Folder::TimeRelation::Unknown);
+        QCOMPARE(session.result().entries.first().status, Folder::Status::Different);
+        QCOMPARE(session.result().entries.first().contentEvidence, Folder::ContentEvidence::ByteDifferent);
+        QCOMPARE(session.comparisonOptions().compareFirstBytes, qint64(0));
+        QVERIFY(!session.sessionSettings()->value(QStringLiteral("folder.compareTimestamps")).toBool());
+        const auto values = savedSettings(session.sessionSettings());
+        QVERIFY(session.setComparisonOptions(session.comparisonOptions()));
+        view->resetDisplayFilters();
+        view->leftTree()->sortByColumn(7, Qt::DescendingOrder);
+        QCoreApplication::processEvents();
+        QCOMPARE(finished.count(), 3);
+        QCOMPARE(savedSettings(session.sessionSettings()), values);
+    }
+
+    void savedTimestampToleranceChangesTheRestoredScan()
+    {
+        Pair pair;
+        QVERIFY(writeFile(pair.left + "/same.txt", "same"));
+        QVERIFY(writeFile(pair.right + "/same.txt", "same"));
+        std::unique_ptr<Files::FileSystem> fs(Files::createNativeFileSystem());
+        QVERIFY(fs->setTimes(pair.left + "/same.txt", Files::FileTime::fromSecondsSinceEpoch(1700000001), {}));
+        QVERIFY(fs->setTimes(pair.right + "/same.txt", Files::FileTime::fromSecondsSinceEpoch(1700000000), {}));
+        QCOMPARE(Folder::compare(pair.left, pair.right).entries.first().timeRelation, Folder::TimeRelation::Same);
+        FolderCompareSession original(pair.left, pair.right);
+        Folder::Options chosen;
+        chosen.timeToleranceMs = 750;
+        QVERIFY(original.setComparisonOptions(chosen));
+        SessionDocument document;
+        document.typeId = QStringLiteral("folder");
+        document.leftPath = pair.left;
+        document.rightPath = pair.right;
+        document.settings = savedSettings(original.sessionSettings());
+        const QString path = pair.temp.path() + QStringLiteral("/time.lqc");
+        QString error;
+        QVERIFY2(document.save(path, &error), qPrintable(error));
+        SessionDocument loaded;
+        QVERIFY2(SessionDocument::load(path, &loaded, &error), qPrintable(error));
+        FolderCompareSession restored(loaded.leftPath, loaded.rightPath);
+        std::unique_ptr<QWidget> widget(restored.createWidget());
+        for (auto it = loaded.settings.cbegin(); it != loaded.settings.cend(); ++it)
+            QVERIFY(restored.sessionSettings()->setValue(it.key(), it.value()));
+        QVERIFY(!restored.isScanning());
+        QSignalSpy finished(&restored, &FolderCompareSession::scanFinished);
+        QVERIFY(restored.open());
+        QTRY_COMPARE_WITH_TIMEOUT(finished.count(), 1, 5000);
+        QCOMPARE(restored.result().entries.first().timeRelation, Folder::TimeRelation::LeftNewer);
+        QCOMPARE(restored.result().timeToleranceMs, 750);
+        QCOMPARE(restored.view()->findChild<QDoubleSpinBox *>(QStringLiteral("folderTimeTolerance"))->value(), 0.75);
+    }
+
+    void invalidTimestampSettingsBlockScanWithoutChangingAcceptedOptions()
+    {
+        const QVector<QPair<QString, QVariant>> invalid = {
+            {QStringLiteral("folder.compareTimestamps"), QStringLiteral("false")},
+            {QStringLiteral("folder.compareTimestamps"), 1},
+            {QStringLiteral("folder.timeToleranceMs"), -1},
+            {QStringLiteral("folder.timeToleranceMs"), 0.5},
+            {QStringLiteral("folder.timeToleranceMs"), QStringLiteral("2000")},
+            {QStringLiteral("folder.timeToleranceMs"), double(std::numeric_limits<int>::max()) + 1.0}
+        };
+        for (const auto &bad : invalid) {
+            FolderCompareSession session;
+            std::unique_ptr<QWidget> widget(session.createWidget());
+            // 模拟载入原始存档，避免 QVariant 的跨类型相等判断吞掉坏值。
+            session.sessionSettings()->clear();
+            const auto accepted = session.comparisonOptions();
+            QVERIFY(session.sessionSettings()->setValue(bad.first, bad.second));
+            QString error;
+            QVERIFY(!session.open(&error));
+            QVERIFY(error.contains(bad.first));
+            QVERIFY(!session.isScanning());
+            QVERIFY(sameOptions(session.comparisonOptions(), accepted));
+            QVERIFY(sameOptions(session.view()->options(), accepted));
+            QCOMPARE(session.sessionSettings()->value(bad.first), bad.second);
+            QVERIFY(session.setComparisonOptions(accepted));
+            QVERIFY(session.open());
+        }
+    }
+
+    void signedTimeDeltaColumnSortsNumericallyAndShowsUnknown()
+    {
+        Folder::Result result;
+        const qint64 base = 1700000000000000000LL;
+        const QVector<qint64> deltas = {10000000000LL, -2000000000LL, 2000000000LL,
+                                       -10000000000LL, 0, 2000000001LL};
+        for (int i = 0; i < deltas.size(); ++i) {
+            Folder::Entry entry;
+            entry.relativePath = QStringLiteral("sample-%1.txt").arg(i);
+            entry.left.kind = entry.right.kind = Folder::Kind::File;
+            entry.left.info.exists = entry.right.info.exists = true;
+            entry.left.info.name = entry.right.info.name = entry.relativePath;
+            entry.left.info.size = entry.right.info.size = 512;
+            entry.left.info.lastModified = Files::FileTime::fromNanosecondsSinceEpoch(base + deltas.at(i));
+            entry.right.info.lastModified = Files::FileTime::fromNanosecondsSinceEpoch(base);
+            entry.timeRelation = Folder::timeRelationFor(entry, 2000);
+            entry.status = Folder::Status::Same;
+            entry.contentEvidence = Folder::ContentEvidence::ByteIdentical;
+            result.entries.append(entry);
+        }
+        auto orphan = result.entries.first();
+        orphan.relativePath = orphan.left.info.name = QStringLiteral("left-only.txt");
+        orphan.right = {};
+        orphan.timeRelation = Folder::TimeRelation::Unknown;
+        orphan.status = Folder::Status::LeftOnly;
+        result.entries.append(orphan);
+        FolderCompareView view;
+        view.setPaths(QStringLiteral("/comparison/left"), QStringLiteral("/comparison/right"));
+        view.setResult(result);
+        auto *model = view.leftTree()->model();
+        int column = -1;
+        for (int c = 0; c < model->columnCount(); ++c) {
+            if (model->headerData(c, Qt::Horizontal).toString() == QStringLiteral("时间差（左−右）"))
+                column = c;
+        }
+        QVERIFY(column >= 0);
+        QVERIFY(!view.leftTree()->isColumnHidden(column));
+        QVERIFY(!view.rightTree()->isColumnHidden(column));
+        const auto textFor = [&](const QString &name) { return indexNamed(model, name).siblingAtColumn(column).data().toString(); };
+        QCOMPARE(textFor("sample-0.txt"), QStringLiteral("左新 · +10 s"));
+        QCOMPARE(textFor("sample-1.txt"), QStringLiteral("同 · −2 s"));
+        QCOMPARE(textFor("sample-5.txt"), QStringLiteral("左新 · +2")
+                 + QLocale().decimalPoint() + QStringLiteral("000000001 s"));
+        QCOMPARE(textFor("left-only.txt"), QStringLiteral("未知"));
+        const QVector<int> ordered = {3, 1, 4, 2, 5, 0};
+        QSignalSpy rescan(&view, &FolderCompareView::rescanRequested);
+        view.leftTree()->sortByColumn(1, Qt::AscendingOrder);
+        QCOMPARE(view.rightTree()->header()->sortIndicatorSection(), -1);
+        view.rightTree()->sortByColumn(6, Qt::DescendingOrder);
+        QCOMPARE(view.leftTree()->header()->sortIndicatorSection(), -1);
+        view.leftTree()->sortByColumn(column, Qt::AscendingOrder);
+        for (int i = 0; i < ordered.size(); ++i)
+            QCOMPARE(model->index(i, 0).data().toString(), QStringLiteral("sample-%1.txt").arg(ordered.at(i)));
+        QCOMPARE(model->index(6, 0).data().toString(), QStringLiteral("left-only.txt"));
+        view.rightTree()->sortByColumn(column, Qt::DescendingOrder);
+        QCOMPARE(view.leftTree()->header()->sortIndicatorSection(), column);
+        QCOMPARE(view.leftTree()->header()->sortIndicatorOrder(), Qt::DescendingOrder);
+        QCOMPARE(model->index(0, 0).data().toString(), QStringLiteral("left-only.txt"));
+        for (int i = 0; i < ordered.size(); ++i)
+            QCOMPARE(model->index(i + 1, 0).data().toString(), QStringLiteral("sample-%1.txt").arg(ordered.at(5 - i)));
+        QCOMPARE(rescan.count(), 0);
+        auto staged = view.options();
+        staged.compareTimestamps = false;
+        staged.timeToleranceMs = 100;
+        view.setOptions(staged);
+        QVERIFY(view.statusExplanation(indexNamed(model, "sample-0.txt")).contains(QStringLiteral("2000 ms")));
+        QCOMPARE(textFor("sample-0.txt"), QStringLiteral("左新 · +10 s"));
+        view.setOptions(Folder::Options());
+        view.findChild<QToolButton *>(QStringLiteral("folderOptionsToggle"))->setChecked(true);
+        view.resize(1380, 640);
+        view.show();
+        QTest::qWait(20);
+        QCOMPARE(view.width(), 1380);
+        for (auto *tree : {view.leftTree(), view.rightTree()})
+            QVERIFY(tree->columnViewportPosition(column) + tree->columnWidth(column)
+                    <= tree->viewport()->width());
+        const QString capture = qEnvironmentVariable("LQCOMPARE_FOLDER_TIME_CAPTURE");
+        if (!capture.isEmpty())
+            QVERIFY(view.grab().save(capture));
+        // 大差值相差 1 ns 仍须分开，不能先转 double 再排序。
+        Folder::Result precise;
+        for (qint64 nanoseconds : {6000000000000000001LL, 6000000000000000000LL}) {
+            auto entry = result.entries.first();
+            entry.relativePath = entry.left.info.name = QString::number(nanoseconds);
+            entry.left.info.lastModified = Files::FileTime::fromNanosecondsSinceEpoch(nanoseconds);
+            entry.right.info.lastModified = Files::FileTime::fromNanosecondsSinceEpoch(0);
+            precise.entries.append(entry);
+        }
+        view.setResult(precise);
+        view.leftTree()->sortByColumn(column, Qt::AscendingOrder);
+        QCOMPARE(model->index(0, 0).data().toString(), QStringLiteral("6000000000000000000"));
+        QCOMPARE(model->index(1, 0).data().toString(), QStringLiteral("6000000000000000001"));
+        result.timestampsCompared = false;
+        view.setResult(result);
+        QCOMPARE(textFor("sample-0.txt"), QStringLiteral("已忽略"));
+        QCOMPARE(rescan.count(), 0);
     }
 
     // -------------------------------------------------------------------------
