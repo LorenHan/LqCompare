@@ -155,3 +155,19 @@ Windows CI 中中文日志变成问号。文件端的 `QTextStream` 曾使用本
 核对中文、繁体、重音字符与 emoji 的真实输出字节以及无 BOM。原代码两组失败，
 修复后 Logging 全套 46 passed / 0 failed / 0 skipped，失败时也恢复测试进程编码。
 真实 Windows CI 的对应回归仍按此次提交单独核对。
+
+## PLAT-002 / #325：Windows 重解析点读取兼容
+
+不再依赖旧 MinGW 缺失的 `REPARSE_DATA_BUFFER` 类型。Win32 薄层直接包含
+`winioctl.h`，独立 QtCore 解析器核对实际返回长度、声明载荷、偏移/长度及
+UTF-16LE 码元，支持符号链接与目录联接，并与 SDK 常量做编译期核对。
+不跟随链接、不改写相对目标，未知或损坏记录保持 NotSupported。
+
+替代名称内部的 NUL 被拒绝，避免显示的 QString 与 Win32 实际消费路径不一致；
+声明长度外的可选终止符仍接受。系统调用失败码在 CloseHandle 前保存。
+
+已验证：75 项解析用例在正常与 ASan/UBSan 构建均通过，原 FileSystem 59 项通过；
+NUL 修复前 6 行回归确实失败。官方 Windows Qt 5.15.2 头与 i686 GCC14/MinGW12
+成功编译完整 Win32 实现、解析器及测试为 i386 COFF。仓库护栏通过。
+ASAN 使用 detect_leaks=0；原 FILETIME 的两处溢出警告尚待独立修复。
+精确 MinGW8.1 构建、原生链接/运行及真实 Windows 链接类型仍需正式 CI/真机验证。

@@ -1,21 +1,11 @@
 #include "filesystem.h"
 #include "pathutils.h"
+#include "windowsreparse.h"
 
 // 本文件是 Windows 实现。非 Windows 平台上整体不参与编译。
 //
-// ⚠ 未在本机编译验证
-// -------------------
-// 当前开发机是 macOS，没有 Windows 下的 Qt，因此**本文件没有被编译器检查过**。
-// 这一点必须说清楚，不能让它看起来和 filesystem_posix.cpp 一样可靠：
-//   - POSIX 实现：本机可编译、可运行、有测试覆盖。
-//   - Windows 实现：仅经人工检查，首次在 Windows 上构建时很可能需要修语法/类型问题。
-//
-// 为降低这个风险，两件事已经做在前面：
-//   1. 路径规则（分隔符、盘符、UNC、长路径前缀）全部提取到 pathutils.cpp，
-//      它是平台无关的纯字符串逻辑，已在 macOS 上被完整测试——包括 Windows 规则。
-//   2. Win32 错误码常量在 Windows 下由 static_assert 与本头文件里的真实常量比对
-//      （见 filesystem.cpp），写错会在编译期失败。
-// 剩下的就是这层薄薄的 API 调用，只能靠首次在 Windows 上构建来验证。
+// 重解析点的字节解析在 windowsreparse.cpp 中，可在所有平台执行边界测试。
+// 本文件的 Win32 调用仍需 Windows CI / 运行验证，纯解析测试不能代替它。
 #ifndef Q_OS_WIN
 #  error "filesystem_win.cpp 只能在 Windows 上编译"
 #endif
@@ -28,11 +18,20 @@
 #endif
 
 #include <windows.h>
+#include <winioctl.h> // FSCTL_GET_REPARSE_POINT 不由所有版本的 windows.h 间接提供
 
 namespace LqCompare {
 namespace Files {
 
 namespace {
+
+// 纯解析器的公开常量与当前 Windows SDK 保持一致。
+static_assert(WindowsReparse::SymbolicLinkTag == IO_REPARSE_TAG_SYMLINK,
+              "Symbolic link tag must match the Windows SDK");
+static_assert(WindowsReparse::MountPointTag == IO_REPARSE_TAG_MOUNT_POINT,
+              "Mount point tag must match the Windows SDK");
+static_assert(WindowsReparse::MaximumBufferSize == MAXIMUM_REPARSE_DATA_BUFFER_SIZE,
+              "Reparse buffer limit must match the Windows SDK");
 
 PathUtils::Style windowsStyle()
 {
@@ -224,23 +223,23 @@ public:
             return QString();
         }
 
-        // 一个重解析点数据最多约 16 KB，用固定缓冲足够；
-        // 返回的 size 会告诉我们实际长度。
-        QByteArray buffer(MAXIMUM_REPARSE_DATA_BUFFER_SIZE, Qt::Uninitialized);
+        // 重解析点数据最多 16 KB；解析时仍必须遵守系统实际返回的字节数。
+        QByteArray buffer(WindowsReparse::MaximumBufferSize, Qt::Uninitialized);
         DWORD returned = 0;
         const BOOL ok = ::DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, nullptr, 0,
                                           buffer.data(),
                                           static_cast<DWORD>(buffer.size()), &returned, nullptr);
+        // CloseHandle 也可能改写线程错误码，必须先保存 DeviceIoControl 的失败原因。
+        const DWORD code = ok ? ERROR_SUCCESS : ::GetLastError();
         ::CloseHandle(handle);
 
         if (!ok) {
             if (error)
-                *error = fromWindowsError(::GetLastError());
+                *error = fromWindowsError(code);
             return QString();
         }
 
-        const auto *reparse = reinterpret_cast<const REPARSE_DATA_BUFFER *>(buffer.constData());
-        const QString raw = extractReparseTarget(reparse);
+        const QString raw = WindowsReparse::target(buffer, returned);
         if (raw.isEmpty()) {
             if (error)
                 *error = FileSystemError::NotSupported;
@@ -393,38 +392,6 @@ public:
     // deleteToTrash 不在这里覆写：真实实现属 PLAT-003
     // （SHFileOperation / IFileOperation 带 FOF_ALLOWUNDO）。
     // 目前由基类返回 NotSupported，绝不会静默变成永久删除。
-
-private:
-    /// 从重解析点数据里取出链接目标。
-    ///
-    /// 符号链接与目录联接的目标分别存放在两个不同的字段里，且都是
-    /// 「字节偏移 + 字节长度」的形式（因为它们可以包含不能直接当字符串
-    /// 解释的内容）。这里按各自的布局取出来。
-    static QString extractReparseTarget(const REPARSE_DATA_BUFFER *reparse)
-    {
-        if (reparse == nullptr)
-            return QString();
-
-        if (reparse->ReparseTag == IO_REPARSE_TAG_SYMLINK) {
-            const USHORT offset =
-                reparse->SymbolicLinkReparseBuffer.SubstituteNameOffset / sizeof(WCHAR);
-            const USHORT length =
-                reparse->SymbolicLinkReparseBuffer.SubstituteNameLength / sizeof(WCHAR);
-            return QString::fromWCharArray(
-                reparse->SymbolicLinkReparseBuffer.PathBuffer + offset, length);
-        }
-
-        if (reparse->ReparseTag == IO_REPARSE_TAG_MOUNT_POINT) {
-            const USHORT offset =
-                reparse->MountPointReparseBuffer.SubstituteNameOffset / sizeof(WCHAR);
-            const USHORT length =
-                reparse->MountPointReparseBuffer.SubstituteNameLength / sizeof(WCHAR);
-            return QString::fromWCharArray(
-                reparse->MountPointReparseBuffer.PathBuffer + offset, length);
-        }
-
-        return QString();
-    }
 };
 
 } // namespace

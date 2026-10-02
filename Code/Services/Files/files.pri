@@ -3,6 +3,7 @@
 # 本模块刻意分成五部分，便于单独理解与替换：
 #   filesystem.{h,cpp}       —— 接口、时间类型、错误分类与原始系统码（平台无关）
 #   pathutils.{h,cpp}        —— 路径规则与文件名校验（平台无关的纯逻辑，可在任一平台测试）
+#   windowsreparse.{h,cpp}   —— Windows 重解析点的有界字节解析（平台无关）
 #   pathname.{h,cpp}         —— 路径名称的字节保真、Unicode 规范化与安全显示（平台无关）
 #   trash.{h,cpp}            —— 回收站服务接口 + XDG 路径规则（平台无关部分）
 #   batch.{h,cpp}            —— 批量操作的失败清单、重试与进度（平台无关）
@@ -20,6 +21,7 @@ INCLUDEPATH += $$PWD
 HEADERS += \
     $$PWD/filesystem.h \
     $$PWD/pathutils.h \
+    $$PWD/windowsreparse.h \
     $$PWD/pathname.h \
     $$PWD/trash.h \
     $$PWD/batch.h \
@@ -28,6 +30,7 @@ HEADERS += \
 SOURCES += \
     $$PWD/filesystem.cpp \
     $$PWD/pathutils.cpp \
+    $$PWD/windowsreparse.cpp \
     $$PWD/pathname.cpp \
     $$PWD/trash.cpp \
     $$PWD/batch.cpp \
