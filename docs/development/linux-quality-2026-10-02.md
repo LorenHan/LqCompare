@@ -498,3 +498,27 @@ Windows原生桌面把1380像素顶层测试窗口限制为1028像素，时间�
 Linux完整Folder68/0/0，新运行器集成同过；Windows头/i686编译通过，原有三条
 测试dangling-reference警告仍单独保留，未把它称作全警告清零。原生小屏幕
 宿主中的完整回归由新CI验证。
+
+## OPT-004 / #316：恢复系统主题的完整画刷与原生状态
+
+20d5cdc 正式Windows诊断证明仅Active/Disabled/Inactive三组Link残留暗色
+#7bb7ff，启动快照是#0000ff。Qt5.15.2 WindowsVista/XP的缺省palette从当前
+应用取未解析Link，直接恢复resolve=0快照会再次继承暗色。这是产品缺陷，
+不是相等断言过严。
+
+恢复时先同步显式还原启动快照全部画刷，再回填原mask；不把palette永久
+标成自定义，以保留Qt原生菜单/按钮类调色板行为。未换Style、未改颜色常量。
+旧runtime搭配最终代理回归准确失败两行；修复后OptionsDialog26/0/0，
+覆盖重复light/dark/system、三组纹理/渐变/变换、原mask/AA_SetPalette与
+QMenu/QPushButton/QAbstractButton调色板。AppIntegration17与CommandActions19
+在修改后的同一工作树通过，均使用真实LqRibbon依赖。
+
+官方Windows Qt5.15.2头/i686两翻译单元-Werror通过；ASan/UBSan聚焦6/0/0。
+LSan因容器ptrace限制失败，关闭泄漏检测重跑通过，不宣称做了泄漏验收。
+最终修复的原生Windows仍需下一CI，不额外声称验证了运行中OS高对比度切换。
+
+依据：
+- https://raw.githubusercontent.com/qt/qtbase/v5.15.2/src/plugins/styles/windowsvista/qwindowsxpstyle.cpp
+- https://raw.githubusercontent.com/qt/qtbase/v5.15.2/src/plugins/platforms/windows/qwindowstheme.cpp
+- https://raw.githubusercontent.com/qt/qtbase/v5.15.2/src/gui/kernel/qpalette.cpp
+- https://raw.githubusercontent.com/qt/qtbase/v5.15.2/src/widgets/kernel/qapplication.cpp
