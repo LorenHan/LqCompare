@@ -234,3 +234,18 @@ Linux Vcs 79、VcsView 18、VcsBlameView 23 项全部通过且无跳过；C loca
 协议子集 36 项通过。旧 CRT 转换模拟精确复现 3 条失败，旧主机分隔符模拟
 复现 quoted-octal 路径失败。三个完整翻译单元用官方 Windows Qt 5.15.2 头
 与 i686 编译器通过 -Werror；原生 Windows 运行结果仍等待正式 CI。
+
+## PLAT-006 / #327：单实例测试的进程等待与 Unicode 夹具
+
+修复测试子进程等待循环：先读取 QProcess 已缓冲输出，再判断进程退出；
+截止时最后收尾，继续分派父进程事件。READY 不再因已被事件循环缓冲而丢失。
+环境字段通过 Unicode API 读取，JSON 明确转 UTF-8，覆盖中文、非 BMP 字符、
+空列表、空参数、换行/制表符以及真实 Unicode 输出路径。
+
+最终相同测试套在旧 helper 上为 79 passed / 3 failed，修复后连续 20 轮各
+82 passed / 0 failed / 0 skipped；完整测试翻译单元以官方 Windows Qt 5.15.2
+头和 i686 编译器通过 -Werror。未改生产守卫、超时默认值和跳过策略。
+
+本轮选择 A-H、H2、L 的无 socket 子集；原有 I-K 共 30 个真实 IPC/生命周期
+测试函数未在受限云主机运行。不能把聚焦通过当成 SingleInstance 全套通过。
+macOS / Windows 原生完整 IPC 及 Unicode 修复由此次正式 CI 验证。
