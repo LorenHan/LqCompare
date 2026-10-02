@@ -29,6 +29,10 @@
 
 ### 修复
 
+- Ribbon 标签改为跟随应用调色板的直角状态，修复原生窗口框架下白字不可读，
+  保留选择、悬停及键盘焦点提示，不改变页面/命令与比较区域布局
+  （UI-001 / [#2](https://github.com/LorenHan/LqCompare/issues/2)）
+
 - 测试工程发现的非法 shell 展开和空目录错误归因
   （ENG-003 / [#335](https://github.com/LorenHan/LqCompare/issues/335)，提交 `af723cf`）
 - 旧 Qt 与强化编译下的 POSIX 符号链接读取崩溃

@@ -522,3 +522,63 @@ LSan因容器ptrace限制失败，关闭泄漏检测重跑通过，不宣称做�
 - https://raw.githubusercontent.com/qt/qtbase/v5.15.2/src/plugins/platforms/windows/qwindowstheme.cpp
 - https://raw.githubusercontent.com/qt/qtbase/v5.15.2/src/gui/kernel/qpalette.cpp
 - https://raw.githubusercontent.com/qt/qtbase/v5.15.2/src/widgets/kernel/qapplication.cpp
+
+### e859f6b：冻结快照与正式三平台结果
+
+[正式运行 36967820301](https://github.com/LorenHan/LqCompare/actions/runs/36967820301)
+已于 2026-10-02 05:33 UTC 结束，精确源码为
+`e859f6b8af37fe1c34ef0ff86a7d9089527c886a`：
+
+- Ubuntu：4035 passed / 0 failed / 12 skipped。
+- macOS：4035 passed / 0 failed / 12 skipped。
+- Windows：4015 passed / 1 failed / 36 skipped；73 套都有结果。
+  全局调色板恢复及新增两个 Link 代理回归通过，唯一失败移到新增的 QMenu 类
+  调色板快照比较，仍在区分 Qt 原生样式再次 polish 与实际主题残留。
+- 三系统 CI 的主程序构建、打包及 AppIntegration、CommandActions 均缺
+  LqRibbon 而跳过；这些结果不代表可发布的三平台 GUI 已验收。
+
+独立冻结 Linux 工作树在同一 SHA 运行 74 套，3959 / 0 / 12，含真实依赖的
+AppIntegration 17 / 0 / 0 与 CommandActions 19 / 0 / 0。SingleInstance 整套因
+本云环境的本地 socket 限制排除，没有把它计作通过；其不使用 IPC 的 82 项曾在
+源码相同的 20d5cdc 通过。12 个跳过分别是 FileMetadata 的 9 个 Windows 专属
+条目，以及 FileSystem 的 Windows 舍入、Registry 的原生 Windows、PlatformIcon
+的桌面图标来源各 1 项。
+
+实际 Linux 主程序已重建，SHA-256 为
+`91f11cb68fb231d55a94bb5a134a4d47a5caaf3d82a890e2ae47966c42fd7852`。
+Unicode 位置参数/命名参数 JSON、help、错误参数退出码和离屏 GUI 启动烟测通过，
+输入夹具字节未变。主程序构建仍有既有 Filter 缩进与私有依赖未使用函数警告，
+不宣称清零全部警告。
+
+## UI-001 / #2：直角标签与可读对比度
+
+此后先推进 Linux 完整应用体验；保留 Windows 已知 QMenu 测试基线问题和现有
+跨平台防护，不将 Windows 收敛作为 Linux 界面改进的前置条件。
+
+原生窗口框架下，Office 标题栏的白字实际落在浅灰标签背景上，实测对比度仅
+1.15:1。仅为既有 QTabBar 增加应用自有样式，使用应用 Window/WindowText 与
+Base/Text 配对；直角边缘、选中下划线、轻量悬停与键盘虚线焦点随主题更新。
+悬停颜色从 Window 向 Highlight/Base 小幅混合并检查对比度，避免直接组合
+没有配对保证的 Midlight/WindowText。未修改或复制私有依赖，未改窗口框架。
+
+Linux Qt5.15.15 完整 AppIntegration 19 / 0 / 0、CommandActions 19 / 0 / 0，
+主验收独立复跑同过。新增回归在 150% 缩放及 Qt Windows 绘制样式各 4 / 0 / 0。
+系统、浅色、深色标签的正常/悬停/焦点像素实测对比度 10.58–21:1；两个对抗
+调色板同过，恢复不安全 Midlight 方案后均以 1.04:1 失败。基线源码在最终测试下
+准确复现白字问题。验证所有标签对象、文案、工具提示、可访问名称、键盘切换、
+命令启用状态、会话内容与比较窗格几何保持稳定；每种状态标签栏仍高 28 像素。
+三主题 Home 图像在前 28 像素以下与基线逐像素一致；已人工复核真实窗口截图。
+
+官方 Windows Qt5.15.2 头文件交叉编译实现、头文件探针、moc 和完整应用测试
+通过，仅保留原有测试 QLabel::pixmap 弃用警告。这不是 Windows 链接或原生
+交互验收。搜索栏遮挡标签、命令区拥挤及暗主题命令区颜色仍是独立已知问题，
+本提交不把整个界面称为已完成扁平化。
+
+提交前对最终三文件哈希建立独立验收树，完整 Linux 74 套再次得到
+3961 passed / 0 failed / 12 skipped；SingleInstance 仍因云端 socket 限制整套
+排除并单列。覆盖实际窗口的生成文本编辑/QAT 保存逐字节核对、关闭取消不改原件、
+只读保护、编码会话恢复，以及 MergeView/MergeOutput 的合并和保存边界。
+最终实际程序重建后 Unicode 位置/命名 CLI、错误输入和离屏 GUI 启动再次通过，
+生成源文件字节未变。该二进制 SHA-256：
+`d890e043a4ffe7dbdbdc5a7809eb508a0c335fc94e09eb7cacb958a3f2b0d305`。
+原生桌面合成器、打包后干净启动及 macOS 完整程序仍未由本地测试覆盖。

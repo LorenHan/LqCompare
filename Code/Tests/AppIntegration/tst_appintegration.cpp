@@ -5,6 +5,8 @@
 #include "foldercomparesession.h"
 #include "hexcomparesession.h"
 #include "homepage.h"
+#include "optionsrepository.h"
+#include "optionsruntime.h"
 #include "sessionarea.h"
 #include "sessiondocument.h"
 #include "tablecomparesession.h"
@@ -26,9 +28,12 @@
 #include <QShortcut>
 #include <QSignalSpy>
 #include <QStandardPaths>
+#include <QTabBar>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
+
+#include <cmath>
 
 using namespace LqCompare;
 
@@ -66,6 +71,56 @@ void clickNextPrompt(QMessageBox::StandardButton choice, bool *shown)
 QJsonArray recentSessions()
 {
     return QJsonDocument::fromJson(QSettings().value(QStringLiteral("sessions/recent")).toByteArray()).array();
+}
+
+double contrast(const QColor &a, const QColor &b)
+{
+    const auto luminance = [](const QColor &color) {
+        const auto linear = [](double value) {
+            return value <= 0.04045 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4);
+        };
+        return 0.2126 * linear(color.redF()) + 0.7152 * linear(color.greenF())
+                + 0.0722 * linear(color.blueF());
+    };
+    const double x = luminance(a), y = luminance(b);
+    return (qMax(x, y) + 0.05) / (qMin(x, y) + 0.05);
+}
+
+QColor tabBackground(QTabBar *tabs, int index)
+{
+    const QPixmap image = tabs->window()->grab();
+    const QPoint origin = tabs->mapTo(tabs->window(), tabs->tabRect(index).topLeft() + QPoint(4, 4));
+    return image.toImage().pixelColor(origin * image.devicePixelRatio());
+}
+
+// 读取实际栅格化文字，排除边框及选中/焦点标记。
+// 抗锯齿边缘像素不要求达到完整前景色的对比度。
+void verifyTabPixels(QTabBar *tabs, int index, const QColor &foreground, const QColor &background)
+{
+    // 抓取完整窗口，以用户实际看到的背景测量透明标签，
+    // 避免把空的透明位图误当作标签背景。
+    const QPixmap pixmap = tabs->window()->grab();
+    const QImage image = pixmap.toImage();
+    const qreal scale = pixmap.devicePixelRatio();
+    const QRect tab = tabs->tabRect(index).translated(tabs->mapTo(tabs->window(), QPoint()));
+    QCOMPARE(image.pixelColor((tab.left() + 4) * scale, (tab.top() + 4) * scale).rgba(), background.rgba());
+    const QRect text = tab.adjusted(10, 5, -10, -5);
+    int readableGlyphPixels = 0;
+    double bestContrast = 1;
+    for (int y = text.top() * scale; y <= text.bottom() * scale; ++y) {
+        for (int x = text.left() * scale; x <= text.right() * scale; ++x) {
+            const QColor pixel = image.pixelColor(x, y);
+            const double ratio = contrast(pixel, background);
+            bestContrast = qMax(bestContrast, ratio);
+            if (ratio >= 4.5 && qAbs(pixel.red() - foreground.red()) < 32
+                && qAbs(pixel.green() - foreground.green()) < 32
+                && qAbs(pixel.blue() - foreground.blue()) < 32)
+                ++readableGlyphPixels;
+        }
+    }
+    QVERIFY2(readableGlyphPixels >= 3,
+             qPrintable(QStringLiteral("%1: only %2 readable glyph pixels, best contrast %3:1")
+                        .arg(tabs->tabText(index)).arg(readableGlyphPixels).arg(bestContrast)));
 }
 }
 
@@ -139,6 +194,197 @@ private slots:
         QVERIFY(!qatAction(window, "file.save")->isEnabled());
         QVERIFY(!qatAction(window, "edit.undo")->isEnabled());
         QVERIFY(!qatAction(window, "nav.nextdiff")->isEnabled());
+    }
+
+    void ribbonTabsFollowPaletteWithoutChangingNavigation()
+    {
+        struct RestoreApplication {
+            QPalette palette = QApplication::palette();
+            QFont font = QApplication::font();
+            ~RestoreApplication() { QApplication::setPalette(palette); QApplication::setFont(font); }
+        } restore;
+        QTemporaryDir directory;
+        Settings::OptionsRepository options({directory.path(), false});
+        Options::OptionsRuntime runtime(&options);
+        MainWindow window;
+        window.resize(1440, 900);
+        window.show();
+        window.activateWindow();
+        QTest::qWait(50);
+        auto *ribbon = window.ribbonBar();
+        auto *tabs = ribbon->findChild<QTabBar *>(QStringLiteral("lqRibbonTabBar"));
+        QVERIFY(tabs);
+        QCOMPARE(ribbon->currentPage()->objectName(), QStringLiteral("ribbonHomePage"));
+        const Qt::WindowFlags flags = window.windowFlags();
+        const bool frameTheme = ribbon->isFrameThemeEnabled();
+        const QRect contentGeometry = sessions(window)->geometry();
+        const QString libraryStyle = ribbon->styleSheet();
+        const Qt::FocusPolicy focusPolicy = tabs->focusPolicy();
+        const QString accessibleName = tabs->accessibleName();
+        QList<QWidget *> pages;
+        QList<bool> enabled;
+        QStringList labels, tooltips;
+        for (int i = 0; i < tabs->count(); ++i) {
+            pages << ribbon->widget(i);
+            enabled << tabs->isTabEnabled(i);
+            labels << tabs->tabText(i);
+            tooltips << tabs->tabToolTip(i);
+        }
+        const QString evidence = qEnvironmentVariable("LQCOMPARE_RIBBON_SCREENSHOT_DIR");
+        if (!evidence.isEmpty()) QVERIFY(QDir().mkpath(evidence));
+        for (int cycle = 0; cycle < 3; ++cycle) {
+            for (const QString &theme : {QStringLiteral("system"), QStringLiteral("light"),
+                                         QStringLiteral("dark"), QStringLiteral("system")}) {
+                QVERIFY(options.apply({{QStringLiteral("display.theme"), theme}}).ok);
+                QCoreApplication::processEvents();
+                const QPalette palette = QApplication::palette();
+                tabs->setCurrentIndex(0);
+                tabs->clearFocus();
+                QTest::mouseMove(&window, QPoint(window.width() - 10, window.height() - 10));
+                const QRect normalFirst = tabs->tabRect(0), normalSecond = tabs->tabRect(1);
+                const int tabHeight = tabs->height();
+                verifyTabPixels(tabs, 0, palette.color(QPalette::Text), palette.color(QPalette::Base));
+                verifyTabPixels(tabs, 1, palette.color(QPalette::WindowText), palette.color(QPalette::Window));
+                if (cycle == 0 && !evidence.isEmpty()) {
+                    QVERIFY(window.grab().save(evidence + "/" + theme + "-home.png"));
+                    QVERIFY(tabs->grab().save(evidence + "/" + theme + "-tabs.png"));
+                }
+                QTest::mouseMove(tabs, tabs->tabRect(1).center());
+                QCoreApplication::processEvents();
+                const QColor hover = tabBackground(tabs, 1);
+                QVERIFY(hover.rgba() != palette.color(QPalette::Window).rgba());
+                verifyTabPixels(tabs, 1, palette.color(QPalette::WindowText), hover);
+                QCOMPARE(tabs->tabRect(0), normalFirst);
+                QCOMPARE(tabs->tabRect(1), normalSecond);
+                QCOMPARE(tabs->height(), tabHeight);
+                if (cycle == 0 && !evidence.isEmpty())
+                    QVERIFY(tabs->grab().save(evidence + "/" + theme + "-hover.png"));
+
+                tabs->setFocus(Qt::TabFocusReason);
+                QTRY_VERIFY(tabs->hasFocus());
+                QTest::keyClick(tabs, Qt::Key_Right);
+                QCOMPARE(tabs->currentIndex(), 1);
+                QCOMPARE(ribbon->currentPage()->objectName(), QStringLiteral("ribbonComparePage"));
+                const QRect focusedFirst = tabs->tabRect(0), focusedSecond = tabs->tabRect(1);
+                QCOMPARE(focusedFirst, normalFirst);
+                QCOMPARE(focusedSecond, normalSecond);
+                QCOMPARE(tabs->height(), tabHeight);
+                verifyTabPixels(tabs, 1, palette.color(QPalette::Text), palette.color(QPalette::Base));
+                if (cycle == 0 && !evidence.isEmpty())
+                    QVERIFY(tabs->grab().save(evidence + "/" + theme + "-focus.png"));
+                tabs->clearFocus();
+                QCOMPARE(tabs->tabRect(0), focusedFirst);
+                QCOMPARE(tabs->tabRect(1), focusedSecond);
+                QCOMPARE(tabs->height(), tabHeight);
+                if (cycle == 0 && !evidence.isEmpty())
+                    qInfo() << "Ribbon tab geometry" << theme << "height" << tabHeight
+                            << "Home selected / Compare hovered" << normalFirst << normalSecond
+                            << "Compare selected, with and without focus" << focusedFirst << focusedSecond;
+                tabs->setFocus(Qt::TabFocusReason);
+                QTest::keyClick(tabs, Qt::Key_Left);
+                QCOMPARE(tabs->currentIndex(), 0);
+                for (int i = 0; i < tabs->count(); ++i) tabs->setCurrentIndex(i);
+                tabs->setCurrentIndex(1);
+                CommandRegistry::instance().updateEnabled();
+                QVERIFY(runtime.applyCurrent());
+                QCoreApplication::processEvents();
+                QCOMPARE(tabs->currentIndex(), 1);
+                QCOMPARE(sessions(window)->geometry(), contentGeometry);
+                QCOMPARE(window.windowFlags(), flags);
+                QCOMPARE(ribbon->isFrameThemeEnabled(), frameTheme);
+                QCOMPARE(ribbon->styleSheet(), libraryStyle);
+                QCOMPARE(tabs->focusPolicy(), focusPolicy);
+                QCOMPARE(tabs->accessibleName(), accessibleName);
+                QCOMPARE(tabs->count(), pages.size());
+                for (int i = 0; i < tabs->count(); ++i) {
+                    QCOMPARE(ribbon->widget(i), pages[i]);
+                    QCOMPARE(tabs->isTabEnabled(i), enabled[i]);
+                    QCOMPARE(tabs->tabText(i), labels[i]);
+                    QCOMPARE(tabs->tabToolTip(i), tooltips[i]);
+                }
+            }
+        }
+        ribbon->setRibbonStyle(RibbonBar::Microsoft365Dark);
+        ribbon->setRibbonStyle(RibbonBar::Office2016Blue);
+        QCoreApplication::processEvents();
+        QCOMPARE(tabs->currentIndex(), 1);
+        QCOMPARE(sessions(window)->geometry(), contentGeometry);
+        tabs->clearFocus();
+        const QPalette palette = QApplication::palette();
+        verifyTabPixels(tabs, 0, palette.color(QPalette::WindowText), palette.color(QPalette::Window));
+        verifyTabPixels(tabs, 1, palette.color(QPalette::Text), palette.color(QPalette::Base));
+        QVERIFY(qatAction(window, "file.open")->isEnabled());
+        QVERIFY(!qatAction(window, "file.save")->isEnabled());
+
+        const QString left = directory.filePath("left.txt"), right = directory.filePath("right.txt");
+        writeFile(left, "a\nleft\nend\n"); writeFile(right, "a\nright\nend\n");
+        QVERIFY(window.openPaths({left, right}));
+        QCoreApplication::processEvents();
+        auto *session = qobject_cast<TextCompareSession *>(sessions(window)->currentSession());
+        QVERIFY(session);
+        auto *leftPane = session->widget()->findChild<TextPane *>(QStringLiteral("leftTextPane"));
+        auto *rightPane = session->widget()->findChild<TextPane *>(QStringLiteral("rightTextPane"));
+        QVERIFY(leftPane && rightPane);
+        const QRect leftGeometry = leftPane->geometry(), rightGeometry = rightPane->geometry();
+        const QString leftText = leftPane->toPlainText(), rightText = rightPane->toPlainText();
+        tabs->setCurrentIndex(1);
+        for (const QString &theme : {QStringLiteral("dark"), QStringLiteral("light"), QStringLiteral("system")}) {
+            QVERIFY(options.apply({{QStringLiteral("display.theme"), theme}}).ok);
+            QCoreApplication::processEvents();
+            QCOMPARE(sessions(window)->currentSession(), session);
+            QCOMPARE(tabs->currentIndex(), 1);
+            QCOMPARE(leftPane->geometry(), leftGeometry);
+            QCOMPARE(rightPane->geometry(), rightGeometry);
+            QCOMPARE(leftPane->toPlainText(), leftText);
+            QCOMPARE(rightPane->toPlainText(), rightText);
+            if (!evidence.isEmpty())
+                QVERIFY(window.grab().save(evidence + "/" + theme + "-comparison.png"));
+        }
+    }
+
+    void ribbonHoverRemainsReadableWithUnpairedPaletteRoles()
+    {
+        struct RestorePalette {
+            QPalette palette = QApplication::palette();
+            ~RestorePalette() { QApplication::setPalette(palette); }
+        } restore;
+        MainWindow window;
+        window.resize(1440, 900);
+        window.show();
+        auto *tabs = window.ribbonBar()->findChild<QTabBar *>(QStringLiteral("lqRibbonTabBar"));
+        QVERIFY(tabs);
+        // 首例检出不安全的 WindowText/Midlight 配对；第二例让完整强调色混色失效：
+        // 原本可读的中灰背景必须减弱混色，或改用调色板中的安全颜色。
+        for (const QColor &background : {QColor(Qt::black), QColor(118, 118, 118)}) {
+            QPalette palette = restore.palette;
+            palette.setColor(QPalette::Window, background);
+            palette.setColor(QPalette::WindowText, Qt::white);
+            palette.setColor(QPalette::Base, Qt::black);
+            palette.setColor(QPalette::Text, Qt::white);
+            palette.setColor(QPalette::Midlight, QColor(250, 250, 250));
+            palette.setColor(QPalette::Highlight, Qt::white);
+            QApplication::setPalette(palette);
+            const QPalette applied = QApplication::palette();
+            QTest::mouseMove(&window, QPoint(1400, 800));
+            tabs->setCurrentIndex(0);
+            QCoreApplication::processEvents();
+            const QRect normal = tabs->tabRect(1);
+            const int height = tabs->height();
+            verifyTabPixels(tabs, 1, palette.color(QPalette::WindowText), background);
+            QTest::mouseMove(tabs, tabs->tabRect(1).center());
+            QCoreApplication::processEvents();
+            const QColor hover = tabBackground(tabs, 1);
+            QVERIFY(hover.rgba() != background.rgba());
+            verifyTabPixels(tabs, 1, palette.color(QPalette::WindowText), hover);
+            QCOMPARE(tabs->tabRect(1), normal);
+            QCOMPARE(tabs->height(), height);
+            QCOMPARE(QApplication::palette(), applied);
+            const QString evidence = qEnvironmentVariable("LQCOMPARE_RIBBON_SCREENSHOT_DIR");
+            if (!evidence.isEmpty()) {
+                QVERIFY(QDir().mkpath(evidence));
+                QVERIFY(tabs->grab().save(evidence + "/adversarial-" + background.name().mid(1) + ".png"));
+            }
+        }
     }
 
     void opensTextFolderHexTableAndArchiveInActualTabs()
