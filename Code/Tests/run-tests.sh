@@ -266,6 +266,18 @@ run_self_test() {
     local suites="${selftest_tmp}/suites" build="${selftest_tmp}/build"
     mkdir -p "${suites}" "${build}"
 
+    # 空目录必须在启动调度前报明原因。数组长度展开不能再接 :- 默认值，
+    # 那种写法会产生 bad substitution；旧实现仍继续执行，掩盖了真正原因。
+    local empty_out="${selftest_tmp}/empty-root.log" empty_code=0
+    LQCOMPARE_TEST_ROOT="${suites}" LQCOMPARE_TEST_BUILD_ROOT="${build}" \
+        bash "${SELF}" >"${empty_out}" 2>&1 || empty_code=$?
+    st_expect "没有测试工程时退出码为 2" "$([[ ${empty_code} -eq 2 ]] && echo 0 || echo 1)"
+    st_contains "空目录明确报告没有测试工程" "${empty_out}" '^没有找到测试工程'
+    st_expect "空目录不产生 shell 展开错误" \
+        "$(if grep -q 'bad substitution' "${empty_out}"; then echo 1; else echo 0; fi)"
+    st_expect "空目录不启动并行调度" \
+        "$(if grep -q '^并行度 ' "${empty_out}"; then echo 1; else echo 0; fi)"
+
     local write_probe
     write_probe() {
         # $1 套件目录名 $2 目标名 $3 C++ 主体
@@ -579,6 +591,8 @@ CPP
     echo "── 断言：失败与超时的报错（日志 ${out4}）──"
     st_expect "退出码为 1（有失败套件）" "$([[ ${code4} -eq 1 ]] && echo 0 || echo 1)"
     st_contains "通过探针报成功" "${out4}" '✓ 通过'
+    st_expect "存在工程时也不产生 shell 展开错误" \
+        "$(if grep -q 'bad substitution' "${out4}"; then echo 1; else echo 0; fi)"
     st_contains "失败探针报套件失败" "${out4}" '✗ 套件失败'
     st_contains "失败时给出可复制的复现命令（含平台参数）" "${out4}" '复现：QT_QPA_PLATFORM=offscreen'
     st_contains "复现命令指向该套件自己的二进制" "${out4}" 'tst_zzprobefail -o'
@@ -768,11 +782,14 @@ fi
 
 # 不用 mapfile/readarray：bash 4.0 才有，macOS 自带 bash 3.2 上会直接失败。
 PROJECTS=()
+project_count=0
 while IFS= read -r project; do
     PROJECTS+=("${project}")
+    project_count=$((project_count + 1))
 done < <(find "${TESTS_ROOT}" -mindepth 2 -maxdepth 2 -name '*.pro' | sort)
 
-if [[ "${#PROJECTS[@]:-0}" -eq 0 ]]; then
+# 单独计数兼容 bash 3.2 的 set -u + 空数组，不依赖数组长度的版本差异。
+if [[ "${project_count}" -eq 0 ]]; then
     echo "没有找到测试工程（${TESTS_ROOT}/*/*.pro）。" >&2
     exit 2
 fi
