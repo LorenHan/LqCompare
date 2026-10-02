@@ -545,34 +545,53 @@ void TstPathName::checkFileNameAgreesWithTheThinWrappers()
 // 5. 真实文件系统
 // -----------------------------------------------------------------------------
 
+void TstPathName::displayKeepsForbiddenQuotesWithoutChangingInput()
+{
+    // 显示与校验是纯函数，所有平台都必须覆盖不能在 Windows 创建的历史名称。
+    const QString name = QStringLiteral(" a \"quoted\" name .txt");
+    QCOMPARE(PathName::forDisplay(name), QStringLiteral("·a \"quoted\" name .txt"));
+    QCOMPARE(name, QStringLiteral(" a \"quoted\" name .txt"));
+    QCOMPARE(checkFileName(name).problem, FileNameProblem::ForbiddenCharacter);
+}
+
+void TstPathName::realNameWithSpacesAndQuotesRoundTrips_data()
+{
+    QTest::addColumn<QString>("name");
+    QTest::addColumn<QString>("display");
+    QTest::addColumn<bool>("portableName");
+    QTest::newRow("unicode-spaces") << QStringLiteral(" 中文 文件.txt")
+        << QStringLiteral("·中文 文件.txt") << true;
+    QTest::newRow("single-quotes") << QStringLiteral(" a 'quoted' name .txt")
+        << QStringLiteral("·a 'quoted' name .txt") << true;
+#ifndef Q_OS_WIN
+    // POSIX 仍真实创建双引号名称；Windows 的纯显示/校验覆盖由上一个用例保证。
+    QTest::newRow("posix-double-quotes") << QStringLiteral(" a \"quoted\" name .txt")
+        << QStringLiteral("·a \"quoted\" name .txt") << false;
+#endif
+}
+
 void TstPathName::realNameWithSpacesAndQuotesRoundTrips()
 {
+    QFETCH(QString, name);
+    QFETCH(QString, display);
+    QFETCH(bool, portableName);
     QTemporaryDir directory;
     QVERIFY(directory.isValid());
-
-    // 已存在的名字要能正确显示与操作（PLAT-007 第 3 条）。
-    // 注意这与第 4 条（新建时严格校验）不矛盾：前者面向文件系统里已有的数据，
-    // 后者面向用户输入。下面两条断言一起说明这个取舍是有意的。
-    const QString name = QStringLiteral(" a \"quoted\" name .txt");
-    const QString path = directory.path() + QLatin1Char('/') + name;
-
+    const QString path = directory.filePath(name);
     QFile file(path);
-    QVERIFY2(file.open(QIODevice::WriteOnly), "含引号与首尾空格的名字在 POSIX 上本来就合法");
-    file.write("x");
+    QVERIFY2(file.open(QIODevice::WriteOnly), qPrintable(file.errorString()));
+    QCOMPARE(file.write("x"), qint64(1));
     file.close();
 
     const QStringList entries = QDir(directory.path()).entryList(QDir::Files);
     QCOMPARE(entries.size(), 1);
-    // 原样读回：不能被 trim，也不能被转义（转义只发生在显示层）。
+    // 原样读回：不能 trim，也不能把显示层的空格标记写回文件系统。
     QCOMPARE(entries.at(0), name);
-
-    // 显示层才动手：开头的空格标出来，引号保持原样（它没被改动过，
-    // 只是这个名字在 Windows 上建不出来，所以校验层会拦）。
-    QCOMPARE(PathName::forDisplay(entries.at(0)), QStringLiteral("·a \"quoted\" name .txt"));
-
-    // 而校验层会拦下这个名字——因为它在 Windows 上建不出来。
-    // 这是刻意的跨平台保守取舍，不是 bug。
-    QCOMPARE(checkFileName(name).problem, FileNameProblem::ForbiddenCharacter);
+    QCOMPARE(PathName::forDisplay(entries.at(0)), display);
+    QCOMPARE(checkFileName(name).problem,
+             portableName ? FileNameProblem::None : FileNameProblem::ForbiddenCharacter);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    QCOMPARE(file.readAll(), QByteArray("x"));
 }
 
 void TstPathName::realNameWithTrailingSpaceRoundTrips()

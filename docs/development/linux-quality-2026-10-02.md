@@ -336,3 +336,14 @@ macOS 系统 patch 参数不变，没有修改生成器或把换行差异当作�
 Linux PatchRegression 77/0/0；额外包装器真实执行 GNU patch --binary 的
 往返子集 4/0/0。Windows 头/i686 -Werror 编译通过；原生 Windows 修复后
 结果等待 CI。依据：https://www.gnu.org/software/diffutils/manual/html_node/patch-Options.html
+
+## PLAT-007 / #328：特殊文件名的合法磁盘夹具
+
+原 PathName 用例无条件在 Windows 创建双引号文件，原生 CI 因文件系统禁止
+而失败。现在三平台真实创建 Unicode/空格/单引号名称并读回字节，POSIX
+额外保留双引号磁盘用例；所有平台均执行双引号原样显示与禁止新建的纯断言。
+没有放宽生产名称规则，没有跳过整套特殊名称测试。
+
+Linux PathName 44 passed / 0 failed / 0 skipped；完整测试翻译单元使用官方
+Windows Qt 5.15.2 头及 i686 -Werror 编译通过。原生 Windows 的真实创建与
+显示结果仍待 CI；其它平台能力相关旧用例的跳过边界不变。
