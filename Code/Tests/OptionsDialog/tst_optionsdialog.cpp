@@ -38,6 +38,18 @@ public:
     }
 };
 
+class DeferredClassPalettePolishStyle : public QProxyStyle {
+public:
+    explicit DeferredClassPalettePolishStyle(QStyle *base) : QProxyStyle(base) {}
+    bool polishEnabled = false;
+    void polish(QPalette &palette) override {
+        // 对应 WindowsVista::polish(QPalette)：系统类调色板在样式创建之前
+        // 登记时没有这一步，主题恢复后重新登记时才应用 AlternateBase 规则。
+        if (polishEnabled)
+            palette.setBrush(QPalette::AlternateBase, palette.base().color().darker(104));
+    }
+};
+
 class ScopedApplicationStyle {
 public:
     ScopedApplicationStyle(QStyle *replacement, QStyle *restore)
@@ -60,6 +72,21 @@ private:
     QStyle *m_restore;
     QPalette m_palette;
 };
+
+QPalette expectedRestoredClassPalette(const QPalette &original, const QPalette &applicationPalette)
+{
+    // 没有独立类调色板时，查询直接返回全局快照，不得额外 polish 用户显式画刷。
+    if (original == applicationPalette && original.resolve() == applicationPalette.resolve())
+        return original;
+    // Qt 5.15.2 QApplication::init 先登记平台类调色板，再创建默认样式；
+    // 恢复时 initializeWidgetPalettesFromTheme 经 setPalette(pal, className)
+    // 应用当前样式的 polish 并保留原解析位。期望值须包含这项原生规则，
+    // 仍逐画刷精确比较，不能拿启动时尚未 polish 的 AlternateBase 当作不变量。
+    QPalette expected = original;
+    QApplication::style()->polish(expected);
+    expected.resolve(original.resolve());
+    return expected;
+}
 
 QString describeBrush(const QBrush &brush)
 {
@@ -348,8 +375,15 @@ private slots:
         const QPalette originalMenuPalette = QApplication::palette("QMenu");
         const QPalette originalButtonPalette = QApplication::palette("QPushButton");
         const QPalette originalAbstractButtonPalette = QApplication::palette("QAbstractButton");
+        const QPalette expectedMenuPalette = expectedRestoredClassPalette(originalMenuPalette, originalPalette);
+        const QPalette expectedButtonPalette = expectedRestoredClassPalette(originalButtonPalette, originalPalette);
+        const QPalette expectedAbstractButtonPalette =
+                expectedRestoredClassPalette(originalAbstractButtonPalette, originalPalette);
         Options::OptionsRuntime runtime(&repository);
         const QPalette startupPalette = QApplication::palette();
+        const QPalette startupMenuPalette = QApplication::palette("QMenu");
+        const QPalette startupButtonPalette = QApplication::palette("QPushButton");
+        const QPalette startupAbstractButtonPalette = QApplication::palette("QAbstractButton");
         QCOMPARE(Log::logFile(), temp.path() + QStringLiteral("/logs/lqcompare.log"));
         QSignalSpy fontChanged(&runtime, &Options::OptionsRuntime::contentFontChanged);
         QVERIFY(repository.apply({{QStringLiteral("display.theme"), QStringLiteral("dark")},
@@ -357,6 +391,9 @@ private slots:
                                   {QStringLiteral("display.contentFontSize"), 19},
                                   {QStringLiteral("logging.level"), QStringLiteral("debug")}}).ok);
         const QPalette darkPalette = QApplication::palette();
+        const QPalette darkMenuPalette = QApplication::palette("QMenu");
+        const QPalette darkButtonPalette = QApplication::palette("QPushButton");
+        const QPalette darkAbstractButtonPalette = QApplication::palette("QAbstractButton");
         QCOMPARE(QApplication::font().pointSize(), 16);
         QVERIFY(QApplication::palette().color(QPalette::Window).lightness() < 80);
         QCOMPARE(runtime.contentFont().pointSize(), 19);
@@ -385,10 +422,83 @@ private slots:
         }
         QCOMPARE(restoredPalette, originalPalette);
         QCOMPARE(restoredPalette.resolve(), originalPalette.resolve());
-        QCOMPARE(QApplication::palette("QMenu"), originalMenuPalette);
-        QCOMPARE(QApplication::palette("QPushButton"), originalButtonPalette);
-        QCOMPARE(QApplication::palette("QAbstractButton"), originalAbstractButtonPalette);
+        const auto diagnoseClassPalette = [](const char *className, const QPalette &original,
+                                             const QPalette &startup, const QPalette &dark,
+                                             const QPalette &expected) {
+            const QPalette restored = QApplication::palette(className);
+            if (restored == original && restored == expected)
+                return;
+            // 原生 CI 留下全部变化及独立样式期望是否匹配的证据；若不是合法的
+            // 样式转换，还需单列期望与实际的差异，避免只打印启动前后的颜色。
+            qWarning().noquote() << "classPalette=" << className
+                                << "matchesStylePolishedOriginal=" << (restored == expected);
+            const QString diagnostics = paletteRestorationDiagnostics(original, startup, dark, restored);
+            for (const QString &line : diagnostics.split(QLatin1Char('\n')))
+                qWarning().noquote() << line;
+            if (restored != expected) {
+                qWarning().noquote() << "classPalette=" << className << "unexpected brush differences:";
+                const QString unexpected = paletteRestorationDiagnostics(expected, startup, dark, restored);
+                for (const QString &line : unexpected.split(QLatin1Char('\n')))
+                    qWarning().noquote() << line;
+            }
+        };
+        diagnoseClassPalette("QMenu", originalMenuPalette, startupMenuPalette, darkMenuPalette, expectedMenuPalette);
+        diagnoseClassPalette("QPushButton", originalButtonPalette, startupButtonPalette,
+                             darkButtonPalette, expectedButtonPalette);
+        diagnoseClassPalette("QAbstractButton", originalAbstractButtonPalette,
+                             startupAbstractButtonPalette, darkAbstractButtonPalette, expectedAbstractButtonPalette);
+        QCOMPARE(QApplication::palette("QMenu"), expectedMenuPalette);
+        QCOMPARE(QApplication::palette("QMenu").resolve(), expectedMenuPalette.resolve());
+        QCOMPARE(QApplication::palette("QPushButton"), expectedButtonPalette);
+        QCOMPARE(QApplication::palette("QPushButton").resolve(), expectedButtonPalette.resolve());
+        QCOMPARE(QApplication::palette("QAbstractButton"), expectedAbstractButtonPalette);
+        QCOMPARE(QApplication::palette("QAbstractButton").resolve(), expectedAbstractButtonPalette.resolve());
         QVERIFY(runtime.lastError().isEmpty());
+    }
+    void nativeClassPaletteRestorationPolishesTheStartupPalette() {
+        auto *restore = QStyleFactory::create(QApplication::style()->objectName());
+        QVERIFY(restore);
+        auto *base = QStyleFactory::create(QStringLiteral("Fusion"));
+        if (!base) {
+            delete restore;
+            QFAIL("Fusion style is unavailable");
+        }
+        auto *probe = new DeferredClassPalettePolishStyle(base);
+        const ScopedApplicationStyle style(probe, restore);
+        const QPalette applicationPalette = QApplication::palette();
+        QPalette platformMenuPalette = applicationPalette;
+        platformMenuPalette.setColor(QPalette::Base, QColor(241, 242, 243));
+        platformMenuPalette.setColor(QPalette::AlternateBase, QColor(11, 22, 33));
+        // 保留隐式 AlternateBase 画刷，验证 polish 新置的位也会恢复，
+        // 而不是只在原解析位已包含该角色时碰巧通过。
+        platformMenuPalette.resolve(1u << QPalette::Base);
+        QApplication::setPalette(platformMenuPalette, "QMenu");
+        const QPalette startupMenuPalette = QApplication::palette("QMenu");
+        QCOMPARE(startupMenuPalette, platformMenuPalette);
+        QCOMPARE(startupMenuPalette.resolve(), platformMenuPalette.resolve());
+
+        probe->polishEnabled = true;
+        const QPalette expected = expectedRestoredClassPalette(startupMenuPalette, applicationPalette);
+        // 旧断言会把这项合法样式转换报成恢复失败，不能靠忽略 AlternateBase 修补。
+        QVERIFY(expected != startupMenuPalette);
+        QPalette independentlyPolished = startupMenuPalette;
+        independentlyPolished.setBrush(QPalette::AlternateBase,
+                                       startupMenuPalette.base().color().darker(104));
+        QCOMPARE(expected, independentlyPolished);
+        QCOMPARE(expected.resolve(), startupMenuPalette.resolve());
+        QVERIFY(!expected.isBrushSet(QPalette::Active, QPalette::AlternateBase));
+        // 对应 Qt initializeWidgetPalettesFromTheme 的类调色板重新登记调用。
+        QApplication::setPalette(platformMenuPalette, "QMenu");
+        QCOMPARE(QApplication::palette("QMenu"), expected);
+        QCOMPARE(QApplication::palette("QMenu").resolve(), startupMenuPalette.resolve());
+        QCOMPARE(QApplication::palette(), applicationPalette);
+        QCOMPARE(expectedRestoredClassPalette(applicationPalette, applicationPalette), applicationPalette);
+        QCOMPARE(expectedRestoredClassPalette(applicationPalette, applicationPalette).resolve(),
+                 applicationPalette.resolve());
+        // 原生规则仍必须抓住真正残留的深色 Link，不能只比较重新 polish 的角色。
+        QPalette darkResidue = expected;
+        darkResidue.setColor(QPalette::Link, QColor(123, 183, 255));
+        QVERIFY(darkResidue != expected);
     }
     void runtimeRestoresUnresolvedNativeLinkBrushes_data() {
         QTest::addColumn<bool>("explicitWindowText");

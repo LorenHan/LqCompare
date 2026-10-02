@@ -391,7 +391,10 @@ Linux Trash 42 passed / 0 failed / 0 skipped，包括直接运行同一 Windows
 第二次能力校验。Sync全套25/0/0，新增预演/确认执行回归验证搬移调用0、成功0、
 三项失败与原件完整。同步源/测试同样通过Windows头/i686 -Werror交叉编译。
 
-## ENG-004 / #336：PR CI 只保留最新快照
+## ENG-004 / #336：PR CI 只保留最新快照（历史策略，已被逐提交产物要求取代）
+
+后续要求每个提交保留三系统可执行产物，因此本节仅记录已发生的旧操作；
+当前策略见本文末尾的逐提交证据章节，不再按分支取消不同 SHA 的运行。
 
 经确认，同一工作流/同一 PR 的新快照可取消过期运行；不同 PR、不同工作流
 分开分组，main push 与手工触发使用唯一 run_id，不相互取消。三平台矩阵、
@@ -651,3 +654,32 @@ DPI、125%/200% 缩放的相关用例通过，72 DPI 连续重复五次通过。
 事件驱动的实际搜索回车、默认 No、Cancel 通过，自建输入文件哈希不变。所有
 本地执行仍为 Linux/offscreen；原生 xcb/Cocoa/Windows 结果需按对应 CI 提交
 单独核对，不能以此测试修正声称完整三平台产品验收。
+
+## PLAT-001 / ENG-004：原生调色板测试与逐提交证据
+
+Qt 5.15.2 在创建应用样式之前登记原生类调色板；恢复应用调色板后重新登记时，
+会先应用当前样式的 `polish`，再保留原始 resolve mask。WindowsVista 样式对
+AlternateBase 使用 Base 的 104% 加深值。因此测试中的启动快照不能直接作为
+恢复后的类调色板期望。测试现在独立计算该原生转换，仍精确比较全部画刷与解析位；
+没有修改产品主题、降低比较范围或忽略 AlternateBase。
+
+参考 Qt 原始实现：[QApplication 初始化与类调色板](https://github.com/qt/qtbase/blob/v5.15.2/src/widgets/kernel/qapplication.cpp)
+和 [WindowsVista 调色板规则](https://github.com/qt/qtbase/blob/v5.15.2/src/widgets/styles/qwindowsvistastyle.cpp)。
+旧 Windows CI `b5d84ef` 实际为 4015 / 1 / 36，仅 QMenu 等值断言失败；原日志没有
+逐画刷差异，本次补充分阶段诊断。原生修正版结果须按随后提交核对，不能仅凭源码
+解释便宣称该失败已在 Windows 上解决。
+
+提交前完整 OptionsDialog 在 Linux Fusion / Windows 绘制风格各 **27 / 0 / 0**，
+ASan + UBSan 完整套件 **27 / 0 / 0**（未启用 LSan）；官方 Windows Qt 5.15.2 头文件
+严格交叉编译通过。三个隔离负对照均正确失败：旧的未 polish 快照、真实深色 Link
+残留和漏恢复 resolve mask。新增夹具保留隐式 AlternateBase，防止解析位碰巧已设置
+而漏检。最终 Linux 全量回归 **3988 / 0 / 12**；SingleInstance 仍因当前云环境
+socket 限制整套单独排除，不能把本次全量结果称为无遗漏的原生桌面验收。
+
+后续每个本次维护中推送的提交均保留独立平台结果，工作流改为按源码 SHA 分组，
+不再取消或替换不同 SHA 的在途/排队项。同组 `cancel-in-progress: false` 单独使用
+仍可能替换旧的 pending 项，必须同时分开提交的 group；依据
+[GitHub 并发规则](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)。
+公开运行器无私有依赖时仍明确报告应用构建与打包缺口；维护过程使用独立的私有
+消费者验证提交固定公开源码 SHA，分别记录两个版本及三平台产物/失败。此流程
+不授予公开工作流私有仓库凭据，也不声称第三方提交会自动触发跨仓库构建。
