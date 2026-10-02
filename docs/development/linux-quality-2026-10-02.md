@@ -278,3 +278,24 @@ ERROR_DIRECTORY（267）现在归为 NotDirectory，并保留 Win32 原码与符
 Windows 实际文件枚举行为仍由正式 CI 对原用例验证。
 
 错误码依据：https://learn.microsoft.com/en-us/windows/win32/debug/system-error-codes--0-499-
+
+## ENG-003 / #335：按宿主选择 Qt 测试平台
+
+Windows 默认使用原生 windows 插件，Linux/macOS 保留 offscreen；显式
+QT_QPA_PLATFORM 原值（含插件参数/候选列表）优先，不在失败后自动降级。
+移除 CI 作业级的统一 offscreen，所有平台都执行不依赖 Qt 的选择器自测。
+
+Windows CI 的 Folder/TextView 崩溃栈均为 qt_getWindowsSystemMenu →
+QMessageBox::showEvent。Qt v5.15.2 源码确认 offscreen 未提供 nativeInterface，
+基类返回 nullptr，而 QMessageBox 的 Windows 菜单访问没有空指针检查。
+这是测试运行平台配置问题，未删弹窗测试或更改业务提示逻辑。
+
+14 条选择/导出/覆盖断言、四类变异、完整 Linux 运行器自测通过。
+经更新后的运行器，Linux TextView 31、Folder 68 全套通过，均无跳过，日志
+确认选择 offscreen。Folder 过滤运行排除了 FolderMerge/FolderMergeView，
+不能算这些套件通过。原生 Windows windows 插件仍待该提交正式 CI。
+
+Qt 官方源码：
+- https://github.com/qt/qtbase/blob/v5.15.2/src/plugins/platforms/offscreen/qoffscreenintegration.h
+- https://github.com/qt/qtbase/blob/v5.15.2/src/gui/kernel/qplatformintegration.cpp
+- https://github.com/qt/qtbase/blob/v5.15.2/src/widgets/dialogs/qmessagebox.cpp

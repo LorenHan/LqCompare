@@ -2,7 +2,7 @@
 #
 # 测试运行器（PRD: ENG-003）
 #
-# 职责：找出 Code/Tests/*/*.pro，逐个构建并用 offscreen 平台运行，
+# 职责：找出 Code/Tests/*/*.pro，逐个构建并选择适合本机的 Qt 平台运行，
 # **并行**跑（默认 4 个套件同时进行），**每个套件有超时上限**，
 # 汇总通过/失败/跳过统计，并在失败时给出可直接复制的复现命令。
 # **崩溃**（没产出 `Totals:` 行）的套件会被**自动补跑一遍 `-v2`**，
@@ -13,6 +13,7 @@
 #   Code/Tests/run-tests.sh                 # 全部套件
 #   Code/Tests/run-tests.sh CommandRegistry # 只跑名字匹配的套件
 #   Code/Tests/run-tests.sh --self-test     # 运行器自测（见下）
+#   Code/Tests/run-tests.sh --self-test-platform # 平台选择自测（不需要 Qt）
 #   QMAKE=/path/to/qmake Code/Tests/run-tests.sh
 #   MAKE=/path/to/mingw32-make Code/Tests/run-tests.sh
 #   LQCOMPARE_TEST_SKIP="AppIntegration CommandActions" Code/Tests/run-tests.sh
@@ -20,6 +21,7 @@
 #       # 排除项会在开头与末尾汇总里显式打出，不会被当成「全都验证过了」。
 #
 # 可调环境变量：
+#   QT_QPA_PLATFORM          显式值原样保留；默认 Windows 用 windows，其余用 offscreen
 #   LQCOMPARE_TEST_JOBS       并行套件数，默认 min(4, CPU 核数)；设为 1 即串行
 #   LQCOMPARE_TEST_TIMEOUT    单个套件的运行超时（秒），默认 600
 #   LQCOMPARE_TEST_ROOT       套件搜索根目录，默认 Code/Tests（自测用它指向临时目录）
@@ -57,6 +59,68 @@ REPO_ROOT="$(cd "${CODE_ROOT}/.." && pwd)"
 BUILD_ROOT="${LQCOMPARE_TEST_BUILD_ROOT:-${REPO_ROOT}/_test-build}"
 TESTS_ROOT="${LQCOMPARE_TEST_ROOT:-${CODE_ROOT}/Tests}"
 FILTER="${1:-}"
+
+# Qt 5.15.2 的 Windows QMessageBox 会访问原生窗口系统菜单；offscreen 不提供
+# 所需接口，Folder / TextView 的真实弹窗用例因此崩在 qt_getWindowsSystemMenu。
+# Windows 托管运行器使用原生 windows 插件；Linux 无显示服务器、macOS 现有
+# 离屏测试约定保持不变。以 uname 判断实际宿主，不依赖 CI 专有的 RUNNER_OS。
+# 显式指定的插件（包括 windows:... 参数）不改写，也不在失败时自动降级。
+configure_qpa_platform() {
+    if [[ -z "${QT_QPA_PLATFORM:-}" ]]; then
+        case "$(uname -s)" in
+            MINGW*|MSYS*|CYGWIN*) QT_QPA_PLATFORM=windows ;;
+            *) QT_QPA_PLATFORM=offscreen ;;
+        esac
+    fi
+    export QT_QPA_PLATFORM
+}
+
+# 只替换宿主探测，不启动异平台的 Qt 插件；子 shell 同时检查变量确实已导出。
+# 这条自测不依赖编译器或 POSIX 信号，因此 Windows CI 也必须执行。
+run_platform_self_test() {
+    local system configured expected actual failures=0 cases=0
+    while IFS='|' read -r system configured expected; do
+        cases=$((cases + 1))
+        if actual="$(
+            if [[ "${configured}" == UNSET ]]; then
+                unset QT_QPA_PLATFORM
+            else
+                QT_QPA_PLATFORM="${configured}"
+            fi
+            uname() { printf '%s\n' "${system}"; }
+            configure_qpa_platform
+            bash -c 'printf "%s" "${QT_QPA_PLATFORM-}"'
+        )" && [[ "${actual}" == "${expected}" ]]; then
+            echo "  ✓ ${system} / ${configured:-EMPTY} -> ${expected}"
+        else
+            echo "  ✗ ${system} / ${configured:-EMPTY}：期望 ${expected}，实际 ${actual}"
+            failures=$((failures + 1))
+        fi
+    done <<'CASES'
+Linux|UNSET|offscreen
+Linux||offscreen
+Linux|xcb|xcb
+Darwin|UNSET|offscreen
+Darwin|cocoa|cocoa
+MINGW64_NT-10.0-20348|UNSET|windows
+MINGW32_NT-10.0|UNSET|windows
+MSYS_NT-10.0|UNSET|windows
+CYGWIN_NT-10.0|UNSET|windows
+MINGW64_NT-10.0||windows
+MINGW64_NT-10.0|offscreen|offscreen
+MINGW64_NT-10.0|windows:fontengine=freetype,darkmode=1|windows:fontengine=freetype,darkmode=1
+Linux|xcb;offscreen|xcb;offscreen
+FreeBSD|UNSET|offscreen
+CASES
+    echo "平台选择自测：${cases} 条断言，${failures} 条失败。"
+    [[ "${failures}" -eq 0 ]]
+}
+
+if [[ "${FILTER}" == "--self-test-platform" ]]; then
+    run_platform_self_test
+    exit $?
+fi
+configure_qpa_platform
 
 # 可选依赖缺失时要排除的套件：空格分隔的子串，匹配规则与位置参数 FILTER 一致。
 # 用在「这台机器上没有某个可选模块」的场合——目前只有 LqRibbon 一个，它在**私有**
@@ -139,9 +203,6 @@ if [[ -z "${MAKE:-}" ]]; then
     echo "找不到 make/mingw32-make。请设置 MAKE=/path/to/make。" >&2
     exit 2
 fi
-
-# 测试必须能跑在没有显示器的机器上。
-export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-offscreen}"
 
 # ---------------------------------------------------------------------------
 # 运行器自测（ENG-003 第 2、3 条的可重复证据）
@@ -254,6 +315,7 @@ st_snapshot_evidence() {
 }
 
 run_self_test() {
+    run_platform_self_test || return 1
     selftest_tmp="$(mktemp -d "${TMPDIR:-/tmp}/lqcompare-selftest.XXXXXX")" || return 2
     if [[ "${LQCOMPARE_SELFTEST_KEEP:-}" == "1" ]]; then
         echo "自测临时目录保留在：${selftest_tmp}"
@@ -594,7 +656,8 @@ CPP
     st_expect "存在工程时也不产生 shell 展开错误" \
         "$(if grep -q 'bad substitution' "${out4}"; then echo 1; else echo 0; fi)"
     st_contains "失败探针报套件失败" "${out4}" '✗ 套件失败'
-    st_contains "失败时给出可复制的复现命令（含平台参数）" "${out4}" '复现：QT_QPA_PLATFORM=offscreen'
+    grep -qF "复现：QT_QPA_PLATFORM=${QT_QPA_PLATFORM}" "${out4}"
+    st_expect "失败时给出可复制的复现命令（含实际平台参数）" "$?"
     st_contains "复现命令指向该套件自己的二进制" "${out4}" 'tst_zzprobefail -o'
     st_contains "挂死探针被超时打断并单独点名" "${out4}" '✗ 套件超时'
     st_contains "超时套件在末尾汇总里单独成一行" "${out4}" '^超时套件（'
@@ -811,6 +874,7 @@ if [[ -n "${SKIP}" ]]; then
     echo "按 LQCOMPARE_TEST_SKIP 排除（这些套件本轮**没有验证**）：${SKIP}"
 fi
 echo "并行度 ${JOBS}（每个套件 make -j${MAKE_JOBS}），单套件超时 ${TIMEOUT}s。"
+echo "Qt 平台：QT_QPA_PLATFORM=${QT_QPA_PLATFORM}"
 
 # ---------------------------------------------------------------------------
 # 启动一个套件二进制并等它结束（带超时看门狗）
