@@ -10,6 +10,13 @@
 
 #include <memory>
 
+namespace LqCompare {
+namespace Files {
+// 保守后端没有 WinAPI 依赖；测试直接调用平台工厂，以便每个平台执行相同实现。
+TrashService *createWindowsTrashService();
+}
+}
+
 using namespace LqCompare::Files;
 
 // -----------------------------------------------------------------------------
@@ -56,8 +63,9 @@ const QString kNetworkPath = QStringLiteral("/mnt/network-share");
 class TrashCleanupGuard
 {
 public:
-    TrashCleanupGuard(const QString &inTrash, const QString &restoreTo)
-        : m_inTrash(inTrash), m_restoreTo(restoreTo)
+    TrashCleanupGuard(const TrashService *service, const QString &inTrash,
+                      const QString &restoreTo)
+        : m_service(service), m_inTrash(inTrash), m_restoreTo(restoreTo)
     {
     }
 
@@ -68,12 +76,15 @@ public:
         // 已经不在废纸篓里（正常还原成功），或原位置已被占用，都不用管。
         if (!QFile::exists(m_inTrash) || QFile::exists(m_restoreTo))
             return;
-        QFile::rename(m_inTrash, m_restoreTo);
+        // 优先走服务还原，Linux 还会一并清掉 .trashinfo；直接搬走文件会留下幽灵记录。
+        if (!m_service->undoLastDelete())
+            QFile::rename(m_inTrash, m_restoreTo);
     }
 
     void disarm() { m_inTrash.clear(); }
 
 private:
+    const TrashService *m_service;
     QString m_inTrash;
     QString m_restoreTo;
 };
@@ -123,6 +134,7 @@ void TstTrash::onlyAvailableCountsAsUsable()
     QVERIFY(!isTrashUsable(TrashAvailability::NoSpace));
     QVERIFY(!isTrashUsable(TrashAvailability::PlatformNotSupported));
     QVERIFY(!isTrashUsable(TrashAvailability::Unknown));
+    QVERIFY(!isTrashUsable(TrashAvailability::RecoverabilityNotGuaranteed));
 }
 
 void TstTrash::availableNeedsNoUserChoice()
@@ -144,6 +156,7 @@ void TstTrash::unavailableAlwaysNeedsUserChoice()
         TrashAvailability::NoSpace,
         TrashAvailability::PlatformNotSupported,
         TrashAvailability::Unknown,
+        TrashAvailability::RecoverabilityNotGuaranteed,
     };
 
     for (TrashAvailability availability : unavailable) {
@@ -432,6 +445,47 @@ void TstTrash::batchKeepsPartlySucceededEntries()
     QCOMPARE(service.trashedPaths(), (QStringList{QStringLiteral("/a.txt"), QStringLiteral("/c.txt")}));
 }
 
+void TstTrash::successfulRecordMayHaveNoFilesystemPath()
+{
+    // Windows 的 Shell 命名空间不是磁盘路径。这里只验证报告契约，绝不真的删除：
+    // 当前后端不能自动还原，所以真实删除夹具无法保证失败时完整清理。
+    TrashRecord record;
+    record.originalPath = QStringLiteral("C:/temporary/report.txt");
+    record.error = FileSystemError::None;
+    QVERIFY(record.trashedPath.isEmpty());
+    QVERIFY(record.succeeded());
+
+    TrashReport report;
+    report.records.append(record);
+    QVERIFY(report.succeeded());
+    QVERIFY(report.anySucceeded());
+    QCOMPARE(report.firstError(), FileSystemError::None);
+    QCOMPARE(report.firstErrorCode(), ErrorCode());
+    QVERIFY(report.failedPaths().isEmpty());
+    QVERIFY(report.trashedPaths().isEmpty());
+    QCOMPARE(report.records.first().originalPath, record.originalPath);
+}
+
+void TstTrash::trashedPathsContainsOnlyKnownSuccessfulPaths()
+{
+    TrashReport report;
+    report.records.append({QStringLiteral("/a.txt"), QStringLiteral("/trash/a.2.txt"),
+                           FileSystemError::None});
+    report.records.append({QStringLiteral("C:/b.txt"), QString(), FileSystemError::None});
+    report.records.append({QStringLiteral("/c.txt"), QStringLiteral("/trash/c.txt"),
+                           FileSystemError::Busy});
+    report.records.append({QStringLiteral("/d.txt"), QStringLiteral("/trash/d.txt"),
+                           FileSystemError::None});
+
+    // 既不能把未知位置编造为一个路径，也不能因某个成功条目没有路径而丢掉其余记录。
+    QCOMPARE(report.trashedPaths(),
+             (QStringList{QStringLiteral("/trash/a.2.txt"), QStringLiteral("/trash/d.txt")}));
+    QCOMPARE(report.failedPaths(), QStringList{QStringLiteral("/c.txt")});
+    QVERIFY(!report.succeeded());
+    QVERIFY(report.anySucceeded());
+    QCOMPARE(report.firstError(), FileSystemError::Busy);
+}
+
 void TstTrash::trashNeverRecordsPermanentDeletion()
 {
     Test::FakeTrashService service;
@@ -518,6 +572,141 @@ void TstTrash::lastDeleteKeepsFailedBatches()
     QCOMPARE(service.lastDelete().failedPaths(), QStringList{QStringLiteral("/second.txt")});
 }
 
+void TstTrash::windowsTrashRefusesUnverifiedRecovery()
+{
+    const std::unique_ptr<TrashService> service(createWindowsTrashService());
+    QCOMPARE(service->platformName(), QStringLiteral("windows"));
+    QCOMPARE(service->displayLocation(), QStringLiteral("shell:RecycleBinFolder"));
+    const TrashAvailability availability = service->availabilityFor(QStringLiteral("C:/example.txt"));
+    QCOMPARE(availability, TrashAvailability::RecoverabilityNotGuaranteed);
+    QCOMPARE(QString::fromLatin1(trashAvailabilityIdentifier(availability)),
+             QStringLiteral("recoverability-not-guaranteed"));
+    const TrashDecision decision = decideTrash(availability);
+    QVERIFY(decision.requiresUserChoice);
+    QVERIFY(decision.reason.contains(QStringLiteral("不能保证删除可恢复")));
+    QVERIFY(decision.advice.contains(QStringLiteral("保留文件")));
+    const TrashFallback defaultChoice{};
+    QVERIFY(defaultChoice == TrashFallback::Cancel);
+
+    // 新状态也必须在共同入口拦住，不能绕到搬移函数或任何永久删除回退。
+    Test::FakeTrashService fake;
+    fake.setDefaultAvailability(availability);
+    const TrashReport rejected = fake.deleteToTrash({QStringLiteral("/untouched.txt")});
+    QVERIFY(!rejected.anySucceeded());
+    QCOMPARE(rejected.firstError(), FileSystemError::NotSupported);
+    QCOMPARE(fake.callCount(Test::FakeTrashService::Operation::TrashPaths), 0);
+    QVERIFY(fake.permanentlyDeletedPaths().isEmpty());
+
+    ErrorCode error = FileSystemError::Busy;
+    QVERIFY(!service->undoLastDelete(&error));
+    QCOMPARE(error, FileSystemError::NotSupported);
+    QVERIFY(!service->undoLastDelete(nullptr));
+    QVERIFY(service->lastDelete().records.isEmpty());
+}
+
+void TstTrash::windowsTrashRejectsFilesWithoutChangingTheirBytes()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QByteArray content("keep\0these\r\nbytes", 17);
+    const QString original = createTemporaryFile(directory.path(), QStringLiteral("原件.txt"), content);
+    const QString sibling = createTemporaryFile(directory.path(), QStringLiteral("sibling.txt"),
+                                                QByteArrayLiteral("leave sibling alone"));
+    QVERIFY(!original.isEmpty());
+    QVERIFY(!sibling.isEmpty());
+    const QStringList before = QDir(directory.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot);
+
+    const std::unique_ptr<TrashService> service(createWindowsTrashService());
+    const TrashReport report = service->deleteToTrash({original});
+    QVERIFY(!report.succeeded());
+    QVERIFY(!report.anySucceeded());
+    QCOMPARE(report.records.size(), 1);
+    QCOMPARE(report.failedPaths(), QStringList{original});
+    QCOMPARE(report.firstError(), FileSystemError::NotSupported);
+    QVERIFY(report.trashedPaths().isEmpty());
+    QVERIFY(report.records.first().trashedPath.isEmpty());
+    QCOMPARE(service->lastDelete().failedPaths(), QStringList{original});
+    QVERIFY(!service->lastDelete().anySucceeded());
+
+    QCOMPARE(QDir(directory.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot), before);
+    QFile originalFile(original);
+    QVERIFY(originalFile.open(QIODevice::ReadOnly));
+    QCOMPARE(originalFile.readAll(), content);
+    QFile siblingFile(sibling);
+    QVERIFY(siblingFile.open(QIODevice::ReadOnly));
+    QCOMPARE(siblingFile.readAll(), QByteArrayLiteral("leave sibling alone"));
+    ErrorCode error;
+    QVERIFY(!service->undoLastDelete(&error));
+    QCOMPARE(error, FileSystemError::NotSupported);
+    QCOMPARE(service->lastDelete().failedPaths(), QStringList{original});
+}
+
+void TstTrash::windowsTrashRejectsDirectoriesWithoutChangingTheirContents()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString target = directory.path() + QStringLiteral("/target");
+    const QString nested = target + QStringLiteral("/nested");
+    QVERIFY(QDir().mkpath(nested));
+    const QString child = createTemporaryFile(nested, QStringLiteral("child.txt"),
+                                              QByteArrayLiteral("nested original"));
+    const QString marker = createTemporaryFile(directory.path(), QStringLiteral("parent-marker.txt"),
+                                               QByteArrayLiteral("parent original"));
+    QVERIFY(!child.isEmpty());
+    QVERIFY(!marker.isEmpty());
+    const QStringList before = QDir(directory.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot);
+
+    const std::unique_ptr<TrashService> service(createWindowsTrashService());
+    const TrashReport report = service->deleteToTrash({child, nested, target});
+    QVERIFY(!report.succeeded());
+    QVERIFY(!report.anySucceeded());
+    QCOMPARE(report.records.size(), 3);
+    QCOMPARE(report.failedPaths(), (QStringList{child, nested, target}));
+    QVERIFY(report.trashedPaths().isEmpty());
+    for (const TrashRecord &record : report.records) {
+        QCOMPARE(record.error, FileSystemError::NotSupported);
+        QVERIFY(record.trashedPath.isEmpty());
+    }
+    QCOMPARE(QDir(directory.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot), before);
+    QCOMPARE(QDir(target).entryList(QDir::AllEntries | QDir::NoDotAndDotDot),
+             QStringList{QStringLiteral("nested")});
+    QCOMPARE(QDir(nested).entryList(QDir::AllEntries | QDir::NoDotAndDotDot),
+             QStringList{QStringLiteral("child.txt")});
+    QFile childFile(child);
+    QVERIFY(childFile.open(QIODevice::ReadOnly));
+    QCOMPARE(childFile.readAll(), QByteArrayLiteral("nested original"));
+    QFile markerFile(marker);
+    QVERIFY(markerFile.open(QIODevice::ReadOnly));
+    QCOMPARE(markerFile.readAll(), QByteArrayLiteral("parent original"));
+}
+
+void TstTrash::windowsTrashEmptyBatchIsANoopAndMissingTargetsAreRejected()
+{
+    const std::unique_ptr<TrashService> service(createWindowsTrashService());
+    const TrashReport empty = service->deleteToTrash({});
+    QVERIFY(empty.succeeded());
+    QVERIFY(!empty.anySucceeded());
+    QVERIFY(empty.records.isEmpty());
+    QVERIFY(service->lastDelete().records.isEmpty());
+
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString missing = directory.path() + QStringLiteral("/does-not-exist");
+    const TrashReport report = service->deleteToTrash({QString(), missing});
+    QVERIFY(!report.succeeded());
+    QVERIFY(!report.anySucceeded());
+    QCOMPARE(report.records.size(), 2);
+    QCOMPARE(report.failedPaths(), (QStringList{QString(), missing}));
+    for (const TrashRecord &record : report.records) {
+        // 能力尚未开放，不能声称已查询到 NotFound，更不能把空路径当成空批次成功。
+        QCOMPARE(record.error, FileSystemError::NotSupported);
+        QVERIFY(record.trashedPath.isEmpty());
+    }
+    QVERIFY(QDir(directory.path()).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty());
+    QVERIFY(!QFile::exists(missing));
+    QVERIFY(!service->lastDelete().anySucceeded());
+}
+
 // -----------------------------------------------------------------------------
 // 5. 真实实现（本机平台）
 // -----------------------------------------------------------------------------
@@ -540,12 +729,15 @@ void TstTrash::nativeTrashServiceReportsItsPlatform()
 
 void TstTrash::nativeTrashServiceHasDisplayLocation()
 {
-    // 界面要告诉用户「文件移到哪儿去了」，所以这个位置得是个能用的路径。
+    // 界面要告诉用户「文件移到哪儿去了」，位置可以是目录，也可以是 Shell 命名空间。
     // 兜底实现返回空串是允许的，但当前三个平台实现都必须给出位置。
     const std::unique_ptr<TrashService> service(createNativeTrashService());
     const QString location = service->displayLocation();
 
-#if defined(Q_OS_WIN) || defined(Q_OS_MACOS) || defined(Q_OS_LINUX)
+#if defined(Q_OS_WIN)
+    QCOMPARE(location, QStringLiteral("shell:RecycleBinFolder"));
+    QVERIFY(!QDir::isAbsolutePath(location));
+#elif defined(Q_OS_MACOS) || defined(Q_OS_LINUX)
     QVERIFY2(!location.isEmpty(), "平台实现没有给出回收站位置，界面无法提示用户");
     QVERIFY(QDir::isAbsolutePath(location));
 #else
@@ -583,8 +775,29 @@ void TstTrash::nativeTrashAvailabilityNeverAssumesUsable()
     // 那是可以稳定复现的，见 unavailableAlwaysNeedsUserChoice()。
 }
 
+void TstTrash::nativeTrashUndoWithoutPriorDeleteReportsCapability()
+{
+    const std::unique_ptr<TrashService> service(createNativeTrashService());
+    QVERIFY(service->lastDelete().records.isEmpty());
+
+    ErrorCode error = FileSystemError::Busy;
+    QVERIFY(!service->undoLastDelete(&error));
+#if defined(Q_OS_MACOS) || defined(Q_OS_LINUX)
+    QCOMPARE(error, FileSystemError::NotFound);
+#else
+    // Windows 当前后端明确拒绝自动还原；不能把无事可做伪装成已还原成功。
+    QCOMPARE(error, FileSystemError::NotSupported);
+#endif
+    QVERIFY(!service->undoLastDelete(nullptr));
+    QVERIFY(service->lastDelete().records.isEmpty());
+}
+
 void TstTrash::nativeTrashRoundTripRestoresTheFile()
 {
+#if defined(Q_OS_WIN)
+    // 在任何删除之前说明边界，不能先删再因取不到实际路径而让夹具滞留系统回收站。
+    QSKIP("Windows 当前后端拒绝未验证可恢复性的删除；拒绝删除与 NotSupported 契约由独立用例验证");
+#endif
     const std::unique_ptr<TrashService> service(createNativeTrashService());
 
     if (!isTrashUsable(service->availabilityFor(QDir::tempPath())))
@@ -599,21 +812,19 @@ void TstTrash::nativeTrashRoundTripRestoresTheFile()
     QVERIFY(!victim.isEmpty());
 
     const TrashReport report = service->deleteToTrash(QStringList{victim});
+    const QString inTrash = report.records.value(0).trashedPath;
+    TrashCleanupGuard guard(service.get(), inTrash, victim);
     QVERIFY2(report.succeeded(), "删除到回收站失败：这个用例的前提是它应该成功");
+    QCOMPARE(report.records.size(), 1);
 
     // 断言 1：原位置确实空了。没空说明删除根本没发生。
     QVERIFY(!QFile::exists(victim));
 
     // 断言 2：文件**确实在废纸篓里**，而不是被无声删掉了。
     // 这是「删除必须可逆」最直接的证据：文件还在某个地方。
-    const QString inTrash = report.records.at(0).trashedPath;
     QVERIFY(!inTrash.isEmpty());
     QVERIFY2(QFile::exists(inTrash),
              qPrintable(QStringLiteral("废纸篓里找不到 %1：文件可能被永久删除了").arg(inTrash)));
-
-    // 从这里开始，无论哪条断言失败都要把废纸篓里那份收回来。
-    // 放在两次删除之间而不是最后，是因为它必须覆盖所有失败路径。
-    TrashCleanupGuard guard(inTrash, victim);
 
     ErrorCode error;
     QVERIFY2(service->undoLastDelete(&error),
@@ -623,12 +834,18 @@ void TstTrash::nativeTrashRoundTripRestoresTheFile()
     // 断言 3：文件回到了原处，而且废纸篓里那份已经不在。
     QVERIFY(QFile::exists(victim));
     QVERIFY(!QFile::exists(inTrash));
+    QFile restored(victim);
+    QVERIFY(restored.open(QIODevice::ReadOnly));
+    QCOMPARE(restored.readAll(), QByteArrayLiteral("do not lose me"));
 
     guard.disarm();
 }
 
 void TstTrash::nativeTrashRestoreRefusesToOverwrite()
 {
+#if defined(Q_OS_WIN)
+    QSKIP("Windows 当前后端拒绝未验证可恢复性的删除；拒绝删除与 NotSupported 契约由独立用例验证");
+#endif
     const std::unique_ptr<TrashService> service(createNativeTrashService());
 
     if (!isTrashUsable(service->availabilityFor(QDir::tempPath())))
@@ -643,17 +860,19 @@ void TstTrash::nativeTrashRestoreRefusesToOverwrite()
     QVERIFY(!original.isEmpty());
 
     const TrashReport report = service->deleteToTrash(QStringList{original});
+    const QString inTrash = report.records.value(0).trashedPath;
+    TrashCleanupGuard guard(service.get(), inTrash, original);
     QVERIFY2(report.succeeded(), "删除到回收站失败：这个用例的前提是它应该成功");
-    const QString inTrash = report.records.at(0).trashedPath;
+    QCOMPARE(report.records.size(), 1);
     QVERIFY(!inTrash.isEmpty());
-
-    // 测试自己造出来的文件，直接删掉即可。
-    TrashFileRemover remover(inTrash);
+    QVERIFY(QFile::exists(inTrash));
 
     // 模拟「用户已经把另一个文件放回原位置了」。
     const QString replacement = createTemporaryFile(directory.path(),
                                                     QStringLiteral("lqcompare-occupied.txt"),
                                                     QByteArrayLiteral("a file the user cares about"));
+    // 先清理测试自造的占位文件，再由 guard 正常还原原件，避免留下 .trashinfo。
+    TrashFileRemover remover(replacement);
     QVERIFY(!replacement.isEmpty());
 
     ErrorCode error;
@@ -672,7 +891,7 @@ void TstTrash::nativeTrashRestoreRefusesToOverwrite()
 
     // 废纸篓里的那一份也还在（还原失败不该顺手把它删了）。
     QVERIFY(QFile::exists(inTrash));
-    // 不 disarm：remover 会在析构时把它删掉，包括上面任何一条断言失败的时候。
+    // 不 disarm：正常与失败路径都先清理占位文件，再还原原件。
 }
 
 // Q_OBJECT 声明在头文件里，因此这里不需要 #include "xxx.moc"：
