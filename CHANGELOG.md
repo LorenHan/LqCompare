@@ -29,6 +29,10 @@
 
 ### 修复
 
+- 命令搜索使用独立直角布局行，不再遮挡 Ribbon 标签；回车与放大镜都进入同一确认流程，
+  防止重复按键误执行、过期查询和模态期间关闭窗口的生命周期崩溃
+  （UI-004 / [#4](https://github.com/LorenHan/LqCompare/issues/4)）
+
 - Ribbon 标签改为跟随应用调色板的直角状态，修复原生窗口框架下白字不可读，
   保留选择、悬停及键盘焦点提示，不改变页面/命令与比较区域布局
   （UI-001 / [#2](https://github.com/LorenHan/LqCompare/issues/2)）

@@ -3,6 +3,8 @@
 
 #include "LqRibbon.h"
 
+class QLineEdit;
+
 namespace LqCompare {
 
 ///
@@ -37,6 +39,12 @@ protected:
 private:
     void setupSearchBar();
     void updateTabAppearance();
+    void updateSearchAppearance();
+
+    QLineEdit *m_commandSearch = nullptr;
+    bool m_searchRunning = false;
+    bool m_searchQueued = false;
+    quint64 m_searchGeneration = 0;
 
     Q_DISABLE_COPY(RibbonWindow)
 };

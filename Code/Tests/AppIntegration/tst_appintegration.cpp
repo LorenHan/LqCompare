@@ -18,9 +18,12 @@
 #include <QAction>
 #include <QApplication>
 #include <QDir>
+#include <QDialogButtonBox>
 #include <QFile>
 #include <QJsonDocument>
 #include <QLabel>
+#include <QKeyEvent>
+#include <QLineEdit>
 #include <QMessageBox>
 #include <QPointer>
 #include <QPushButton>
@@ -71,6 +74,58 @@ void clickNextPrompt(QMessageBox::StandardButton choice, bool *shown)
 QJsonArray recentSessions()
 {
     return QJsonDocument::fromJson(QSettings().value(QStringLiteral("sessions/recent")).toByteArray()).array();
+}
+
+enum class SearchConfirmation { Button, Return, RepeatedReturn, KeyboardYes };
+struct SearchResult { int dialogs = 0; QString text; Qt::TextFormat format = Qt::AutoText; };
+
+SearchResult submitSearch(QLineEdit *search, const QString &query, QMessageBox::StandardButton answer,
+                          bool escape = false, bool reenter = false,
+                          const std::function<void()> &beforeAnswer = {},
+                          SearchConfirmation confirmation = SearchConfirmation::Button,
+                          Qt::Key searchKey = Qt::Key_Return, bool mouseSubmit = false)
+{
+    SearchResult result;
+    QTimer responder;
+    responder.setInterval(1);
+    QObject::connect(&responder, &QTimer::timeout, [&] {
+        auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+        if (!box) return;
+        if (box->windowTitle() != QStringLiteral("Command Search") || !box->button(answer))
+            qFatal("Unexpected command-search dialog");
+        ++result.dialogs; result.text = box->text(); result.format = box->textFormat();
+        if (reenter) {
+            // 直接向后方控件发送嵌套输入，验证模态期间也不会重复打开确认框。
+            QTest::keyClick(search, Qt::Key_Return);
+        }
+        if (beforeAnswer) beforeAnswer();
+        if (confirmation == SearchConfirmation::KeyboardYes) {
+            auto *no = box->button(QMessageBox::No), *yes = box->button(QMessageBox::Yes);
+            box->activateWindow(); QCoreApplication::processEvents(); no->setFocus();
+            for (int i = 0; i < 8 && !yes->hasFocus(); ++i)
+                QTest::keyClick(QApplication::focusWidget() ? QApplication::focusWidget() : box, Qt::Key_Tab);
+            if (!yes->hasFocus()) qFatal("Keyboard focus did not reach Yes");
+            QTest::keyClick(yes, Qt::Key_Space);
+        } else if (confirmation != SearchConfirmation::Button) {
+            QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier, QString(),
+                            confirmation == SearchConfirmation::RepeatedReturn, 1);
+            QApplication::sendEvent(box, &enter);
+        }
+        else if (escape) QTest::keyClick(box, Qt::Key_Escape);
+        else box->button(answer)->click();
+    });
+    // 嵌套模态循环也有明确超时，失败不能把整个测试套件挂住。
+    QTimer::singleShot(2000, &responder, [] { qFatal("Command search did not return"); });
+    responder.start();
+    search->setFocus(); search->clear(); QTest::keyClicks(search, query);
+    if (mouseSubmit) {
+        const auto buttons = search->findChildren<QAbstractButton *>();
+        if (buttons.size() != 1 || !buttons.first()->isVisible()) qFatal("Expected visible search button");
+        QTest::mouseClick(buttons.first(), Qt::LeftButton);
+    } else QTest::keyClick(search, searchKey);
+    QCoreApplication::processEvents();
+    responder.stop();
+    return result;
 }
 
 double contrast(const QColor &a, const QColor &b)
@@ -385,6 +440,330 @@ private slots:
                 QVERIFY(tabs->grab().save(evidence + "/adversarial-" + background.name().mid(1) + ".png"));
             }
         }
+    }
+
+    void commandSearchStaysAboveRibbonAcrossLayouts()
+    {
+        struct RestoreApplication {
+            QPalette palette = QApplication::palette();
+            QFont font = QApplication::font();
+            ~RestoreApplication() { QApplication::setPalette(palette); QApplication::setFont(font); }
+        } restore;
+        QTemporaryDir directory;
+        Settings::OptionsRepository options({directory.path(), false});
+        Options::OptionsRuntime runtime(&options);
+        MainWindow window;
+        window.show(); window.activateWindow();
+        auto *search = window.findChild<QLineEdit *>(QStringLiteral("commandSearch"));
+        auto *tabs = window.ribbonBar()->findChild<QTabBar *>(QStringLiteral("lqRibbonTabBar"));
+        QVERIFY(search && tabs);
+        QCOMPARE(window.menuWidget(), search->parentWidget());
+        QVERIFY(!search->placeholderText().isEmpty());
+        QVERIFY(!search->accessibleName().isEmpty());
+        QVERIFY(!search->accessibleDescription().isEmpty());
+        auto *submit = search->findChild<QAction *>(QStringLiteral("commandSearchSubmit"));
+        QVERIFY(submit); QVERIFY(!submit->icon().isNull());
+        QVERIFY(!submit->text().isEmpty()); QVERIFY(!submit->toolTip().isEmpty());
+        const QString searchLabel = search->placeholderText();
+        search->setPlaceholderText(QStringLiteral("stale")); submit->setText(QStringLiteral("stale"));
+        QVERIFY(QMetaObject::invokeMethod(&window, "switchLanguage", Qt::DirectConnection));
+        QCOMPARE(search->placeholderText(), searchLabel); QCOMPARE(submit->text(), searchLabel);
+        const auto flags = window.windowFlags();
+        const bool frameTheme = window.ribbonBar()->isFrameThemeEnabled();
+        const QString libraryStyle = window.ribbonBar()->styleSheet();
+        const QString evidence = qEnvironmentVariable("LQCOMPARE_SEARCH_SCREENSHOT_DIR");
+        if (!evidence.isEmpty()) QVERIFY(QDir().mkpath(evidence));
+        for (const QString &theme : {QStringLiteral("light"), QStringLiteral("dark")}) {
+            QVERIFY(options.apply({{QStringLiteral("display.theme"), theme}}).ok);
+            for (int points : {8, 16}) {
+                QFont font = restore.font; font.setPointSize(points);
+                QApplication::setFont(font);
+                for (int width : {800, 1024, 1440, 1920}) {
+                    window.resize(width, 900);
+                    for (bool collapsed : {false, true, false}) {
+                        window.ribbonBar()->setMinimized(collapsed);
+                        QCoreApplication::processEvents();
+                        QCOMPARE(window.width(), width);
+                        QVERIFY(search->isVisible());
+                        QVERIFY(!window.ribbonBar()->searchBar()->isVisible());
+                        const QRect searchRect(search->mapTo(&window, QPoint()), search->size());
+                        const QRect tabsRect(tabs->mapTo(&window, QPoint()), tabs->size());
+                        QVERIFY2(searchRect.bottom() < tabsRect.top(), "搜索框必须完全位于标签上方");
+                        QVERIFY(window.rect().contains(searchRect));
+                        QVERIFY(search->width() <= search->fontMetrics().horizontalAdvance(QLatin1Char('M')) * 36);
+                        QVERIFY(qAbs(searchRect.center().x() - window.rect().center().x()) <= 1);
+                        QVERIFY(search->height() >= search->fontMetrics().height() + 4);
+                        QCOMPARE(search->font().pointSize(), points);
+                        const QPalette palette = QApplication::palette();
+                        QVERIFY(contrast(search->palette().color(QPalette::Text),
+                                         search->palette().color(QPalette::Base)) >= 4.5);
+                        QCOMPARE(search->palette().color(QPalette::Text), palette.color(QPalette::Text));
+                        QCOMPARE(search->palette().color(QPalette::Base), palette.color(QPalette::Base));
+                        QCOMPARE(window.windowFlags(), flags);
+                        QCOMPARE(window.ribbonBar()->isFrameThemeEnabled(), frameTheme);
+                        QCOMPARE(window.ribbonBar()->styleSheet(), libraryStyle);
+                    }
+                    // 对用户可见的标签逐个作鼠标命中检查，防止透明控件继续截获点击。
+                    for (int i = 0; i < tabs->count(); ++i) {
+                        const QPoint center = tabs->mapTo(&window, tabs->tabRect(i).center());
+                        if (!window.rect().contains(center)) continue;
+                        QVERIFY(window.childAt(center) != search);
+                        QTest::mouseClick(tabs, Qt::LeftButton, Qt::NoModifier, tabs->tabRect(i).center());
+                        QCOMPARE(tabs->currentIndex(), i);
+                    }
+                    tabs->setCurrentIndex(0);
+                    search->setFocus(Qt::TabFocusReason);
+                    QTRY_VERIFY(search->hasFocus());
+                    QTest::keyClick(search, Qt::Key_Tab);
+                    QTRY_VERIFY(tabs->hasFocus());
+                    QTest::keyClick(tabs, Qt::Key_Backtab);
+                    QTRY_VERIFY(search->hasFocus());
+                    search->setText(QStringLiteral("draft command"));
+                    QTest::keyClick(search, Qt::Key_Escape);
+                    QVERIFY(search->text().isEmpty()); QVERIFY(!search->hasFocus());
+                    QVERIFY(!QApplication::activeModalWidget());
+                    qInfo() << "Search layout" << theme << "font" << points << "width" << width
+                            << "search" << QRect(search->mapTo(&window, QPoint()), search->size())
+                            << "tabs" << QRect(tabs->mapTo(&window, QPoint()), tabs->size());
+                    if (!evidence.isEmpty()) {
+                        QVERIFY(window.grab().save(QStringLiteral("%1/%2-%3pt-%4.png")
+                                                  .arg(evidence, theme).arg(points).arg(width)));
+                    }
+                }
+            }
+        }
+    }
+
+    void commandSearchUsesRegistryConfirmation_data()
+    {
+        QTest::addColumn<QString>("query");
+        QTest::addColumn<int>("answer");
+        QTest::addColumn<bool>("escape");
+        QTest::addColumn<int>("dialogs");
+        QTest::addColumn<int>("calls");
+        QTest::newRow("empty") << QString() << int(QMessageBox::Ok) << false << 0 << 0;
+        QTest::newRow("whitespace") << QStringLiteral("   ") << int(QMessageBox::Ok) << false << 0 << 0;
+        QTest::newRow("missing") << QStringLiteral("no-command-47291") << int(QMessageBox::Ok) << false << 1 << 0;
+        QTest::newRow("literal-markup") << QStringLiteral("<b>&command-not-present</b>") << int(QMessageBox::Ok) << false << 1 << 0;
+        QTest::newRow("id-confirm") << QStringLiteral("test.search-one") << int(QMessageBox::Yes) << false << 1 << 1;
+        QTest::newRow("name-confirm") << QStringLiteral("Unique Search Probe") << int(QMessageBox::Yes) << false << 1 << 1;
+        QTest::newRow("case-trim-confirm") << QStringLiteral("  TEST.SEARCH-ONE  ") << int(QMessageBox::Yes) << false << 1 << 1;
+        QTest::newRow("cancel") << QStringLiteral("test.search-one") << int(QMessageBox::No) << false << 1 << 0;
+        QTest::newRow("escape-dialog") << QStringLiteral("test.search-one") << int(QMessageBox::No) << true << 1 << 0;
+        QTest::newRow("return-default-no") << QStringLiteral("test.search-one") << int(QMessageBox::No) << false << 1 << 0;
+        QTest::newRow("repeat-return-default-no") << QStringLiteral("test.search-one") << int(QMessageBox::No) << false << 1 << 0;
+        QTest::newRow("keyboard-yes") << QStringLiteral("test.search-one") << int(QMessageBox::Yes) << false << 1 << 1;
+        QTest::newRow("keypad-enter") << QStringLiteral("test.search-one") << int(QMessageBox::Yes) << false << 1 << 1;
+        QTest::newRow("mouse-confirm") << QStringLiteral("test.search-one") << int(QMessageBox::Yes) << false << 1 << 1;
+        QTest::newRow("mouse-cancel") << QStringLiteral("test.search-one") << int(QMessageBox::No) << false << 1 << 0;
+        QTest::newRow("mouse-disabled") << QStringLiteral("test.search-disabled") << int(QMessageBox::Yes) << false << 1 << 0;
+        QTest::newRow("multiple") << QStringLiteral("test.search-many") << int(QMessageBox::Ok) << false << 1 << 0;
+        QTest::newRow("disabled") << QStringLiteral("test.search-disabled") << int(QMessageBox::Yes) << false << 1 << 0;
+        QTest::newRow("unimplemented") << QStringLiteral("test.search-stub") << int(QMessageBox::Ok) << false << 1 << 0;
+    }
+
+    void commandSearchUsesRegistryConfirmation()
+    {
+        QFETCH(QString, query); QFETCH(int, answer); QFETCH(bool, escape);
+        QFETCH(int, dialogs); QFETCH(int, calls);
+        MainWindow window; window.resize(1024, 800); window.show(); window.activateWindow();
+        auto *search = window.findChild<QLineEdit *>(QStringLiteral("commandSearch"));
+        QVERIFY(search);
+        int executed = 0;
+        for (const QString &suffix : {QStringLiteral("one"), QStringLiteral("many-first"),
+                                      QStringLiteral("many-second"), QStringLiteral("disabled"), QStringLiteral("stub")}) {
+            Command command;
+            command.id = QStringLiteral("test.search-") + suffix;
+            command.text = suffix == QLatin1String("one") ? QStringLiteral("Unique Search Probe") : suffix;
+            command.actionId = QStringLiteral("UI-004"); command.module = QStringLiteral("界面");
+            command.description = QStringLiteral("仅用于测试的无副作用命令");
+            if (suffix != QLatin1String("stub")) command.handler = [&] { ++executed; };
+            command.enabled = suffix != QLatin1String("disabled");
+            QVERIFY(CommandRegistry::instance().add(command));
+        }
+        const QByteArray tag = QTest::currentDataTag();
+        const SearchConfirmation confirmation = tag == "return-default-no" ? SearchConfirmation::Return
+            : tag == "repeat-return-default-no" ? SearchConfirmation::RepeatedReturn
+            : tag == "keyboard-yes" ? SearchConfirmation::KeyboardYes : SearchConfirmation::Button;
+        const SearchResult result = submitSearch(search, query, QMessageBox::StandardButton(answer), escape,
+                                                true, [&] { QCOMPARE(executed, 0); }, confirmation,
+                                                tag == "keypad-enter" ? Qt::Key_Enter : Qt::Key_Return, tag.startsWith("mouse-"));
+        QCOMPARE(result.dialogs, dialogs); QCOMPARE(executed, calls);
+        if (dialogs) QCOMPARE(result.format, Qt::PlainText);
+        if (query.startsWith(QLatin1Char('<'))) QVERIFY(result.text.contains(query));
+        if (query == QLatin1String("no-command-47291")) QVERIFY(result.text.contains(QStringLiteral("No command matches")));
+        if (query == QLatin1String("test.search-many")) {
+            QVERIFY(result.text.contains(QStringLiteral("many-first")));
+            QVERIFY(result.text.contains(QStringLiteral("many-second")));
+        }
+        QVERIFY(!QApplication::activeModalWidget());
+        // 模拟长按产生的自动重复事件，不能再次确认或执行。
+        QKeyEvent repeat(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier, QString(), true, 1);
+        QApplication::sendEvent(search, &repeat);
+        QCOMPARE(executed, calls); QVERIFY(!QApplication::activeModalWidget());
+    }
+
+    void commandSearchCancelsStaleQueuedInput()
+    {
+        QPointer<MainWindow> window = new MainWindow;
+        window->show(); window->activateWindow();
+        auto *search = window->findChild<QLineEdit *>(QStringLiteral("commandSearch"));
+        QVERIFY(search);
+        auto *submit = search->findChild<QAction *>(QStringLiteral("commandSearchSubmit"));
+        QVERIFY(submit);
+        QStringList calls;
+        for (const QString &suffix : {QStringLiteral("first"), QStringLiteral("second")}) {
+            Command command; command.id = QStringLiteral("test.queued-") + suffix; command.text = suffix;
+            command.handler = [&, suffix] { calls << suffix; };
+            QVERIFY(CommandRegistry::instance().add(command));
+        }
+        int prompts = 0;
+        QString lastPrompt;
+        QTimer responder; responder.setInterval(1);
+        connect(&responder, &QTimer::timeout, [&] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            if (!box) return;
+            ++prompts; lastPrompt = box->text();
+            if (!box->button(QMessageBox::Yes)) qFatal("Expected queued command confirmation");
+            box->button(QMessageBox::Yes)->click();
+        });
+        QTimer::singleShot(2000, &responder, [] { qFatal("Queued search did not return"); });
+        responder.start();
+        const auto enter = [&] {
+            QKeyEvent press(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            QApplication::sendEvent(search, &press);
+        };
+        search->setText(QStringLiteral("test.queued-first")); enter();
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(search, &escape);
+        QCoreApplication::processEvents();
+        QCOMPARE(prompts, 0); QVERIFY(calls.isEmpty()); QVERIFY(search->text().isEmpty());
+        search->setText(QStringLiteral("test.queued-first")); enter();
+        search->setText(QStringLiteral("test.queued-second"));
+        QCoreApplication::processEvents();
+        QCOMPARE(prompts, 0); QVERIFY(calls.isEmpty());
+        // 未处理事件前混合回车与鼠标入口，只保留新查询的一次请求。
+        search->setText(QStringLiteral("test.queued-first")); enter();
+        search->setText(QStringLiteral("test.queued-second")); enter(); enter(); submit->trigger();
+        QCoreApplication::processEvents();
+        QCOMPARE(prompts, 1); QCOMPARE(calls, QStringList{QStringLiteral("second")});
+        QVERIFY(lastPrompt.contains(QStringLiteral("second"))); QVERIFY(!lastPrompt.contains(QStringLiteral("first")));
+        search->setText(QStringLiteral("test.queued-first")); enter();
+        QCoreApplication::processEvents();
+        QCOMPARE(prompts, 2); QCOMPARE(calls, (QStringList{QStringLiteral("second"), QStringLiteral("first")}));
+        // 排队期间销毁窗口，带上下文的回调必须自动取消。
+        enter(); delete window.data(); QCoreApplication::processEvents();
+        QCOMPARE(prompts, 2); QCOMPARE(calls.size(), 2); QVERIFY(!QApplication::activeModalWidget());
+    }
+
+    void commandSearchAllowsOwnerDestruction_data()
+    {
+        QTest::addColumn<bool>("duringConfirmation");
+        QTest::addColumn<QString>("query");
+        QTest::newRow("command-deletes-owner") << false << QStringLiteral("test.destroy-owner");
+        QTest::newRow("owner-deleted-during-modal") << true << QStringLiteral("test.destroy-owner");
+        QTest::newRow("owner-deleted-during-empty-state") << true << QStringLiteral("no-command-47291");
+        QTest::newRow("owner-deleted-during-multiple-results") << true << QStringLiteral("test.");
+    }
+
+    void commandSearchAllowsOwnerDestruction()
+    {
+        QFETCH(bool, duringConfirmation); QFETCH(QString, query);
+        QPointer<MainWindow> window = new MainWindow;
+        window->show(); window->activateWindow();
+        auto *search = window->findChild<QLineEdit *>(QStringLiteral("commandSearch"));
+        QVERIFY(search);
+        int executed = 0;
+        Command command;
+        command.id = QStringLiteral("test.destroy-owner");
+        command.text = QStringLiteral("Owner Lifetime Probe");
+        command.handler = [&] { ++executed; delete window.data(); };
+        QVERIFY(CommandRegistry::instance().add(command));
+        Command other = command; other.id = QStringLiteral("test.another-owner");
+        QVERIFY(CommandRegistry::instance().add(other));
+        QTimer responder;
+        responder.setInterval(1);
+        connect(&responder, &QTimer::timeout, [&] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            if (!box) return;
+            responder.stop();
+            if (duringConfirmation) delete window.data();
+            else {
+                if (!box->button(QMessageBox::Yes)) qFatal("Expected command confirmation");
+                box->button(QMessageBox::Yes)->click();
+            }
+        });
+        responder.start();
+        search->setText(query);
+        QTest::keyClick(search, Qt::Key_Return);
+        QTRY_VERIFY_WITH_TIMEOUT(window.isNull(), 2000);
+        QVERIFY(window.isNull()); QCOMPARE(executed, duringConfirmation ? 0 : 1);
+        QVERIFY(!QApplication::activeModalWidget());
+    }
+
+    void commandSearchProtectsCurrentSessionAndOriginalFiles()
+    {
+        QTemporaryDir directory; QVERIFY(directory.isValid());
+        const QString left = directory.filePath("left.txt"), right = directory.filePath("right.txt");
+        const QByteArray originalLeft("left original\r\n"), originalRight("right original\r\n");
+        writeFile(left, originalLeft); writeFile(right, originalRight);
+        MainWindow window; window.resize(1024, 800); window.show(); window.activateWindow();
+        auto *first = qobject_cast<TextCompareSession *>(window.openComparison("text", left, right));
+        QVERIFY(first);
+        auto *pane = first->widget()->findChild<TextPane *>(QStringLiteral("rightTextPane"));
+        QVERIFY(pane);
+        bool editorShown = false;
+        QTimer::singleShot(0, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            auto *editor = dialog ? dialog->findChild<QPlainTextEdit *>(QStringLiteral("textBufferEditor")) : nullptr;
+            auto *buttons = dialog ? dialog->findChild<QDialogButtonBox *>() : nullptr;
+            if (!editor || !buttons || !buttons->button(QDialogButtonBox::Apply)) qFatal("Expected text editor");
+            editorShown = true; editor->setFocus();
+            QTest::keyClick(editor, Qt::Key_A, Qt::ControlModifier);
+            QTest::keyClicks(editor, "edited fixture");
+            buttons->button(QDialogButtonBox::Apply)->click();
+        });
+        auto *edit = first->widget()->findChild<QPushButton *>(QStringLiteral("editRight"));
+        QVERIFY(edit && edit->isEnabled()); edit->click(); QVERIFY(editorShown);
+        QVERIFY(first->isDirty());
+        const QString edited = pane->toPlainText();
+        auto *search = window.findChild<QLineEdit *>(QStringLiteral("commandSearch"));
+        QVERIFY(search);
+        // 为有歧义的 Save/Save As 子串建立测试别名，执行体仍是应用注册的保存处理器。
+        const Command *save = CommandRegistry::instance().find(QStringLiteral("file.save"));
+        QVERIFY(save); Command alias = *save;
+        alias.id = QStringLiteral("test.fixture-save"); alias.text = QStringLiteral("Fixture Save Probe");
+        alias.sessionTypes = QStringList{QStringLiteral("text")};
+        alias.enabledWhen = [&window] { auto *current = sessions(window)->currentSession(); return current && current->canSave(); };
+        QVERIFY(CommandRegistry::instance().add(alias));
+        QCOMPARE(submitSearch(search, alias.id, QMessageBox::No).dialogs, 1);
+        QCOMPARE(readFile(left), originalLeft); QCOMPARE(readFile(right), originalRight);
+        QCOMPARE(pane->toPlainText(), edited); QVERIFY(first->isDirty());
+        QCOMPARE(submitSearch(search, alias.id, QMessageBox::No, true).dialogs, 1);
+        QCOMPARE(readFile(left), originalLeft); QCOMPARE(readFile(right), originalRight);
+        QVERIFY(first->isDirty());
+        QCOMPARE(submitSearch(search, alias.id, QMessageBox::No, false, false, {},
+                              SearchConfirmation::RepeatedReturn).dialogs, 1);
+        QCOMPARE(readFile(left), originalLeft); QCOMPARE(readFile(right), originalRight);
+        QCOMPARE(pane->toPlainText(), edited); QVERIFY(first->isDirty());
+        auto *second = window.openComparison("text", left, right); QVERIFY(second);
+        QCOMPARE(submitSearch(search, alias.id, QMessageBox::Yes).dialogs, 1);
+        QCOMPARE(readFile(left), originalLeft); QCOMPARE(readFile(right), originalRight);
+        QVERIFY(first->isDirty()); QVERIFY(!second->isDirty());
+        sessions(window)->setCurrentWidget(first->widget());
+        // 确认框打开后切换到主页，执行时仍必须重新校验当前上下文。
+        QCOMPARE(submitSearch(search, alias.id, QMessageBox::Yes, false, false, [&] {
+            sessions(window)->setCurrentWidget(sessions(window)->homePage());
+        }).dialogs, 1);
+        QCOMPARE(readFile(left), originalLeft); QCOMPARE(readFile(right), originalRight);
+        QVERIFY(first->isDirty());
+        sessions(window)->setCurrentWidget(first->widget());
+        QCOMPARE(submitSearch(search, alias.id, QMessageBox::Yes).dialogs, 1);
+        QCOMPARE(readFile(left), originalLeft); QCOMPARE(readFile(right), QByteArray("edited fixture"));
+        QVERIFY(!first->isDirty()); QVERIFY(!second->isDirty());
+        QCOMPARE(submitSearch(search, alias.id, QMessageBox::Yes).dialogs, 1);
+        QCOMPARE(readFile(left), originalLeft); QCOMPARE(readFile(right), QByteArray("edited fixture"));
+        QVERIFY(sessions(window)->closeAllSessions());
     }
 
     void opensTextFolderHexTableAndArchiveInActualTabs()
