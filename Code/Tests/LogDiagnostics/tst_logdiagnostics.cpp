@@ -1180,12 +1180,22 @@ void TstLogDiagnostics::bundleRedactsLogContentByDefault()
     QCOMPARE(result.redactedOccurrences, 2);
 }
 
+void TstLogDiagnostics::bundleKeepsRawContentWhenRedactionIsOff_data()
+{
+    QTest::addColumn<QByteArray>("raw");
+    QTest::newRow("utf8-lf") << QStringLiteral("错误：/Users/loren/work/a.txt\n").toUtf8();
+    QTest::newRow("utf8-crlf") << QStringLiteral("错误：/Users/loren/work/a.txt\r\n").toUtf8();
+    QTest::newRow("non-utf8-and-nul") << QByteArray::fromHex("fffe800041000a0d0a");
+    QTest::newRow("empty") << QByteArray();
+}
+
 void TstLogDiagnostics::bundleKeepsRawContentWhenRedactionIsOff()
 {
+    QFETCH(QByteArray, raw);
     QTemporaryDir dir;
     QVERIFY(dir.isValid());
     const QString logPath = QDir(dir.path()).filePath(QStringLiteral("lqcompare.log"));
-    QVERIFY(writeFile(logPath, QByteArray("错误：/Users/loren/work/a.txt\n")));
+    QVERIFY(writeFile(logPath, raw));
 
     DiagnosticBundleRequest request;
     request.logFilePath = logPath;
@@ -1198,8 +1208,8 @@ void TstLogDiagnostics::bundleKeepsRawContentWhenRedactionIsOff()
 
     const DiagnosticBundleResult result = LqCompare::Log::buildDiagnosticBundle(request);
     QVERIFY2(result.ok, qPrintable(result.error));
-    QCOMPARE(readText(result.bundleDirectory + QStringLiteral("/logs/lqcompare.log")),
-             QStringLiteral("错误：/Users/loren/work/a.txt\n"));
+    // 原文模式必须逐字节保真，包括历史编码与换行；不能先解码再编码。
+    QCOMPARE(readFile(result.bundleDirectory + QStringLiteral("/logs/lqcompare.log")), raw);
     QVERIFY(!result.redacted);
     QCOMPARE(result.redactedOccurrences, 0);
 }

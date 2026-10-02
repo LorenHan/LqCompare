@@ -171,3 +171,13 @@ NUL 修复前 6 行回归确实失败。官方 Windows Qt 5.15.2 头与 i686 GCC
 成功编译完整 Win32 实现、解析器及测试为 i386 COFF。仓库护栏通过。
 ASAN 使用 detect_leaks=0；原 FILETIME 的两处溢出警告尚待独立修复。
 精确 MinGW8.1 构建、原生链接/运行及真实 Windows 链接类型仍需正式 CI/真机验证。
+
+## OPT-010 / #365：诊断日志原文逐字节导出
+
+关闭脱敏时不再把日志先按 UTF-8 解码后重编码；二进制写入也避免 Windows
+Text 模式把 LF/CRLF 再次改写。开启脱敏仍走原来的 UTF-8 路径替换逻辑。
+写入或刷新失败会回到已有的半成品清理路径，不把不完整包报成成功。
+
+新增 LF、CRLF、非 UTF-8/内嵌 NUL、空日志四类真实字节回归。原代码在 Linux
+非 UTF-8 行确实失败，修复后 LogDiagnostics 92 passed / 0 failed / 0 skipped。
+Windows 的原文换行失败由对应正式 CI 继续验证。

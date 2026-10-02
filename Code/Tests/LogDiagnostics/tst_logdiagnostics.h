@@ -120,6 +120,7 @@ private slots:
     void bundleFilesComeInLogThenEnvironmentThenManifestOrder();
     void bundleArchivesRotatedHistory();
     void bundleRedactsLogContentByDefault();
+    void bundleKeepsRawContentWhenRedactionIsOff_data();
     void bundleKeepsRawContentWhenRedactionIsOff();
     void bundleRedactsTheEnvironmentReport();
     void manifestRecordsTheRedactionState();
