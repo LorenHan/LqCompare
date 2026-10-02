@@ -72,3 +72,22 @@ Linux 的真实 AppIntegration 基线在打开并关闭五种会话后崩溃。A
 已验证：ASAN 基线在「关闭一个标签」行重现；修复后完整 AppIntegration
 17 passed / 0 failed / 0 skipped，`detect_leaks=0`（不宣称检测了泄漏）。
 离屏截图已人工检查；Ribbon 对比度、拥挤和语言一致性仍是独立待改进项。
+
+## UI-001 / #2：启动默认页面
+
+截图暴露了一个可复现的装配问题：Ribbon 每添加一页就选择新页，启动后最终
+停在 Help。装配结束改为选择本次创建的第一张 Home 页，之后命令状态刷新
+不抢走用户选择的 Compare 等页面。新增回归先得到实际 Help / 期望 Home，
+修复后 CommandActions 19 passed、AppIntegration 17 passed；离屏截图确认
+默认页面已是 Home。布局拥挤与搜索栏遮挡不在这一小修复内。
+
+## 已发布三项修复的冻结回归（0f89075）
+
+- 独立冻结源码工作树执行 71 套：3716 passed / 0 failed / 2 skipped
+- 另排除 SingleInstance 1 套：此前已实测 22 项因云环境禁止本地 socket 失败
+- 仓库 73 个 `.pro` 含更深层辅助工程，主运行器实际发现 72 套，不能把工程数
+  直接当作已执行套件数
+- [Qt 5.15.2 Ubuntu CI 36951310090](https://github.com/LorenHan/LqCompare/actions/runs/36951310090)
+  在前一提交 `ca66cde` 已成功：3786 passed / 0 failed / 2 skipped，原 Folder
+  崩溃不再出现。该 CI 排除 AppIntegration、CommandActions，并跳过主程序构建/打包
+- 上述两类验证互补；macOS、Windows 的本轮结果仍需单独读取，不据此推断通过

@@ -453,6 +453,7 @@ int RibbonLayout::build(LqRibbon::RibbonBar *bar)
         return action;
     };
 
+    const int firstPageIndex = bar->count();
     for (const PageSpec &pageSpec : layout()) {
         LqRibbon::RibbonPage *page =
             bar->addPage(QCoreApplication::translate("RibbonLayout", pageSpec.title));
@@ -478,6 +479,11 @@ int RibbonLayout::build(LqRibbon::RibbonBar *bar)
             }
         }
     }
+
+    // 控件库插入页面时会选择新页；装配结束回到声明表首项 Home，
+    // 避免启动落在最后添加的 Help。后续命令状态刷新不改变用户选页。
+    if (bar->count() > firstPageIndex)
+        bar->setCurrentPageIndex(firstPageIndex);
 
     LQCOMPARE_INFO("ribbon", QStringLiteral("Ribbon 构建完成：%1 页 / %2 组 / %3 个按钮")
                                  .arg(pageCount())

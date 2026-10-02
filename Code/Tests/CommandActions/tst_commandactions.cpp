@@ -79,6 +79,7 @@ private slots:
     void customShortcutsRefreshAllPresentations();
     void rejectedShortcutConflictLeavesLiveBindingUntouched();
     void ribbonPlaceholdersAreDisabledWithoutDialogs();
+    void ribbonStartsOnHomeAndKeepsUserNavigation();
     void ribbonActionTracksRegistryChanges();
     void dialogConflictBlocksSaveAndCancelKeepsOriginalBindings();
     void dialogSavesMultipleBindingsAcrossReload();
@@ -447,6 +448,21 @@ void TstCommandActions::ribbonPlaceholdersAreDisabledWithoutDialogs()
     QCoreApplication::processEvents();
     QCOMPARE(commandActions, created);
     QVERIFY(!dialogShown);
+}
+
+void TstCommandActions::ribbonStartsOnHomeAndKeepsUserNavigation()
+{
+    QWidget window;
+    LqRibbon::RibbonBar ribbon(&window);
+    QVERIFY(RibbonLayout::build(&ribbon) > 0);
+    QVERIFY(ribbon.currentPage());
+    QCOMPARE(ribbon.currentPage()->objectName(), QStringLiteral("ribbonHomePage"));
+    // 只在初次装配时选择 Home，命令刷新不能抢走用户正在看的页面。
+    ribbon.setCurrentPageIndex(1);
+    QCOMPARE(ribbon.currentPage()->objectName(), QStringLiteral("ribbonComparePage"));
+    CommandRegistry::instance().updateEnabled();
+    QCoreApplication::processEvents();
+    QCOMPARE(ribbon.currentPage()->objectName(), QStringLiteral("ribbonComparePage"));
 }
 
 void TstCommandActions::ribbonActionTracksRegistryChanges()
