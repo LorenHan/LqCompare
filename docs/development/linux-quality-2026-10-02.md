@@ -249,3 +249,19 @@ Linux Vcs 79、VcsView 18、VcsBlameView 23 项全部通过且无跳过；C loca
 本轮选择 A-H、H2、L 的无 socket 子集；原有 I-K 共 30 个真实 IPC/生命周期
 测试函数未在受限云主机运行。不能把聚焦通过当成 SingleInstance 全套通过。
 macOS / Windows 原生完整 IPC 及 Unicode 修复由此次正式 CI 验证。
+
+## PLAT-002 / #325：Windows FILETIME 单位与整数边界
+
+原生读取先在 100ns 单位下减去 1601/1970 纪元差，再有界转纳秒；写入正确
+除以 100，负数统一向过去取整。旧读取已由 UBSan 抓到现代日期的有符号溢出；
+旧写入黄金值比正确 FILETIME 大 100 倍。越界读取返回无效，最低 8ns 因向下
+舍入后超出内部范围拒绝写入；不回绕、不钳位、不部分更新指定时间。
+
+无效 FileTime 继续表示保留该字段，创建时间不修改；SetFileTime 失败码在
+CloseHandle 前保存。纯 helper 是实际 Windows 实现使用的同一份整数换算。
+
+Linux 回归：WindowsFileTime 31、FileSystem 69、Folder 62、Sync 24、
+SyncBaseline 116，共 302 passed / 0 failed / 1 Windows 专属 skipped。
+纯换算启用 UBSan 和 -Werror；三时区重跑结果一致。生产 Win32、helper、纯
+测试和 FileSystem 测试四个翻译单元通过官方 Qt 5.15.2 头/i686 -Werror，
+旧的两处 FILETIME 溢出编译警告已消除。原生 Windows MinGW8 仍待正式 CI。

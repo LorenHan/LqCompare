@@ -1,6 +1,7 @@
 #include "filesystem.h"
 #include "pathutils.h"
 #include "windowsreparse.h"
+#include "windowsfiletime.h"
 
 // 本文件是 Windows 实现。非 Windows 平台上整体不参与编译。
 //
@@ -38,11 +39,6 @@ PathUtils::Style windowsStyle()
     return PathUtils::Style::windows();
 }
 
-/// Windows 的 FILETIME 纪元是 1601-01-01，而我们的内部表示以 1970-01-01 为 0。
-/// 两者相差 11644473600 秒，这个常量是固定的，不随时区变化。
-constexpr qint64 kSecondsBetween1601And1970 = 11644473600LL;
-constexpr qint64 kNanosecondsPerSecond = 1000000000LL;
-
 /// FILETIME（100 纳秒为单位、UTC、1601 纪元）→ 内部 FileTime。
 FileTime fileTimeFromWindows(const FILETIME &fileTime)
 {
@@ -50,25 +46,23 @@ FileTime fileTimeFromWindows(const FILETIME &fileTime)
     value.LowPart = fileTime.dwLowDateTime;
     value.HighPart = fileTime.dwHighDateTime;
 
-    // FILETIME 的单位是 100 纳秒，乘 100 得到纳秒。
-    // 用 unsigned 组合完再转有符号，避免先转有符号时高位被当成符号位。
-    const qint64 hundredsOfNanoseconds = static_cast<qint64>(value.QuadPart);
-    const qint64 nanoseconds = hundredsOfNanoseconds * 100;
-    return FileTime::fromNanosecondsSinceEpoch(
-        nanoseconds - kSecondsBetween1601And1970 * kNanosecondsPerSecond);
+    qint64 nanoseconds;
+    if (!WindowsFileTime::fromTicks(value.QuadPart, &nanoseconds))
+        return FileTime();
+    return FileTime::fromNanosecondsSinceEpoch(nanoseconds);
 }
 
-/// 内部 FileTime → FILETIME。传回的 FileTime 必须有效，调用方负责判断。
-FILETIME fileTimeToWindows(const FileTime &time)
+/// 内部 FileTime → FILETIME。不可表示的时间必须报告失败，不回绕或钳位。
+bool fileTimeToWindows(const FileTime &time, FILETIME *result)
 {
+    quint64 ticks;
+    if (!time.isValid() || !WindowsFileTime::toTicks(time.nanosecondsSinceEpoch(), &ticks))
+        return false;
     ULARGE_INTEGER value;
-    value.QuadPart = static_cast<ULONGLONG>(
-        time.nanosecondsSinceEpoch() + kSecondsBetween1601And1970 * kNanosecondsPerSecond);
-
-    FILETIME result;
-    result.dwLowDateTime = value.LowPart;
-    result.dwHighDateTime = value.HighPart;
-    return result;
+    value.QuadPart = ticks;
+    result->dwLowDateTime = value.LowPart;
+    result->dwHighDateTime = value.HighPart;
+    return true;
 }
 
 /// QString → 以 L'\0' 结尾的宽字符串。
@@ -312,6 +306,20 @@ public:
     bool setTimes(const QString &path, const FileTime &lastModified,
                   const FileTime &lastAccessed, ErrorCode *error) const override
     {
+        FILETIME modified;
+        FILETIME accessed;
+        // 所有指定字段先校验，再打开文件；失败时不能只写入一部分时间。
+        if ((lastModified.isValid() && !fileTimeToWindows(lastModified, &modified))
+            || (lastAccessed.isValid() && !fileTimeToWindows(lastAccessed, &accessed))) {
+            if (error)
+                *error = FileSystemError::NotSupported;
+            return false;
+        }
+        // 传 nullptr 表示「该时间保持不变」。绝不能填当前时间——
+        // 那会把「只改修改时间」变成「顺手改掉访问时间」。
+        const FILETIME *pModified = lastModified.isValid() ? &modified : nullptr;
+        const FILETIME *pAccessed = lastAccessed.isValid() ? &accessed : nullptr;
+
         // 需要 FILE_WRITE_ATTRIBUTES 才能改时间戳。用 BACKUP_SEMANTICS
         // 以便对目录也生效（否则目录会因缺少 FILE_FLAG_BACKUP_SEMANTICS 而无法打开）。
         const HANDLE handle = ::CreateFileW(
@@ -325,28 +333,15 @@ public:
             return false;
         }
 
-        FILETIME modified;
-        FILETIME accessed;
-        // 传 nullptr 表示「该时间保持不变」。绝不能填当前时间——
-        // 那会把「只改修改时间」变成「顺手改掉访问时间」。
-        LPFILETIME pModified = nullptr;
-        LPFILETIME pAccessed = nullptr;
-        if (lastModified.isValid()) {
-            modified = fileTimeToWindows(lastModified);
-            pModified = &modified;
-        }
-        if (lastAccessed.isValid()) {
-            accessed = fileTimeToWindows(lastAccessed);
-            pAccessed = &accessed;
-        }
-
         // 第一个参数（创建时间）恒传 nullptr：本接口不提供修改创建时间的能力。
         const BOOL ok = ::SetFileTime(handle, nullptr, pAccessed, pModified);
+        // 关闭句柄可能改写线程错误码，先保留实际设置失败的原因。
+        const DWORD code = ok ? ERROR_SUCCESS : ::GetLastError();
         ::CloseHandle(handle);
 
         if (!ok) {
             if (error)
-                *error = fromWindowsError(::GetLastError());
+                *error = fromWindowsError(code);
             return false;
         }
         if (error)

@@ -82,6 +82,11 @@ private slots:
     // --- 真实实现（本机平台）----------------------------------------------
     void nativeFileSystemReportsItsPlatform();
     void nativeFileSystemReadsRealDirectory();
+    void nativeTimesRoundTrip_data();
+    void nativeTimesRoundTrip();
+    void nativeTimesPreserveUnspecifiedFields();
+    void nativeTimesReportMissingPath();
+    void nativeWindowsTimesRejectUnrepresentableRounding();
     void nativeLinkTargetPreservesStoredTarget_data();
     void nativeLinkTargetPreservesStoredTarget();
     void nativeLinkTargetReportsErrors();

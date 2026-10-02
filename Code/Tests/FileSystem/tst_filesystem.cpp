@@ -8,6 +8,7 @@
 #include <QTemporaryDir>
 
 #include <cerrno>
+#include <limits>
 #include <memory>
 #ifndef Q_OS_WIN
 #include <unistd.h>
@@ -787,6 +788,140 @@ void TstFileSystem::nativeFileSystemReadsRealDirectory()
     // 对文件调用枚举要明确报 NotDirectory。
     QCOMPARE(fileSystem->enumerateDirectory(root + QStringLiteral("/hello.txt"), &error).size(), 0);
     QCOMPARE(error, FileSystemError::NotDirectory);
+}
+
+void TstFileSystem::nativeTimesRoundTrip_data()
+{
+    QTest::addColumn<bool>("directory");
+    QTest::addColumn<qint64>("nanoseconds");
+    for (bool directory : {false, true}) {
+        const QByteArray prefix = directory ? "directory-" : "file-";
+        QTest::newRow((prefix + "unix-epoch").constData()) << directory << qint64(0);
+        QTest::newRow((prefix + "pre-1970").constData())
+            << directory << qint64(-1000000000LL);
+        QTest::newRow((prefix + "recent").constData())
+            << directory << qint64(1790899200000000000LL);
+        QTest::newRow((prefix + "100ns-precision").constData())
+            << directory << qint64(1790899200123456700LL);
+    }
+}
+
+void TstFileSystem::nativeTimesRoundTrip()
+{
+    QFETCH(bool, directory);
+    QFETCH(qint64, nanoseconds);
+    QTemporaryDir temporaryDir;
+    QVERIFY(temporaryDir.isValid());
+    const QString path = temporaryDir.filePath(QStringLiteral("时间戳"));
+    if (directory) {
+        QVERIFY(QDir().mkdir(path));
+    } else {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.close();
+    }
+    const std::unique_ptr<FileSystem> fileSystem(createNativeFileSystem());
+    const FileTime expected = FileTime::fromNanosecondsSinceEpoch(nanoseconds);
+    ErrorCode error = fromSystemError(EACCES);
+    QVERIFY2(fileSystem->setTimes(path, expected, expected, &error), qPrintable(errorReport(error)));
+    QCOMPARE(error, FileSystemError::None);
+    QVERIFY(!error.hasRawCode());
+    const FileInfo info = fileSystem->stat(path, &error);
+    QCOMPARE(error, FileSystemError::None);
+    QCOMPARE(info.lastModified, expected);
+    QCOMPARE(info.lastAccessed, expected);
+
+    // stat 与 enumerateDirectory 都必须经过同一套 UTC 换算。
+    const QVector<FileInfo> entries = fileSystem->enumerateDirectory(temporaryDir.path(), &error);
+    QCOMPARE(error, FileSystemError::None);
+    QCOMPARE(entries.size(), 1);
+    QCOMPARE(entries.first().lastModified, expected);
+    QCOMPARE(entries.first().lastAccessed, expected);
+}
+
+void TstFileSystem::nativeTimesPreserveUnspecifiedFields()
+{
+    QTemporaryDir temporaryDir;
+    QVERIFY(temporaryDir.isValid());
+    const QString path = temporaryDir.filePath(QStringLiteral("times.txt"));
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.close();
+    const std::unique_ptr<FileSystem> fileSystem(createNativeFileSystem());
+    const FileTime originalCreated = fileSystem->stat(path).created;
+    const FileTime modified = FileTime::fromSecondsSinceEpoch(1700000000);
+    const FileTime accessed = FileTime::fromSecondsSinceEpoch(1600000000);
+    ErrorCode error;
+    QVERIFY2(fileSystem->setTimes(path, modified, accessed, &error), qPrintable(errorReport(error)));
+
+    // 无效值是「保留」，有效的 Unix 纪元 0 则必须确实写入，二者不能混淆。
+    const FileTime epoch = FileTime::fromNanosecondsSinceEpoch(0);
+    QVERIFY2(fileSystem->setTimes(path, epoch, FileTime(), &error), qPrintable(errorReport(error)));
+    FileInfo info = fileSystem->stat(path);
+    QCOMPARE(info.lastModified, epoch);
+    QCOMPARE(info.lastAccessed, accessed);
+    QCOMPARE(info.created, originalCreated);
+
+    QVERIFY2(fileSystem->setTimes(path, FileTime(), epoch, &error), qPrintable(errorReport(error)));
+    info = fileSystem->stat(path);
+    QCOMPARE(info.lastModified, epoch);
+    QCOMPARE(info.lastAccessed, epoch);
+    QCOMPARE(info.created, originalCreated);
+
+    error = fromSystemError(EACCES);
+    QVERIFY2(fileSystem->setTimes(path, FileTime(), FileTime(), &error), qPrintable(errorReport(error)));
+    QCOMPARE(error, FileSystemError::None);
+    QVERIFY(!error.hasRawCode());
+    info = fileSystem->stat(path);
+    QCOMPARE(info.lastModified, epoch);
+    QCOMPARE(info.lastAccessed, epoch);
+    QCOMPARE(info.created, originalCreated);
+    QVERIFY(fileSystem->setTimes(path, modified, FileTime(), nullptr));
+}
+
+void TstFileSystem::nativeTimesReportMissingPath()
+{
+    QTemporaryDir temporaryDir;
+    QVERIFY(temporaryDir.isValid());
+    const std::unique_ptr<FileSystem> fileSystem(createNativeFileSystem());
+    const QString missing = temporaryDir.filePath(QStringLiteral("missing"));
+    ErrorCode error;
+    QVERIFY(!fileSystem->setTimes(missing, FileTime::fromSecondsSinceEpoch(1700000000), {}, &error));
+    QCOMPARE(error, FileSystemError::NotFound);
+    QVERIFY(error.hasRawCode());
+    QVERIFY(error.raw != 0);
+    QVERIFY(!fileSystem->setTimes(missing, FileTime::fromSecondsSinceEpoch(1700000000), {}, nullptr));
+}
+
+void TstFileSystem::nativeWindowsTimesRejectUnrepresentableRounding()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Windows 100ns rounding policy; pure conversion boundaries run on every platform.");
+#else
+    QTemporaryDir temporaryDir;
+    QVERIFY(temporaryDir.isValid());
+    const QString path = temporaryDir.filePath(QStringLiteral("range.txt"));
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.close();
+    const std::unique_ptr<FileSystem> fileSystem(createNativeFileSystem());
+    const FileTime initial = FileTime::fromSecondsSinceEpoch(1700000000);
+    QVERIFY(fileSystem->setTimes(path, initial, initial));
+    const FileTime roundedOutOfRange = FileTime::fromNanosecondsSinceEpoch(std::numeric_limits<qint64>::min());
+    for (bool rejectModified : {false, true}) {
+        ErrorCode error = fromSystemError(EACCES);
+        const FileTime epoch = FileTime::fromNanosecondsSinceEpoch(0);
+        QVERIFY(!fileSystem->setTimes(path,
+            rejectModified ? roundedOutOfRange : epoch,
+            rejectModified ? epoch : roundedOutOfRange, &error));
+        QCOMPARE(error, FileSystemError::NotSupported);
+        QVERIFY(!error.hasRawCode());
+        const FileInfo info = fileSystem->stat(path);
+        QCOMPARE(info.lastModified, initial);
+        QCOMPARE(info.lastAccessed, initial);
+    }
+    QVERIFY(!fileSystem->setTimes(path, roundedOutOfRange, {}, nullptr));
+#endif
 }
 
 void TstFileSystem::nativeLinkTargetPreservesStoredTarget_data()
