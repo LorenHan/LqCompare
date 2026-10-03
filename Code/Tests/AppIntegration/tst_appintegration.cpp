@@ -19,8 +19,10 @@
 #include <QApplication>
 #include <QDir>
 #include <QDialogButtonBox>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QKeyEvent>
 #include <QLineEdit>
@@ -40,6 +42,7 @@
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
+#include <QWindow>
 
 #include <cmath>
 
@@ -91,6 +94,150 @@ struct FullKeyboardNavigation {
 enum class SearchConfirmation { Button, Return, RepeatedReturn, KeyboardYes };
 struct SearchResult { int dialogs = 0; QString text; Qt::TextFormat format = Qt::AutoText; };
 
+// 只观察既有输入/弹窗路径，不等待、不改焦点，也不延长看门狗。
+// 每次阶段变化输出一条；1ms 轮询只累计次数，避免日志本身拖慢原生事件循环。
+struct SearchDiagnostics {
+    QPointer<QLineEdit> search;
+    QPointer<QWidget> owner;
+    QElapsedTimer elapsed;
+    QString phase = QStringLiteral("created");
+    QString query;
+    QString tag;
+    int sequence = 0;
+    int timerTicks = 0;
+    int modalObservations = 0;
+    int returnSignals = 0;
+    int responseAttempts = 0;
+    int responseReturns = 0;
+    int buttonSignals = 0;
+    int finishedSignals = 0;
+    int lastButton = int(QMessageBox::NoButton);
+    int lastFinishedResult = -1;
+    mutable int logEvents = 0;
+    mutable int suppressedLogEvents = 0;
+    QPointer<QWidget> previousModal;
+    QPointer<QMessageBox> observedBox;
+
+    explicit SearchDiagnostics(QLineEdit *edit, const QString &text)
+        : search(edit), owner(edit->window()), query(text),
+          tag(QString::fromLatin1(QTest::currentDataTag() ? QTest::currentDataTag() : "no-data"))
+    {
+        static int nextSequence = 0;
+        sequence = ++nextSequence;
+        elapsed.start();
+    }
+    static QJsonObject widgetState(QWidget *widget)
+    {
+        if (!widget) return {{QStringLiteral("null"), true}};
+        const QWidget *parent = widget->parentWidget();
+        const QWindow *native = widget->window()->windowHandle();
+        return {{QStringLiteral("address"), QString::number(reinterpret_cast<quintptr>(widget), 16)},
+                {QStringLiteral("class"), QString::fromLatin1(widget->metaObject()->className())},
+                {QStringLiteral("objectName"), widget->objectName()},
+                {QStringLiteral("title"), widget->windowTitle()},
+                {QStringLiteral("visible"), widget->isVisible()},
+                {QStringLiteral("enabled"), widget->isEnabled()},
+                {QStringLiteral("activeWindow"), widget->isActiveWindow()},
+                {QStringLiteral("hasFocus"), widget->hasFocus()},
+                {QStringLiteral("windowExposed"), native && native->isExposed()},
+                {QStringLiteral("parentAddress"), parent ? QString::number(reinterpret_cast<quintptr>(parent), 16) : QString()},
+                {QStringLiteral("parentClass"), parent ? QString::fromLatin1(parent->metaObject()->className()) : QString()},
+                {QStringLiteral("parentVisible"), parent && parent->isVisible()},
+                {QStringLiteral("windowModality"), int(widget->windowModality())},
+                {QStringLiteral("geometry"), QJsonArray{widget->x(), widget->y(), widget->width(), widget->height()}}};
+    }
+    QJsonObject snapshot(const QString &event) const
+    {
+        QJsonArray boxes;
+        if (owner) {
+            for (auto *box : owner->findChildren<QMessageBox *>()) {
+                QJsonObject entry = widgetState(box);
+                entry.insert(QStringLiteral("text"), box->text());
+                entry.insert(QStringLiteral("standardButtons"), int(box->standardButtons()));
+                QJsonArray buttons;
+                for (auto *button : box->buttons()) {
+                    QJsonObject state = widgetState(button);
+                    state.insert(QStringLiteral("standardButton"), int(box->standardButton(button)));
+                    state.insert(QStringLiteral("text"), button->text());
+                    buttons.append(state);
+                }
+                entry.insert(QStringLiteral("buttons"), buttons);
+                boxes.append(entry);
+            }
+        }
+        return {{QStringLiteral("event"), event}, {QStringLiteral("phase"), phase},
+                {QStringLiteral("elapsedMs"), double(elapsed.elapsed())},
+                {QStringLiteral("timeoutMs"), 2000}, {QStringLiteral("tag"), tag},
+                {QStringLiteral("sequence"), sequence}, {QStringLiteral("query"), query},
+                {QStringLiteral("timerTicks"), timerTicks},
+                {QStringLiteral("modalObservations"), modalObservations},
+                {QStringLiteral("returnSignals"), returnSignals},
+                {QStringLiteral("responseAttempts"), responseAttempts},
+                {QStringLiteral("responseReturns"), responseReturns},
+                {QStringLiteral("buttonSignals"), buttonSignals},
+                {QStringLiteral("finishedSignals"), finishedSignals},
+                {QStringLiteral("lastButton"), lastButton},
+                {QStringLiteral("lastFinishedResult"), lastFinishedResult},
+                {QStringLiteral("logEvents"), logEvents},
+                {QStringLiteral("suppressedLogEvents"), suppressedLogEvents},
+                {QStringLiteral("activeModal"), widgetState(QApplication::activeModalWidget())},
+                {QStringLiteral("activePopup"), widgetState(QApplication::activePopupWidget())},
+                {QStringLiteral("focusWidget"), widgetState(QApplication::focusWidget())},
+                {QStringLiteral("search"), widgetState(search)},
+                {QStringLiteral("owner"), widgetState(owner)},
+                {QStringLiteral("ownedMessageBoxes"), boxes}};
+    }
+    void log(const QString &event) const
+    {
+        // 异常重复回调时也限制输出量；最终超时快照始终保留真实累计次数。
+        if (logEvents >= 64 && event != QLatin1String("watchdog-expired")) {
+            ++suppressedLogEvents;
+            return;
+        }
+        ++logEvents;
+        qInfo().noquote() << "Command search diagnostic"
+                          << QJsonDocument(snapshot(event)).toJson(QJsonDocument::Compact);
+    }
+    void enter(const char *next)
+    {
+        phase = QString::fromLatin1(next);
+        log(QStringLiteral("phase"));
+    }
+    void saveTimeout() const
+    {
+        // 抓取当前测试拥有的窗口和消息框，不抓 runner 的其它桌面内容。
+        QString directory = qEnvironmentVariable("LQCOMPARE_SEARCH_SCREENSHOT_DIR");
+        if (directory.isEmpty())
+            directory = QDir::tempPath() + QStringLiteral("/lqcompare-search-diagnostics-%1")
+                .arg(QCoreApplication::applicationPid());
+        if (!QDir().mkpath(directory)) {
+            qWarning() << "Could not create command-search diagnostic directory" << directory;
+            return;
+        }
+        QString name = QString::fromLatin1(QTest::currentTestFunction()) + QLatin1Char('-') + tag;
+        for (int i = 0; i < name.size(); ++i)
+            if (!name[i].isLetterOrNumber() && name[i] != QLatin1Char('-')) name[i] = QLatin1Char('_');
+        const QString prefix = directory + QStringLiteral("/timeout-%1-%2").arg(name).arg(sequence);
+        const QJsonObject state = snapshot(QStringLiteral("timeout"));
+        QFile file(prefix + QStringLiteral(".json"));
+        const QByteArray json = QJsonDocument(state).toJson();
+        if (!file.open(QIODevice::WriteOnly) || file.write(json) != json.size())
+            qWarning() << "Could not save command-search diagnostic state" << file.fileName();
+        file.close();
+        const auto capture = [&](QWidget *widget, const QString &suffix) {
+            if (widget && !widget->grab().save(prefix + suffix + QStringLiteral(".png")))
+                qWarning() << "Could not save command-search timeout screenshot" << prefix << suffix;
+        };
+        capture(owner, QStringLiteral("-owner"));
+        if (owner) {
+            int index = 0;
+            for (auto *box : owner->findChildren<QMessageBox *>())
+                capture(box, QStringLiteral("-dialog-%1").arg(++index));
+        }
+        qInfo() << "Command search timeout evidence" << prefix;
+    }
+};
+
 SearchResult submitSearch(QLineEdit *search, const QString &query, QMessageBox::StandardButton answer,
                           bool escape = false, bool reenter = false,
                           const std::function<void()> &beforeAnswer = {},
@@ -98,11 +245,38 @@ SearchResult submitSearch(QLineEdit *search, const QString &query, QMessageBox::
                           Qt::Key searchKey = Qt::Key_Return, bool mouseSubmit = false)
 {
     SearchResult result;
+    SearchDiagnostics diagnostics(search, query);
     QTimer responder;
+    QObject::connect(search, &QLineEdit::returnPressed, &responder, [&] {
+        ++diagnostics.returnSignals;
+        diagnostics.log(QStringLiteral("returnPressed"));
+    });
     responder.setInterval(1);
     QObject::connect(&responder, &QTimer::timeout, [&] {
-        auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+        ++diagnostics.timerTicks;
+        QWidget *modal = QApplication::activeModalWidget();
+        if (diagnostics.timerTicks == 1 || diagnostics.previousModal != modal) {
+            diagnostics.previousModal = modal;
+            diagnostics.log(QStringLiteral("modal-poll-change"));
+        }
+        auto *box = qobject_cast<QMessageBox *>(modal);
         if (!box) return;
+        ++diagnostics.modalObservations;
+        if (diagnostics.observedBox != box) {
+            diagnostics.observedBox = box;
+            QObject::connect(box, &QMessageBox::buttonClicked, &responder,
+                             [&, observed = QPointer<QMessageBox>(box)](QAbstractButton *button) {
+                ++diagnostics.buttonSignals;
+                if (observed) diagnostics.lastButton = int(observed->standardButton(button));
+                diagnostics.log(QStringLiteral("buttonClicked"));
+            });
+            QObject::connect(box, &QDialog::finished, &responder, [&](int resultCode) {
+                ++diagnostics.finishedSignals;
+                diagnostics.lastFinishedResult = resultCode;
+                diagnostics.log(QStringLiteral("dialogFinished"));
+            });
+        }
+        diagnostics.enter("modal-observed");
         // macOS 按平台规范忽略 QMessageBox 标题，仍严格校验拥有者、按钮与正文。
         // https://doc.qt.io/archives/qt-5.15/qmessagebox.html#setWindowTitle
         const auto buttons = answer == QMessageBox::Ok ? QMessageBox::StandardButtons(QMessageBox::Ok)
@@ -120,11 +294,20 @@ SearchResult submitSearch(QLineEdit *search, const QString &query, QMessageBox::
             qFatal("Unexpected command-search title: %s", qPrintable(box->windowTitle()));
 #endif
         ++result.dialogs; result.text = box->text(); result.format = box->textFormat();
+        diagnostics.enter("modal-validated");
         if (reenter) {
             // 直接向后方控件发送嵌套输入，验证模态期间也不会重复打开确认框。
+            diagnostics.enter("reentry-key");
             QTest::keyClick(search, Qt::Key_Return);
+            diagnostics.enter("reentry-returned");
         }
-        if (beforeAnswer) beforeAnswer();
+        if (beforeAnswer) {
+            diagnostics.enter("before-answer");
+            beforeAnswer();
+            diagnostics.enter("before-answer-returned");
+        }
+        ++diagnostics.responseAttempts;
+        diagnostics.enter("answer");
         if (confirmation == SearchConfirmation::KeyboardYes) {
             FullKeyboardNavigation navigation;
             auto *no = box->button(QMessageBox::No), *yes = box->button(QMessageBox::Yes);
@@ -140,18 +323,34 @@ SearchResult submitSearch(QLineEdit *search, const QString &query, QMessageBox::
         }
         else if (escape) QTest::keyClick(box, Qt::Key_Escape);
         else box->button(answer)->click();
+        ++diagnostics.responseReturns;
+        diagnostics.enter("answer-returned");
     });
-    // 嵌套模态循环也有明确超时，失败不能把整个测试套件挂住。
-    QTimer::singleShot(2000, &responder, [] { qFatal("Command search did not return"); });
+    // 仍从输入前起算原有 2 秒门槛；超时先保存定位证据，再保持原失败语义。
+    QTimer::singleShot(2000, &responder, [&] {
+        diagnostics.log(QStringLiteral("watchdog-expired"));
+        diagnostics.saveTimeout();
+        qFatal("Command search did not return");
+    });
     responder.start();
+    diagnostics.enter("focus-clear-type");
     search->setFocus(); search->clear(); QTest::keyClicks(search, query);
+    diagnostics.enter("query-typed");
     if (mouseSubmit) {
         const auto buttons = search->findChildren<QAbstractButton *>();
         if (buttons.size() != 1 || !buttons.first()->isVisible()) qFatal("Expected visible search button");
+        diagnostics.enter("submit-mouse");
         QTest::mouseClick(buttons.first(), Qt::LeftButton);
-    } else QTest::keyClick(search, searchKey);
+    } else {
+        diagnostics.enter("submit-key");
+        QTest::keyClick(search, searchKey);
+    }
+    diagnostics.enter("submit-returned");
+    diagnostics.enter("process-events");
     QCoreApplication::processEvents();
+    diagnostics.enter("events-returned");
     responder.stop();
+    diagnostics.enter("complete");
     return result;
 }
 
