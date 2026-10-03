@@ -58,12 +58,13 @@ bool inspectHandle(HANDLE handle, FileState *state, QString *error)
     if (info.dwFileAttributes & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))
         return fail(error, QStringLiteral("Merge output must be a regular file, not a directory or symbolic link."));
     state->exists = true;
-    state->identity = QByteArray::number(info.dwVolumeSerialNumber) + ':'
-        + QByteArray::number(info.nFileIndexHigh) + ':' + QByteArray::number(info.nFileIndexLow);
-    state->changeToken = QByteArray::number(info.nFileSizeHigh) + ':'
-        + QByteArray::number(info.nFileSizeLow) + ':'
-        + QByteArray::number(info.ftLastWriteTime.dwHighDateTime) + ':'
-        + QByteArray::number(info.ftLastWriteTime.dwLowDateTime);
+    // 与文本保存使用同一无符号口径，避免 MinGW 对 DWORD 的重载歧义。
+    state->identity = QByteArray::number(qulonglong(info.dwVolumeSerialNumber)) + ':'
+        + QByteArray::number(qulonglong(info.nFileIndexHigh)) + ':' + QByteArray::number(qulonglong(info.nFileIndexLow));
+    state->changeToken = QByteArray::number(qulonglong(info.nFileSizeHigh)) + ':'
+        + QByteArray::number(qulonglong(info.nFileSizeLow)) + ':'
+        + QByteArray::number(qulonglong(info.ftLastWriteTime.dwHighDateTime)) + ':'
+        + QByteArray::number(qulonglong(info.ftLastWriteTime.dwLowDateTime));
     return true;
 }
 

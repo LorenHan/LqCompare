@@ -3,6 +3,8 @@
 
 #include "LqRibbon.h"
 
+class QLineEdit;
+
 namespace LqCompare {
 
 ///
@@ -10,7 +12,8 @@ namespace LqCompare {
 /// 应用级 Ribbon 外壳（PRD: UI-001 ~ UI-006）。
 ///
 /// 与 Ailecium 的 RibbonWindow 保持同一套做法，便于两个项目共享经验：
-/// Office 2016 Blue 样式、居中命令搜索栏、可最小化、屏蔽 LqRibbon 默认上下文菜单，
+/// Office 2016 Blue 命令区、应用调色板的直角标签、居中命令搜索栏、可最小化，
+/// 屏蔽 LqRibbon 默认上下文菜单，
 /// 并把「添加到快速访问工具栏 / 自定义功能区」两项作为自有右键入口。
 ///
 class RibbonWindow : public LqRibbon::RibbonMainWindow
@@ -35,6 +38,13 @@ protected:
 
 private:
     void setupSearchBar();
+    void updateTabAppearance();
+    void updateSearchAppearance();
+
+    QLineEdit *m_commandSearch = nullptr;
+    bool m_searchRunning = false;
+    bool m_searchQueued = false;
+    quint64 m_searchGeneration = 0;
 
     Q_DISABLE_COPY(RibbonWindow)
 };

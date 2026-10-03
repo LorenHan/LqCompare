@@ -2,6 +2,7 @@
 #define LQCOMPARE_TEST_CLIPROBE_H
 
 #include "cliexecution.h"
+#include "processarguments.h"
 #include "scriptengine.h"
 #include <QCoreApplication>
 #include <QFile>
@@ -12,6 +13,7 @@
 // probe. QCoreApplication is the only application object in either path.
 inline int runCliProbe(QCoreApplication &app)
 {
+    Q_UNUSED(app);
     QCoreApplication::setApplicationName(QStringLiteral("LqCompareCliProbe"));
     QCoreApplication::setOrganizationName(QStringLiteral("LqCompareTests"));
     const QString settingsRoot = qEnvironmentVariable("LQCOMPARE_CLI_TEST_CONFIG_HOME");
@@ -19,8 +21,11 @@ inline int runCliProbe(QCoreApplication &app)
         QSettings::setDefaultFormat(QSettings::IniFormat);
         QSettings::setPath(QSettings::IniFormat, QSettings::UserScope, settingsRoot);
     }
-    const auto parsed = LqCompare::Cli::parse(app.arguments().mid(1));
-    const auto result = parsed.ok()
+    const auto arguments = LqCompare::Cli::processArguments();
+    const auto parsed = LqCompare::Cli::parse(arguments.values.mid(1));
+    const auto result = !arguments.ok()
+        ? LqCompare::Cli::errorResult(LqCompare::Cli::UsageError, arguments.error)
+        : parsed.ok()
         ? (parsed.request.scriptFile.isEmpty()
            ? LqCompare::Cli::execute(parsed.request, QStringLiteral("probe-1.0"))
            : LqCompare::Script::executeFile(parsed.request, QStringLiteral("probe-1.0")))

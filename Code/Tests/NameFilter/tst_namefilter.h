@@ -33,12 +33,15 @@ private slots:
     void initTestCase();
 
     // ---------- A 三种匹配模式（第 1 条） ----------
+    void exactMatchesOnlyWholeName_data();
     void exactMatchesOnlyWholeName();
     void exactHonorsCaseSensitivity();
     void wildcardUsesMaskSyntaxAndMatchesWholeName();
     void regexMatchesWholeNameNotSubstring();
     void regexKeepsUserAnchorsWorking();
+    void regexSubstringNeedsExplicitDotStar_data();
     void regexSubstringNeedsExplicitDotStar();
+    void regexHonorsCaseSensitivity_data();
     void regexHonorsCaseSensitivity();
     void wildcardMetacharactersAreNotRegex();
     void modePrefixTableIsTheSingleSourceOfTruth();
@@ -125,8 +128,12 @@ private slots:
     void emptyFilterKeepsEverything();
     void emptyNameIsRejectedEvenWithNoneOf();
     void declarationKeyIsStable();
+    void describeMentionsCombineCountAndCase_data();
     void describeMentionsCombineCountAndCase();
+    void caseSensitivityOverrideIsReported_data();
     void caseSensitivityOverrideIsReported();
+    void nativePlatformDefaultMatchesHost_data();
+    void nativePlatformDefaultMatchesHost();
     void caseInsensitiveWildcardMatchesWindowsStyleNames();
     void parseReportsTheModeOfEachExpression();
 

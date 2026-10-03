@@ -11,6 +11,7 @@
 
 class QCheckBox;
 class QComboBox;
+class QDoubleSpinBox;
 class QLabel;
 class QLineEdit;
 class QMenu;
@@ -150,6 +151,8 @@ private:
     QComboBox *m_recursionTier;
     QSpinBox *m_maximumDepth;
     QCheckBox *m_content;
+    QCheckBox *m_compareTimestamps;
+    QDoubleSpinBox *m_timeTolerance;
     QCheckBox *m_caseSensitive;
     QCheckBox *m_hideExcluded;
     QCheckBox *m_hideEmpty;

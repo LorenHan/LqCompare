@@ -7,4 +7,9 @@ TARGET = tst_cli
 include(cli-test-dependencies.pri)
 SOURCES += $$PWD/tst_cli.cpp
 HEADERS += $$PWD/../CliProbe/cliprobe.h
+win32 {
+    HEADERS += $$PWD/probecrashdiagnostics.h
+    SOURCES += $$PWD/probecrashdiagnostics_win.cpp
+    LIBS += -ldbghelp
+}
 isEmpty(DESTDIR): DESTDIR = $$clean_path($$OUT_PWD/bin)

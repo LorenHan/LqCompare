@@ -1,5 +1,6 @@
 #include "MainWindow.h"
 #include "clioptions.h"
+#include "processarguments.h"
 #include "cliexecution.h"
 #include "scriptengine.h"
 #include "commandregistry.h"
@@ -35,10 +36,11 @@ int printResult(const LqCompare::Cli::ExecutionResult &result)
 int main(int argc, char *argv[])
 {
     using namespace LqCompare;
-    // Only inspect ASCII option names before Qt obtains native Unicode argv.
-    QStringList earlyArguments;
-    for (int i = 1; i < argc; ++i) earlyArguments.append(QString::fromLocal8Bit(argv[i]));
-    const auto early = Cli::parse(earlyArguments);
+    // 提前分类与正式执行必须读取同一套原生参数，不能按窄 argv 的错误数量选应用类型。
+    const auto initialArguments = Cli::initialProcessArguments(argc, argv);
+    if (!initialArguments.ok())
+        return printResult(Cli::errorResult(Cli::UsageError, initialArguments.error));
+    const auto early = Cli::parse(initialArguments.values.mid(1));
     const bool headless = !early.ok() || Cli::requiresHeadless(early.request);
     QCoreApplication::setAttribute(Qt::AA_EnableHighDpiScaling);
     QCoreApplication::setAttribute(Qt::AA_UseHighDpiPixmaps);
@@ -49,7 +51,10 @@ int main(int argc, char *argv[])
     QCoreApplication::setApplicationVersion(QStringLiteral(LQCOMPARE_VERSION));
     QCoreApplication::setOrganizationName(QStringLiteral("Ailecium"));
     QCoreApplication::setOrganizationDomain(QStringLiteral("ailecium.org"));
-    const QStringList arguments = QCoreApplication::arguments().mid(1);
+    const auto nativeArguments = Cli::processArguments();
+    if (!nativeArguments.ok())
+        return printResult(Cli::errorResult(Cli::UsageError, nativeArguments.error));
+    const QStringList arguments = nativeArguments.values.mid(1);
     const auto parsed = Cli::parse(arguments);
     if (!parsed.ok()) return printResult(Cli::errorResult(Cli::UsageError, parsed.error));
     const auto &request = parsed.request;

@@ -16,6 +16,10 @@
 #include <cstdio>
 #include <functional>
 #include <thread>
+#ifdef Q_OS_WIN
+#include <fcntl.h>
+#include <io.h>
+#endif
 
 using namespace LqCompare::Vcs;
 
@@ -202,6 +206,11 @@ private:
 // failures on every platform. Backend still uses QProcess directly, no shell.
 int runProcessHelper(const QByteArray &mode, const QStringList &arguments)
 {
+#ifdef Q_OS_WIN
+    // Git 协议与 blob 都是原始字节；CRT 文本模式会把 LF 改成 CRLF，甚至重复已有的 CR。
+    if (_setmode(_fileno(stdout), _O_BINARY) == -1)
+        return 24;
+#endif
     if (arguments.contains("--version")) {
         std::fputs("git version 2.40.0\n", stdout);
         return 0;
@@ -212,8 +221,8 @@ int runProcessHelper(const QByteArray &mode, const QStringList &arguments)
         QByteArray output;
         if (arguments.contains("rev-parse")) output = hash + '\n';
         else if (arguments.contains("ls-tree")) output = "100644 blob " + hash + "\ta.txt" + '\0';
-        else if (arguments.contains("cat-file")) output = "alpha\n";
-        else if (arguments.contains("blame")) output = qgetenv("LQCOMPARE_VCS_BLAME_PAYLOAD");
+        else if (arguments.contains("cat-file")) output = QByteArray::fromBase64(qgetenv("LQCOMPARE_VCS_BLAME_CONTENT_BASE64"));
+        else if (arguments.contains("blame")) output = QByteArray::fromBase64(qgetenv("LQCOMPARE_VCS_BLAME_PAYLOAD_BASE64"));
         else return 23;
         std::fwrite(output.constData(), 1, size_t(output.size()), stdout);
         return 0;
@@ -252,6 +261,7 @@ private slots:
     void processTimeout();
     void processCancellation();
     void processOutputLimit();
+    void processHelperPreservesProtocolBytes();
     void detectRepositoryAndUnbornHead();
     void detectWorktreeAndNestedRepository();
     void statusSeparatesIndexWorktreeAndRenames();
@@ -397,6 +407,24 @@ void VcsTests::processOutputLimit()
     GitBackend backend(options);
     const auto result = backend.detectRepo(QDir::tempPath());
     QCOMPARE(result.error.code, ErrorCode::TooLarge);
+}
+
+void VcsTests::processHelperPreservesProtocolBytes()
+{
+    // 同时钉住 LF、CRLF、孤立 CR、NUL、Ctrl-Z 和 UTF-8，避免平台文本模式污染夹具。
+    const QByteArray payload = QByteArray::fromHex("4c460a43524c460d0a43520d001ae4b8ad");
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    environment.insert("LQCOMPARE_VCS_PROCESS_HELPER", "blame");
+    environment.insert("LQCOMPARE_VCS_BLAME_PAYLOAD_BASE64", QString::fromLatin1(payload.toBase64()));
+    QProcess process;
+    process.setProcessEnvironment(environment);
+    process.start(QCoreApplication::applicationFilePath(), {"blame"});
+    QVERIFY2(process.waitForStarted(5000), qPrintable(process.errorString()));
+    QVERIFY2(process.waitForFinished(5000), qPrintable(process.errorString()));
+    QCOMPARE(process.exitStatus(), QProcess::NormalExit);
+    QCOMPARE(process.exitCode(), 0);
+    QCOMPARE(process.readAllStandardError(), QByteArray());
+    QCOMPARE(process.readAllStandardOutput(), payload);
 }
 
 void VcsTests::detectRepositoryAndUnbornHead()
@@ -902,6 +930,9 @@ void VcsTests::invalidPathsAndBinaryContent()
         QCOMPARE(textContent.value.bytes, utf16);
         QVERIFY(!textContent.value.binary);
         QCOMPARE(backend.catFile(repo.value, "../outside.txt", source).error.code, ErrorCode::InvalidPath);
+        // 原生路径仍须通过仓库边界检查，包括 Windows 的反斜杠形式。
+        QCOMPARE(backend.catFile(repo.value, QDir::toNativeSeparators("../outside.txt"), source).error.code,
+                 ErrorCode::InvalidPath);
         QCOMPARE(backend.catFile(repo.value, temporary.filePath("outside.txt"), source).error.code, ErrorCode::InvalidPath);
     }
     auto comparison = backend.compare(repo.value, "binary.dat", Source::at("HEAD"), "binary.dat", Source::workingTree());
@@ -1112,18 +1143,31 @@ void VcsTests::blameProtocolValid_data()
     QTest::addColumn<QString>("expectedPath");
     QTest::addColumn<QString>("expectedEmail");
     QTest::addColumn<QString>("expectedSummary");
+    QTest::addColumn<QByteArray>("sourceBytes");
     const QByteArray sha1(40, 'a'), sha256(64, 'b');
     QTest::newRow("sha256") << blamePayload("a.txt", sha256) << sha256 << QString("a.txt")
-                            << QString("test@example.invalid") << QString("Fixture summary");
+                            << QString("test@example.invalid") << QString("Fixture summary") << QByteArray("alpha\n");
     const QByteArray quoted("\"dir/\\t\\n\\r\\a\\b\\v\\f\\\\\\\"\\001\\177\\344\\270\\255.txt\"");
     const QString decoded = QString::fromUtf8("dir/\t\n\r\a\b\v\f\\\"\001\177中.txt");
     QTest::newRow("quoted-octal-bytes") << blamePayload(quoted) << sha1 << decoded
-                                       << QString("test@example.invalid") << QString("Fixture summary");
+                                       << QString("test@example.invalid") << QString("Fixture summary") << QByteArray("alpha\n");
+    QTest::newRow("git-colon-filename") << blamePayload("C:literal.txt") << sha1 << QString("C:literal.txt")
+        << QString("test@example.invalid") << QString("Fixture summary") << QByteArray("alpha\n");
+    QTest::newRow("git-leading-backslash-filename") << blamePayload("\"\\\\literal.txt\"") << sha1 << QString("\\literal.txt")
+        << QString("test@example.invalid") << QString("Fixture summary") << QByteArray("alpha\n");
     QByteArray metadata = blamePayload(" leading trailing ");
     metadata.replace("<test@example.invalid>", "<>");
     metadata.replace("Fixture summary", " Leading\twith CR\r");
     QTest::newRow("empty-email-whitespace-summary") << metadata << sha1 << QString(" leading trailing ")
-        << QString() << QString(" Leading\twith CR\r");
+        << QString() << QString(" Leading\twith CR\r") << QByteArray("alpha\n");
+    QTest::newRow("source-crlf") << QByteArray(blamePayload()).replace("\talpha\n", "\talpha\r\n")
+        << sha1 << QString("a.txt") << QString("test@example.invalid") << QString("Fixture summary")
+        << QByteArray("alpha\r\n");
+    const QByteArray utf8Source = QString::fromUtf8("中文 café\n").toUtf8();
+    const QString utf8Summary = QString::fromUtf8("中文 résumé");
+    QTest::newRow("utf8-metadata-and-content")
+        << QByteArray(blamePayload()).replace("Fixture summary", utf8Summary.toUtf8()).replace("alpha\n", utf8Source)
+        << sha1 << QString("a.txt") << QString("test@example.invalid") << utf8Summary << utf8Source;
 }
 
 void VcsTests::blameProtocolValid()
@@ -1133,9 +1177,12 @@ void VcsTests::blameProtocolValid()
     QFETCH(QString, expectedPath);
     QFETCH(QString, expectedEmail);
     QFETCH(QString, expectedSummary);
+    QFETCH(QByteArray, sourceBytes);
     QTemporaryDir temporary;
     EnvironmentGuard helper("LQCOMPARE_VCS_PROCESS_HELPER", "blame");
-    EnvironmentGuard output("LQCOMPARE_VCS_BLAME_PAYLOAD", payload);
+    // 环境变量只传 ASCII；任意协议字节经 Base64 往返，不依赖 Windows 活动代码页。
+    EnvironmentGuard output("LQCOMPARE_VCS_BLAME_PAYLOAD_BASE64", payload.toBase64());
+    EnvironmentGuard content("LQCOMPARE_VCS_BLAME_CONTENT_BASE64", sourceBytes.toBase64());
     EnvironmentGuard identifier("LQCOMPARE_VCS_BLAME_HASH", hash);
     Options options;
     options.gitExecutable = QCoreApplication::applicationFilePath();
@@ -1149,7 +1196,7 @@ void VcsTests::blameProtocolValid()
     QCOMPARE(result.value.first().originalPath, expectedPath);
     QCOMPARE(result.value.first().email, expectedEmail);
     QCOMPARE(result.value.first().summary, expectedSummary);
-    QCOMPARE(result.value.first().text, QString("alpha"));
+    QCOMPARE(result.value.first().text, QString::fromUtf8(sourceBytes.left(sourceBytes.size() - 1)));
 }
 
 void VcsTests::blameRejectsMalformedOutput_data()
@@ -1174,8 +1221,15 @@ void VcsTests::blameRejectsMalformedOutput_data()
     QTest::newRow("short-octal") << blamePayload("\"bad\\01\"");
     QTest::newRow("null-filename-byte") << blamePayload("\"bad\\000\"");
     QTest::newRow("path-traversal") << blamePayload("../outside.txt");
+    QTest::newRow("nested-path-traversal") << blamePayload("dir/../../outside.txt");
+    QTest::newRow("absolute-path") << blamePayload("/outside.txt");
+    QTest::newRow("empty-path-component") << blamePayload("dir//a.txt");
+    QTest::newRow("dot-path-component") << blamePayload("dir/./a.txt");
+    QTest::newRow("parent-path-component") << blamePayload("dir/../a.txt");
     QTest::newRow("unterminated-output") << valid.left(valid.size() - 1);
     QTest::newRow("extra-empty-line") << (valid + '\n');
+    // 只有内容中的 CR 属于文件；协议帧被文本模式整体转成 CRLF 必须仍被拒绝。
+    QTest::newRow("text-mode-crlf-protocol") << QByteArray(valid).replace("\n", "\r\n");
 }
 
 void VcsTests::blameRejectsMalformedOutput()
@@ -1183,7 +1237,8 @@ void VcsTests::blameRejectsMalformedOutput()
     QFETCH(QByteArray, payload);
     QTemporaryDir temporary;
     EnvironmentGuard helper("LQCOMPARE_VCS_PROCESS_HELPER", "blame");
-    EnvironmentGuard output("LQCOMPARE_VCS_BLAME_PAYLOAD", payload);
+    EnvironmentGuard output("LQCOMPARE_VCS_BLAME_PAYLOAD_BASE64", payload.toBase64());
+    EnvironmentGuard content("LQCOMPARE_VCS_BLAME_CONTENT_BASE64", QByteArray("alpha\n").toBase64());
     Options options;
     options.gitExecutable = QCoreApplication::applicationFilePath();
     GitBackend backend(options);

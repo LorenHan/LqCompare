@@ -8,11 +8,28 @@
 #include <QTemporaryDir>
 
 #include <cerrno>
+#include <limits>
 #include <memory>
+#ifndef Q_OS_WIN
+#include <unistd.h>
+#endif
+#ifdef Q_OS_MACOS
+#include <fcntl.h>
+#include <sys/stat.h>
+#endif
 
 using namespace LqCompare::Files;
 
 namespace QTest {
+
+// 时间比较失败时要保留原始纳秒值；只有「不相等」无法诊断平台的 birthtime 行为。
+template <>
+char *toString(const FileTime &time)
+{
+    if (!time.isValid())
+        return qstrdup("invalid FileTime");
+    return qstrdup(qPrintable(QStringLiteral("UTC %1 ns").arg(time.nanosecondsSinceEpoch())));
+}
 
 /// 让失败信息里直接显示错误标识（"busy"、"permission-denied"），
 /// 而不是「Compared values are not the same」。
@@ -428,6 +445,13 @@ void TstFileSystem::classifyWindowsAccessDeniedIsNotBusy()
 void TstFileSystem::classifyWindowsErrorCodes()
 {
     QCOMPARE(classifyWindowsErrorCode(0), FileSystemError::None);
+    // 对普通文件枚举目录的真实 Win32 返回值，不能落到无意义的 Unknown。
+    QCOMPARE(classifyWindowsErrorCode(267), FileSystemError::NotDirectory);
+    const ErrorCode directoryError = fromWindowsError(267);
+    QCOMPARE(directoryError.raw, qint64(267));
+    QCOMPARE(directoryError.domain, ErrorDomain::Win32);
+    QCOMPARE(errorDetail(directoryError), QStringLiteral("Win32 267（ERROR_DIRECTORY）"));
+    QVERIFY(!isRetryable(directoryError.category));
     QCOMPARE(classifyWindowsErrorCode(Win32Error::FileNotFound), FileSystemError::NotFound);
     QCOMPARE(classifyWindowsErrorCode(Win32Error::PathNotFound), FileSystemError::NotFound);
     QCOMPARE(classifyWindowsErrorCode(Win32Error::WriteProtect), FileSystemError::ReadOnly);
@@ -784,6 +808,256 @@ void TstFileSystem::nativeFileSystemReadsRealDirectory()
     // 对文件调用枚举要明确报 NotDirectory。
     QCOMPARE(fileSystem->enumerateDirectory(root + QStringLiteral("/hello.txt"), &error).size(), 0);
     QCOMPARE(error, FileSystemError::NotDirectory);
+}
+
+void TstFileSystem::nativeTimesRoundTrip_data()
+{
+    QTest::addColumn<bool>("directory");
+    QTest::addColumn<qint64>("nanoseconds");
+    for (bool directory : {false, true}) {
+        const QByteArray prefix = directory ? "directory-" : "file-";
+        QTest::newRow((prefix + "unix-epoch").constData()) << directory << qint64(0);
+        QTest::newRow((prefix + "pre-1970").constData())
+            << directory << qint64(-1000000000LL);
+        QTest::newRow((prefix + "recent").constData())
+            << directory << qint64(1790899200000000000LL);
+        QTest::newRow((prefix + "100ns-precision").constData())
+            << directory << qint64(1790899200123456700LL);
+    }
+}
+
+void TstFileSystem::nativeTimesRoundTrip()
+{
+    QFETCH(bool, directory);
+    QFETCH(qint64, nanoseconds);
+    QTemporaryDir temporaryDir;
+    QVERIFY(temporaryDir.isValid());
+    const QString path = temporaryDir.filePath(QStringLiteral("时间戳"));
+    if (directory) {
+        QVERIFY(QDir().mkdir(path));
+    } else {
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.close();
+    }
+    const std::unique_ptr<FileSystem> fileSystem(createNativeFileSystem());
+    const FileTime expected = FileTime::fromNanosecondsSinceEpoch(nanoseconds);
+    ErrorCode error = fromSystemError(EACCES);
+    QVERIFY2(fileSystem->setTimes(path, expected, expected, &error), qPrintable(errorReport(error)));
+    QCOMPARE(error, FileSystemError::None);
+    QVERIFY(!error.hasRawCode());
+    const FileInfo info = fileSystem->stat(path, &error);
+    QCOMPARE(error, FileSystemError::None);
+    QCOMPARE(info.lastModified, expected);
+    QCOMPARE(info.lastAccessed, expected);
+
+    // stat 与 enumerateDirectory 都必须经过同一套 UTC 换算。
+    const QVector<FileInfo> entries = fileSystem->enumerateDirectory(temporaryDir.path(), &error);
+    QCOMPARE(error, FileSystemError::None);
+    QCOMPARE(entries.size(), 1);
+    QCOMPARE(entries.first().lastModified, expected);
+    QCOMPARE(entries.first().lastAccessed, expected);
+}
+
+void TstFileSystem::nativeTimesPreserveUnspecifiedFields()
+{
+    QTemporaryDir temporaryDir;
+    QVERIFY(temporaryDir.isValid());
+    const QString path = temporaryDir.filePath(QStringLiteral("times.txt"));
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.close();
+    const std::unique_ptr<FileSystem> fileSystem(createNativeFileSystem());
+    const FileTime originalCreated = fileSystem->stat(path).created;
+    const FileTime modified = FileTime::fromSecondsSinceEpoch(1700000000);
+    const FileTime accessed = FileTime::fromSecondsSinceEpoch(1600000000);
+    ErrorCode error;
+    // 先向未来修改 mtime：三平台都必须保留创建时间，避免把 macOS 的回溯规则
+    // 扩大成「在 macOS 上不检查创建时间」。
+    const FileTime forward = FileTime::fromDateTime(QDateTime::currentDateTimeUtc().addDays(1));
+    QVERIFY2(fileSystem->setTimes(path, forward, accessed, &error), qPrintable(errorReport(error)));
+    FileInfo info = fileSystem->stat(path);
+    QCOMPARE(info.lastModified, forward);
+    QCOMPARE(info.lastAccessed, accessed);
+    QCOMPARE(info.created, originalCreated);
+
+    QVERIFY2(fileSystem->setTimes(path, modified, accessed, &error), qPrintable(errorReport(error)));
+
+    // 无效值是「保留」，有效的 Unix 纪元 0 则必须确实写入，二者不能混淆。
+    const FileTime epoch = FileTime::fromNanosecondsSinceEpoch(0);
+    QVERIFY2(fileSystem->setTimes(path, epoch, FileTime(), &error), qPrintable(errorReport(error)));
+    info = fileSystem->stat(path);
+    QCOMPARE(info.lastModified, epoch);
+    QCOMPARE(info.lastAccessed, accessed);
+
+    FileTime expectedCreated = originalCreated;
+#ifdef Q_OS_MACOS
+    // macOS 的文件系统可能随向过去修改 mtime 一起前移 birthtime。Apple 的
+    // HFS 实现明确如此；不能把 Windows 的创建时间不变规则强加给它：
+    // https://github.com/apple-oss-distributions/hfs/blob/main/core/hfs_vnops.c#L1471-L1482
+    // 在同一临时目录用原生 API 建立独立对照，也兼容不前移 birthtime 的挂载盘。
+    QFile reference(temporaryDir.filePath(QStringLiteral("native-times.txt")));
+    QVERIFY(reference.open(QIODevice::WriteOnly));
+    reference.close();
+    const QByteArray nativeReference = QFile::encodeName(reference.fileName());
+    struct stat before;
+    struct stat after;
+    QCOMPARE(::stat(nativeReference.constData(), &before), 0);
+    struct timespec times[2] = {{1600000000, 0}, {1700000000, 0}};
+    QCOMPARE(::utimensat(AT_FDCWD, nativeReference.constData(), times, AT_SYMLINK_NOFOLLOW), 0);
+    times[0].tv_nsec = UTIME_OMIT;
+    times[1].tv_sec = 0;
+    QCOMPARE(::utimensat(AT_FDCWD, nativeReference.constData(), times, AT_SYMLINK_NOFOLLOW), 0);
+    QCOMPARE(::stat(nativeReference.constData(), &after), 0);
+    if (before.st_birthtimespec.tv_sec != after.st_birthtimespec.tv_sec
+        || before.st_birthtimespec.tv_nsec != after.st_birthtimespec.tv_nsec) {
+        expectedCreated = FileTime::fromUnixTime(after.st_birthtimespec.tv_sec,
+                                                 after.st_birthtimespec.tv_nsec);
+    }
+#endif
+    // Windows 仍严格等于最初创建时间；macOS 只允许与原生对照相同的回溯结果。
+    QCOMPARE(info.created, expectedCreated);
+
+    QVERIFY2(fileSystem->setTimes(path, FileTime(), epoch, &error), qPrintable(errorReport(error)));
+    info = fileSystem->stat(path);
+    QCOMPARE(info.lastModified, epoch);
+    QCOMPARE(info.lastAccessed, epoch);
+    QCOMPARE(info.created, expectedCreated);
+
+    error = fromSystemError(EACCES);
+    QVERIFY2(fileSystem->setTimes(path, FileTime(), FileTime(), &error), qPrintable(errorReport(error)));
+    QCOMPARE(error, FileSystemError::None);
+    QVERIFY(!error.hasRawCode());
+    info = fileSystem->stat(path);
+    QCOMPARE(info.lastModified, epoch);
+    QCOMPARE(info.lastAccessed, epoch);
+    QCOMPARE(info.created, expectedCreated);
+    QVERIFY(fileSystem->setTimes(path, modified, FileTime(), nullptr));
+    info = fileSystem->stat(path);
+    QCOMPARE(info.lastModified, modified);
+    QCOMPARE(info.lastAccessed, epoch);
+    QCOMPARE(info.created, expectedCreated);
+}
+
+void TstFileSystem::nativeTimesReportMissingPath()
+{
+    QTemporaryDir temporaryDir;
+    QVERIFY(temporaryDir.isValid());
+    const std::unique_ptr<FileSystem> fileSystem(createNativeFileSystem());
+    const QString missing = temporaryDir.filePath(QStringLiteral("missing"));
+    ErrorCode error;
+    QVERIFY(!fileSystem->setTimes(missing, FileTime::fromSecondsSinceEpoch(1700000000), {}, &error));
+    QCOMPARE(error, FileSystemError::NotFound);
+    QVERIFY(error.hasRawCode());
+    QVERIFY(error.raw != 0);
+    QVERIFY(!fileSystem->setTimes(missing, FileTime::fromSecondsSinceEpoch(1700000000), {}, nullptr));
+}
+
+void TstFileSystem::nativeWindowsTimesRejectUnrepresentableRounding()
+{
+#ifndef Q_OS_WIN
+    QSKIP("Windows 100ns rounding policy; pure conversion boundaries run on every platform.");
+#else
+    QTemporaryDir temporaryDir;
+    QVERIFY(temporaryDir.isValid());
+    const QString path = temporaryDir.filePath(QStringLiteral("range.txt"));
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.close();
+    const std::unique_ptr<FileSystem> fileSystem(createNativeFileSystem());
+    const FileTime initial = FileTime::fromSecondsSinceEpoch(1700000000);
+    QVERIFY(fileSystem->setTimes(path, initial, initial));
+    const FileTime roundedOutOfRange = FileTime::fromNanosecondsSinceEpoch(std::numeric_limits<qint64>::min());
+    for (bool rejectModified : {false, true}) {
+        ErrorCode error = fromSystemError(EACCES);
+        const FileTime epoch = FileTime::fromNanosecondsSinceEpoch(0);
+        QVERIFY(!fileSystem->setTimes(path,
+            rejectModified ? roundedOutOfRange : epoch,
+            rejectModified ? epoch : roundedOutOfRange, &error));
+        QCOMPARE(error, FileSystemError::NotSupported);
+        QVERIFY(!error.hasRawCode());
+        const FileInfo info = fileSystem->stat(path);
+        QCOMPARE(info.lastModified, initial);
+        QCOMPARE(info.lastAccessed, initial);
+    }
+    QVERIFY(!fileSystem->setTimes(path, roundedOutOfRange, {}, nullptr));
+#endif
+}
+
+void TstFileSystem::nativeLinkTargetPreservesStoredTarget_data()
+{
+    QTest::addColumn<QString>("target");
+    // 卡住第一次分配与扩容的两侧；恰好填满时必须再读，不能截断或多解码字节。
+    QTest::newRow("one-byte") << QStringLiteral("x");
+    for (const int length : {255, 256, 257, 512, 513}) {
+        const QByteArray name = QByteArray::number(length) + "-bytes";
+        QTest::newRow(name.constData()) << QString(length, QLatin1Char('x'));
+    }
+    QTest::newRow("relative-dangling") << QStringLiteral("../sub/missing");
+    // 按编码后的字节数越过 512，字符数却不足 256，防止把字符数当缓冲长度。
+    const QString unicodeTarget = QStringLiteral("目录/").repeated(80)
+        + QStringLiteral("不存在.txt");
+    QVERIFY(unicodeTarget.toUtf8().size() > 512);
+    QTest::newRow("unicode-dangling") << unicodeTarget;
+}
+
+void TstFileSystem::nativeLinkTargetPreservesStoredTarget()
+{
+#ifdef Q_OS_WIN
+    QSKIP("POSIX readlink regression; Windows symbolic links require separate privileges.");
+#else
+    QFETCH(QString, target);
+    QTemporaryDir temporaryDir;
+    QVERIFY(temporaryDir.isValid());
+    const QString link = temporaryDir.filePath(QStringLiteral("链接"));
+    const QByteArray nativeTarget = QFile::encodeName(target);
+    const QByteArray nativeLink = QFile::encodeName(link);
+    // 直接存入相对目标，不能让测试辅助函数先解析或规范化它。
+    QCOMPARE(::symlink(nativeTarget.constData(), nativeLink.constData()), 0);
+
+    const std::unique_ptr<FileSystem> fileSystem(createNativeFileSystem());
+    ErrorCode error = fromSystemError(EACCES);
+    QCOMPARE(fileSystem->linkTarget(link, &error), target);
+    QCOMPARE(error, FileSystemError::None);
+    QVERIFY(!error.hasRawCode());
+    QCOMPARE(error.raw, qint64(0));
+    QCOMPARE(fileSystem->linkTarget(link, nullptr), target);
+#endif
+}
+
+void TstFileSystem::nativeLinkTargetReportsErrors()
+{
+#ifdef Q_OS_WIN
+    QSKIP("POSIX readlink error codes are platform-specific.");
+#else
+    QTemporaryDir temporaryDir;
+    QVERIFY(temporaryDir.isValid());
+    const QString regularPath = temporaryDir.filePath(QStringLiteral("ordinary.txt"));
+    QFile regularFile(regularPath);
+    QVERIFY(regularFile.open(QIODevice::WriteOnly));
+    regularFile.close();
+    const std::unique_ptr<FileSystem> fileSystem(createNativeFileSystem());
+
+    ErrorCode error;
+    const QString missing = temporaryDir.filePath(QStringLiteral("missing"));
+    QVERIFY(fileSystem->linkTarget(missing, &error).isEmpty());
+    QCOMPARE(error, FileSystemError::NotFound);
+    QCOMPARE(error.domain, ErrorDomain::Posix);
+    QCOMPARE(error.raw, qint64(ENOENT));
+    QVERIFY(fileSystem->linkTarget(missing, nullptr).isEmpty());
+
+    // POSIX 不允许创建空目标链接；这里覆盖空路径失败，不能伪造成功夹具。
+    QVERIFY(fileSystem->linkTarget(QString(), &error).isEmpty());
+    QCOMPARE(error, FileSystemError::NotFound);
+    QCOMPARE(error.raw, qint64(ENOENT));
+
+    QVERIFY(fileSystem->linkTarget(regularPath, &error).isEmpty());
+    // EINVAL 的成因不限于名称错误，沿用错误分类层的 Unknown 契约。
+    QCOMPARE(error, FileSystemError::Unknown);
+    QCOMPARE(error.domain, ErrorDomain::Posix);
+    QCOMPARE(error.raw, qint64(EINVAL));
+    QVERIFY(fileSystem->linkTarget(regularPath, nullptr).isEmpty());
+#endif
 }
 
 // Q_OBJECT 声明在头文件里，因此这里不需要 #include "xxx.moc"：

@@ -35,6 +35,7 @@ enum class TrashAvailability {
     NoSpace,                ///< 回收站所在卷剩余空间不足
     PlatformNotSupported,   ///< 该平台或该构建没有回收站能力
     Unknown,                ///< 探测本身失败，无法判断
+    RecoverabilityNotGuaranteed, ///< 当前后端无法保证可恢复，拒绝删除；追加以保留既有数值
 };
 
 /// 稳定的机器可读标识（用于日志与测试断言，不用于界面显示）。
@@ -92,7 +93,11 @@ TrashDecision decideTrash(TrashAvailability availability);
 struct TrashRecord
 {
     QString originalPath;  ///< 用户给的原始路径
-    QString trashedPath;   ///< 删除成功后条目在回收站中的实际路径；失败时为空
+    QString trashedPath;   ///< 可取得时为回收站内的实际文件路径；失败或后端不提供路径时为空
+
+    // Shell 命名空间型后端可能没有文件路径；成功与否由 error 判断，不能用路径
+    // 为空推断删除失败，也不能把 displayLocation 当成文件路径。当前 Windows
+    // 后端因可恢复删除尚未验证而整体拒绝，不会产生这种成功记录。
 
     /// 失败原因。类型是 ErrorCode 而不是 FileSystemError：回收站失败最常见的是
     /// 「无权限」（回收站目录属于别人）与「被占用」，这两种恰恰是用户要拿着
@@ -127,7 +132,7 @@ struct TrashReport
     /// 全成功时返回一个 ok() 为真的 ErrorCode。
     ErrorCode firstErrorCode() const;
 
-    /// 成功进入回收站的条目在回收站中的路径（按原顺序）。
+    /// 成功条目中可取得的回收站文件路径（按原顺序）；不包含无文件路径的条目。
     QStringList trashedPaths() const;
 
     /// 失败条目的原始路径（按原顺序）。
@@ -174,8 +179,9 @@ public:
     /// 文件通常还在，但同步场景下可能刚被别的进程处理掉）。
     virtual TrashAvailability availabilityFor(const QString &path) const = 0;
 
-    /// 回收站的可读位置，用于提示「已移到 ~/.Trash」这类信息。
-    /// 平台没有可读位置时返回空串。
+    /// 回收站的显示/打开位置，用于提示「已移到 ~/.Trash」这类信息。
+    /// 可以是文件系统目录，也可以是 Windows 的 shell:RecycleBinFolder 命名空间。
+    /// 不能假定它是绝对文件路径。平台没有可读位置时返回空串。
     virtual QString displayLocation() const = 0;
 
     // --- 对外接口（不应被派生类覆写）-------------------------------------
@@ -193,7 +199,8 @@ public:
     /// 还原「最近一次成功删除到回收站」的全部条目。
     ///
     /// 返回 false 时 error 给出原因。受平台能力限制无法还原时返回
-    /// NotSupported，并在 errorMessage 里说明——而不是假装成功。
+    /// NotSupported——而不是假装成功。当前 Windows 后端同时拒绝回收站删除与
+    /// 自动还原；displayLocation() 仅供用户自行打开系统回收站。
     /// 出参类型是 ErrorCode，便于把原始系统错误码一起交出来（PLAT-008）。
     virtual bool undoLastDelete(ErrorCode *error = nullptr) const = 0;
 
@@ -208,9 +215,10 @@ protected:
     ///
     /// 约定：
     ///   - 每个条目都要在返回值里出现一条 TrashRecord，路径原样回填 originalPath。
-    ///   - 成功的条目必须填 trashedPath（回收站内的实际路径），
-    ///     否则撤销无法定位——macOS 与 Linux 都会在重名时改名，
-    ///     想当然地按原名拼回收站路径是错的。
+    ///   - 后端提供实际文件路径时，成功条目必须填写 trashedPath；macOS 与 Linux
+    ///     都会在重名时改名，想当然地按原名拼回收站路径是错的。
+    ///     不提供文件路径的后端须明确其自动还原边界。当前 Windows 后端只返回
+    ///     NotSupported 失败记录，不产生成功删除记录。
     ///   - 不允许在这里做永久删除。
     virtual TrashReport trashPaths(const QStringList &paths) const = 0;
 

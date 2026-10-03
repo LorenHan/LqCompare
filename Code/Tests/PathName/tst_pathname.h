@@ -40,6 +40,7 @@ private slots:
     void displayMarksLeadingAndTrailingSpaces();
     void displayLeavesInteriorSpacesAlone();
     void displayOfAllSpaceName();
+    void displayKeepsForbiddenQuotesWithoutChangingInput();
     void displayDiffersFromActualDetectsChanges();
 
     // --- 3. Unicode 规范化 --------------------------------------------------
@@ -63,6 +64,7 @@ private slots:
     void checkFileNameAgreesWithTheThinWrappers();
 
     // --- 5. 真实文件系统 ----------------------------------------------------
+    void realNameWithSpacesAndQuotesRoundTrips_data();
     void realNameWithSpacesAndQuotesRoundTrips();
     void realNameWithTrailingSpaceRoundTrips();
     void realComposedNameIsFoundByOtherForm();

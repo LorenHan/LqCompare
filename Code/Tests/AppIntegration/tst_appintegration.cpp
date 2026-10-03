@@ -5,6 +5,8 @@
 #include "foldercomparesession.h"
 #include "hexcomparesession.h"
 #include "homepage.h"
+#include "optionsrepository.h"
+#include "optionsruntime.h"
 #include "sessionarea.h"
 #include "sessiondocument.h"
 #include "tablecomparesession.h"
@@ -16,19 +18,33 @@
 #include <QAction>
 #include <QApplication>
 #include <QDir>
+#include <QDialogButtonBox>
+#include <QElapsedTimer>
 #include <QFile>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
+#include <QKeyEvent>
+#include <QLineEdit>
 #include <QMessageBox>
+#include <QPainter>
 #include <QPointer>
+#include <QProxyStyle>
 #include <QPushButton>
 #include <QSettings>
+#include <QScreen>
 #include <QShortcut>
 #include <QSignalSpy>
 #include <QStandardPaths>
+#include <QStyleFactory>
+#include <QStyleHints>
+#include <QTabBar>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
+#include <QWindow>
+
+#include <cmath>
 
 using namespace LqCompare;
 
@@ -67,6 +83,378 @@ QJsonArray recentSessions()
 {
     return QJsonDocument::fromJson(QSettings().value(QStringLiteral("sessions/recent")).toByteArray()).array();
 }
+
+// 只在需要遍历所有控件的测试内模拟完整键盘导航，离开作用域即恢复平台偏好。
+struct FullKeyboardNavigation {
+    Qt::TabFocusBehavior previous = QGuiApplication::styleHints()->tabFocusBehavior();
+    FullKeyboardNavigation() { QGuiApplication::styleHints()->setTabFocusBehavior(Qt::TabFocusAllControls); }
+    ~FullKeyboardNavigation() { QGuiApplication::styleHints()->setTabFocusBehavior(previous); }
+};
+
+enum class SearchConfirmation { Button, Return, RepeatedReturn, KeyboardYes };
+struct SearchResult { int dialogs = 0; QString text; Qt::TextFormat format = Qt::AutoText; };
+
+// 只观察既有输入/弹窗路径，不等待、不改焦点，也不延长看门狗。
+// 每次阶段变化输出一条；1ms 轮询只累计次数，避免日志本身拖慢原生事件循环。
+struct SearchDiagnostics {
+    QPointer<QLineEdit> search;
+    QPointer<QWidget> owner;
+    QElapsedTimer elapsed;
+    QString phase = QStringLiteral("created");
+    QString query;
+    QString tag;
+    int sequence = 0;
+    int timerTicks = 0;
+    int modalObservations = 0;
+    int returnSignals = 0;
+    int responseAttempts = 0;
+    int responseReturns = 0;
+    int buttonSignals = 0;
+    int finishedSignals = 0;
+    int lastButton = int(QMessageBox::NoButton);
+    int lastFinishedResult = -1;
+    mutable int logEvents = 0;
+    mutable int suppressedLogEvents = 0;
+    QPointer<QWidget> previousModal;
+    QPointer<QMessageBox> observedBox;
+
+    explicit SearchDiagnostics(QLineEdit *edit, const QString &text)
+        : search(edit), owner(edit->window()), query(text),
+          tag(QString::fromLatin1(QTest::currentDataTag() ? QTest::currentDataTag() : "no-data"))
+    {
+        static int nextSequence = 0;
+        sequence = ++nextSequence;
+        elapsed.start();
+    }
+    static QJsonObject widgetState(QWidget *widget)
+    {
+        if (!widget) return {{QStringLiteral("null"), true}};
+        const QWidget *parent = widget->parentWidget();
+        const QWindow *native = widget->window()->windowHandle();
+        return {{QStringLiteral("address"), QString::number(reinterpret_cast<quintptr>(widget), 16)},
+                {QStringLiteral("class"), QString::fromLatin1(widget->metaObject()->className())},
+                {QStringLiteral("objectName"), widget->objectName()},
+                {QStringLiteral("title"), widget->windowTitle()},
+                {QStringLiteral("visible"), widget->isVisible()},
+                {QStringLiteral("enabled"), widget->isEnabled()},
+                {QStringLiteral("activeWindow"), widget->isActiveWindow()},
+                {QStringLiteral("hasFocus"), widget->hasFocus()},
+                {QStringLiteral("windowExposed"), native && native->isExposed()},
+                {QStringLiteral("parentAddress"), parent ? QString::number(reinterpret_cast<quintptr>(parent), 16) : QString()},
+                {QStringLiteral("parentClass"), parent ? QString::fromLatin1(parent->metaObject()->className()) : QString()},
+                {QStringLiteral("parentVisible"), parent && parent->isVisible()},
+                {QStringLiteral("windowModality"), int(widget->windowModality())},
+                {QStringLiteral("geometry"), QJsonArray{widget->x(), widget->y(), widget->width(), widget->height()}}};
+    }
+    QJsonObject snapshot(const QString &event) const
+    {
+        QJsonArray boxes;
+        if (owner) {
+            for (auto *box : owner->findChildren<QMessageBox *>()) {
+                QJsonObject entry = widgetState(box);
+                entry.insert(QStringLiteral("text"), box->text());
+                entry.insert(QStringLiteral("standardButtons"), int(box->standardButtons()));
+                QJsonArray buttons;
+                for (auto *button : box->buttons()) {
+                    QJsonObject state = widgetState(button);
+                    state.insert(QStringLiteral("standardButton"), int(box->standardButton(button)));
+                    state.insert(QStringLiteral("text"), button->text());
+                    buttons.append(state);
+                }
+                entry.insert(QStringLiteral("buttons"), buttons);
+                boxes.append(entry);
+            }
+        }
+        return {{QStringLiteral("event"), event}, {QStringLiteral("phase"), phase},
+                {QStringLiteral("elapsedMs"), double(elapsed.elapsed())},
+                {QStringLiteral("timeoutMs"), 2000}, {QStringLiteral("tag"), tag},
+                {QStringLiteral("sequence"), sequence}, {QStringLiteral("query"), query},
+                {QStringLiteral("timerTicks"), timerTicks},
+                {QStringLiteral("modalObservations"), modalObservations},
+                {QStringLiteral("returnSignals"), returnSignals},
+                {QStringLiteral("responseAttempts"), responseAttempts},
+                {QStringLiteral("responseReturns"), responseReturns},
+                {QStringLiteral("buttonSignals"), buttonSignals},
+                {QStringLiteral("finishedSignals"), finishedSignals},
+                {QStringLiteral("lastButton"), lastButton},
+                {QStringLiteral("lastFinishedResult"), lastFinishedResult},
+                {QStringLiteral("logEvents"), logEvents},
+                {QStringLiteral("suppressedLogEvents"), suppressedLogEvents},
+                {QStringLiteral("activeModal"), widgetState(QApplication::activeModalWidget())},
+                {QStringLiteral("activePopup"), widgetState(QApplication::activePopupWidget())},
+                {QStringLiteral("focusWidget"), widgetState(QApplication::focusWidget())},
+                {QStringLiteral("search"), widgetState(search)},
+                {QStringLiteral("owner"), widgetState(owner)},
+                {QStringLiteral("ownedMessageBoxes"), boxes}};
+    }
+    void log(const QString &event) const
+    {
+        // 异常重复回调时也限制输出量；最终超时快照始终保留真实累计次数。
+        if (logEvents >= 64 && event != QLatin1String("watchdog-expired")) {
+            ++suppressedLogEvents;
+            return;
+        }
+        ++logEvents;
+        qInfo().noquote() << "Command search diagnostic"
+                          << QJsonDocument(snapshot(event)).toJson(QJsonDocument::Compact);
+    }
+    void enter(const char *next)
+    {
+        phase = QString::fromLatin1(next);
+        log(QStringLiteral("phase"));
+    }
+    void saveTimeout() const
+    {
+        // 抓取当前测试拥有的窗口和消息框，不抓 runner 的其它桌面内容。
+        QString directory = qEnvironmentVariable("LQCOMPARE_SEARCH_SCREENSHOT_DIR");
+        if (directory.isEmpty())
+            directory = QDir::tempPath() + QStringLiteral("/lqcompare-search-diagnostics-%1")
+                .arg(QCoreApplication::applicationPid());
+        if (!QDir().mkpath(directory)) {
+            qWarning() << "Could not create command-search diagnostic directory" << directory;
+            return;
+        }
+        QString name = QString::fromLatin1(QTest::currentTestFunction()) + QLatin1Char('-') + tag;
+        for (int i = 0; i < name.size(); ++i)
+            if (!name[i].isLetterOrNumber() && name[i] != QLatin1Char('-')) name[i] = QLatin1Char('_');
+        const QString prefix = directory + QStringLiteral("/timeout-%1-%2").arg(name).arg(sequence);
+        const QJsonObject state = snapshot(QStringLiteral("timeout"));
+        QFile file(prefix + QStringLiteral(".json"));
+        const QByteArray json = QJsonDocument(state).toJson();
+        if (!file.open(QIODevice::WriteOnly) || file.write(json) != json.size())
+            qWarning() << "Could not save command-search diagnostic state" << file.fileName();
+        file.close();
+        const auto capture = [&](QWidget *widget, const QString &suffix) {
+            if (widget && !widget->grab().save(prefix + suffix + QStringLiteral(".png")))
+                qWarning() << "Could not save command-search timeout screenshot" << prefix << suffix;
+        };
+        capture(owner, QStringLiteral("-owner"));
+        if (owner) {
+            int index = 0;
+            for (auto *box : owner->findChildren<QMessageBox *>())
+                capture(box, QStringLiteral("-dialog-%1").arg(++index));
+        }
+        qInfo() << "Command search timeout evidence" << prefix;
+    }
+};
+
+SearchResult submitSearch(QLineEdit *search, const QString &query, QMessageBox::StandardButton answer,
+                          bool escape = false, bool reenter = false,
+                          const std::function<void()> &beforeAnswer = {},
+                          SearchConfirmation confirmation = SearchConfirmation::Button,
+                          Qt::Key searchKey = Qt::Key_Return, bool mouseSubmit = false)
+{
+    SearchResult result;
+    SearchDiagnostics diagnostics(search, query);
+    QTimer responder;
+    QObject::connect(search, &QLineEdit::returnPressed, &responder, [&] {
+        ++diagnostics.returnSignals;
+        diagnostics.log(QStringLiteral("returnPressed"));
+    });
+    responder.setInterval(1);
+    QObject::connect(&responder, &QTimer::timeout, [&] {
+        ++diagnostics.timerTicks;
+        QWidget *modal = QApplication::activeModalWidget();
+        if (diagnostics.timerTicks == 1 || diagnostics.previousModal != modal) {
+            diagnostics.previousModal = modal;
+            diagnostics.log(QStringLiteral("modal-poll-change"));
+        }
+        auto *box = qobject_cast<QMessageBox *>(modal);
+        if (!box) return;
+        ++diagnostics.modalObservations;
+        if (diagnostics.observedBox != box) {
+            diagnostics.observedBox = box;
+            QObject::connect(box, &QMessageBox::buttonClicked, &responder,
+                             [&, observed = QPointer<QMessageBox>(box)](QAbstractButton *button) {
+                ++diagnostics.buttonSignals;
+                if (observed) diagnostics.lastButton = int(observed->standardButton(button));
+                diagnostics.log(QStringLiteral("buttonClicked"));
+            });
+            QObject::connect(box, &QDialog::finished, &responder, [&](int resultCode) {
+                ++diagnostics.finishedSignals;
+                diagnostics.lastFinishedResult = resultCode;
+                diagnostics.log(QStringLiteral("dialogFinished"));
+            });
+        }
+        diagnostics.enter("modal-observed");
+        // macOS 按平台规范忽略 QMessageBox 标题，仍严格校验拥有者、按钮与正文。
+        // https://doc.qt.io/archives/qt-5.15/qmessagebox.html#setWindowTitle
+        const auto buttons = answer == QMessageBox::Ok ? QMessageBox::StandardButtons(QMessageBox::Ok)
+            : QMessageBox::StandardButtons(QMessageBox::Yes | QMessageBox::No);
+        const bool expectedBody = buttons == QMessageBox::Ok
+            ? (box->text() == QStringLiteral("No command matches \"%1\".").arg(query.trimmed())
+               || box->text().startsWith(QStringLiteral("Matching commands:\n\n")))
+            : (box->text().startsWith(QStringLiteral("Command: "))
+               && box->text().endsWith(QStringLiteral("\n\nRun it now?")));
+        if (box->parentWidget() != search->window() || box->standardButtons() != buttons || !expectedBody)
+            qFatal("Unexpected command-search dialog: title=%s buttons=%x text=%s",
+                   qPrintable(box->windowTitle()), int(box->standardButtons()), qPrintable(box->text()));
+#ifndef Q_OS_MACOS
+        if (box->windowTitle() != QStringLiteral("Command Search"))
+            qFatal("Unexpected command-search title: %s", qPrintable(box->windowTitle()));
+#endif
+        ++result.dialogs; result.text = box->text(); result.format = box->textFormat();
+        diagnostics.enter("modal-validated");
+        if (reenter) {
+            // 直接向后方控件发送嵌套输入，验证模态期间也不会重复打开确认框。
+            diagnostics.enter("reentry-key");
+            QTest::keyClick(search, Qt::Key_Return);
+            diagnostics.enter("reentry-returned");
+        }
+        if (beforeAnswer) {
+            diagnostics.enter("before-answer");
+            beforeAnswer();
+            diagnostics.enter("before-answer-returned");
+        }
+        ++diagnostics.responseAttempts;
+        diagnostics.enter("answer");
+        if (confirmation == SearchConfirmation::KeyboardYes) {
+            FullKeyboardNavigation navigation;
+            auto *no = box->button(QMessageBox::No), *yes = box->button(QMessageBox::Yes);
+            box->activateWindow(); QCoreApplication::processEvents(); no->setFocus();
+            for (int i = 0; i < 8 && !yes->hasFocus(); ++i)
+                QTest::keyClick(QApplication::focusWidget() ? QApplication::focusWidget() : box, Qt::Key_Tab);
+            if (!yes->hasFocus()) qFatal("Keyboard focus did not reach Yes");
+            QTest::keyClick(yes, Qt::Key_Space);
+        } else if (confirmation != SearchConfirmation::Button) {
+            QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier, QString(),
+                            confirmation == SearchConfirmation::RepeatedReturn, 1);
+            QApplication::sendEvent(box, &enter);
+        }
+        else if (escape) QTest::keyClick(box, Qt::Key_Escape);
+        else box->button(answer)->click();
+        ++diagnostics.responseReturns;
+        diagnostics.enter("answer-returned");
+    });
+    // 仍从输入前起算原有 2 秒门槛；超时先保存定位证据，再保持原失败语义。
+    QTimer::singleShot(2000, &responder, [&] {
+        diagnostics.log(QStringLiteral("watchdog-expired"));
+        diagnostics.saveTimeout();
+        qFatal("Command search did not return");
+    });
+    responder.start();
+    diagnostics.enter("focus-clear-type");
+    search->setFocus(); search->clear(); QTest::keyClicks(search, query);
+    diagnostics.enter("query-typed");
+    if (mouseSubmit) {
+        const auto buttons = search->findChildren<QAbstractButton *>();
+        if (buttons.size() != 1 || !buttons.first()->isVisible()) qFatal("Expected visible search button");
+        diagnostics.enter("submit-mouse");
+        QTest::mouseClick(buttons.first(), Qt::LeftButton);
+    } else {
+        diagnostics.enter("submit-key");
+        QTest::keyClick(search, searchKey);
+    }
+    diagnostics.enter("submit-returned");
+    diagnostics.enter("process-events");
+    QCoreApplication::processEvents();
+    diagnostics.enter("events-returned");
+    responder.stop();
+    diagnostics.enter("complete");
+    return result;
+}
+
+double contrast(const QColor &a, const QColor &b)
+{
+    const auto luminance = [](const QColor &color) {
+        const auto linear = [](double value) {
+            return value <= 0.04045 ? value / 12.92 : std::pow((value + 0.055) / 1.055, 2.4);
+        };
+        return 0.2126 * linear(color.redF()) + 0.7152 * linear(color.greenF())
+                + 0.0722 * linear(color.blueF());
+    };
+    const double x = luminance(a), y = luminance(b);
+    return (qMax(x, y) + 0.05) / (qMin(x, y) + 0.05);
+}
+
+QColor tabBackground(QTabBar *tabs, int index)
+{
+    const QPixmap image = tabs->window()->grab();
+    const QPoint origin = tabs->mapTo(tabs->window(), tabs->tabRect(index).topLeft() + QPoint(4, 4));
+    return image.toImage().pixelColor(origin * image.devicePixelRatio());
+}
+
+// QStyleSheetStyle 将实际文字及解析后的颜色交给原生样式 drawItemText。
+// 只记录并原样转发；继续使用真实栅格引擎，支持 macOS 的原生焦点绘制。
+class TabTextPaintStyle : public QProxyStyle
+{
+public:
+    explicit TabTextPaintStyle(QStyle *nativeStyle) : QProxyStyle(nativeStyle) {}
+    QString label;
+    mutable QList<QColor> colors;
+    void drawItemText(QPainter *painter, const QRect &rect, int flags,
+                      const QPalette &palette, bool enabled, const QString &text,
+                      QPalette::ColorRole role = QPalette::NoRole) const override
+    {
+        if (text == label)
+            colors.append(role == QPalette::NoRole ? painter->pen().color()
+                          : palette.color(enabled ? QPalette::Normal : QPalette::Disabled, role));
+        QProxyStyle::drawItemText(painter, rect, flags, palette, enabled, text, role);
+    }
+};
+
+// WCAG 1.4.3 比较指定的前景/背景色，不把抗锯齿造成的混色当作前景色：
+// https://www.w3.org/WAI/WCAG22/Understanding/contrast-minimum.html
+// 同时保留真实栅格的文字证据，排除边框及选中/焦点标记。
+void verifyTabPixels(QTabBar *tabs, int index, const QColor &paletteForeground, const QColor &background)
+{
+    // 产品样式表使用 QColor::name() 的默认 HexRgb，指定色因此是不透明 RGB；
+    // macOS 原生 Text 常含 alpha，不能把输入调色板 alpha 当作 CSS 绘制契约。
+    const QColor foreground = QColor::fromRgb(paletteForeground.rgb());
+    const QImage before = tabs->grab().toImage();
+    const QFont font = tabs->font();
+    QList<QRect> rectangles;
+    for (int i = 0; i < tabs->count(); ++i) rectangles << tabs->tabRect(i);
+    QVERIFY(!tabs->testAttribute(Qt::WA_SetStyle));
+    QStyle *native = QStyleFactory::create(QApplication::style()->objectName());
+    QVERIFY2(native, "The current native style must be available; no substitute style is allowed");
+    TabTextPaintStyle probe(native);
+    probe.label = tabs->tabText(index);
+    struct RestoreStyle {
+        QTabBar *tabs;
+        ~RestoreStyle() { if (tabs) tabs->setStyle(nullptr); }
+    } restore{tabs};
+    tabs->setStyle(&probe);
+    const QImage observed = tabs->grab().toImage();
+    QCOMPARE(observed, before);
+    QCOMPARE(tabs->font(), font);
+    for (int i = 0; i < tabs->count(); ++i) QCOMPARE(tabs->tabRect(i), rectangles[i]);
+    tabs->setStyle(nullptr);
+    restore.tabs = nullptr;
+    QCOMPARE(tabs->grab().toImage(), before);
+    QVERIFY(!tabs->testAttribute(Qt::WA_SetStyle));
+    QVERIFY2(!probe.colors.isEmpty(), qPrintable("No full text paint for " + tabs->tabText(index)));
+    for (const QColor &painted : probe.colors) {
+        QCOMPARE(painted.rgba(), foreground.rgba());
+        QVERIFY2(contrast(painted, background) >= 4.5,
+                 qPrintable(QStringLiteral("%1: foreground/background contrast %2:1 is below 4.5:1")
+                            .arg(tabs->tabText(index)).arg(contrast(painted, background))));
+    }
+    // 抓取完整窗口，以用户实际看到的背景测量透明标签，
+    // 避免把空的透明位图误当作标签背景。
+    const QPixmap pixmap = tabs->window()->grab();
+    const QImage image = pixmap.toImage();
+    const qreal scale = pixmap.devicePixelRatio();
+    const QRect tab = tabs->tabRect(index).translated(tabs->mapTo(tabs->window(), QPoint()));
+    QCOMPARE(image.pixelColor((tab.left() + 4) * scale, (tab.top() + 4) * scale).rgba(), background.rgba());
+    const QRect text = tab.adjusted(10, 5, -10, -5);
+    int glyphPixels = 0;
+    double bestContrast = 1;
+    for (int y = text.top() * scale; y <= text.bottom() * scale; ++y) {
+        for (int x = text.left() * scale; x <= text.right() * scale; ++x) {
+            const QColor pixel = image.pixelColor(x, y);
+            const double ratio = contrast(pixel, background);
+            bestContrast = qMax(bestContrast, ratio);
+            if (qAbs(pixel.red() - foreground.red()) < 32
+                && qAbs(pixel.green() - foreground.green()) < 32
+                && qAbs(pixel.blue() - foreground.blue()) < 32)
+                ++glyphPixels;
+        }
+    }
+    QVERIFY2(glyphPixels >= 3,
+             qPrintable(QStringLiteral("%1: only %2 foreground glyph pixels, best raster contrast %3:1")
+                        .arg(tabs->tabText(index)).arg(glyphPixels).arg(bestContrast)));
+}
 }
 
 class AppIntegrationTests : public QObject {
@@ -75,6 +463,7 @@ private:
     QTemporaryDir m_settings;
     QString m_oldOrganization;
     QString m_oldApplication;
+    Qt::TabFocusBehavior m_tabFocusBehavior;
 
 private slots:
     void initTestCase()
@@ -92,6 +481,7 @@ private slots:
     }
     void init()
     {
+        m_tabFocusBehavior = QGuiApplication::styleHints()->tabFocusBehavior();
         CommandRegistry::instance().clear();
         QSettings settings;
         settings.clear();
@@ -102,6 +492,7 @@ private slots:
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
         QCoreApplication::processEvents();
         QVERIFY(!QApplication::activeModalWidget());
+        QCOMPARE(QGuiApplication::styleHints()->tabFocusBehavior(), m_tabFocusBehavior);
         CommandRegistry::instance().clear();
     }
     void cleanupTestCase()
@@ -123,11 +514,15 @@ private slots:
             QVERIFY2(button, qPrintable(id));
             QVERIFY2(button->isEnabled(), qPrintable(id));
         }
-        // Unsupported catalog entries remain visible as disabled choices.
+        // 注册表和版本资源有真实工厂，但目录契约限定为 Windows 专属。
         for (const QString &id : {QStringLiteral("registry"), QStringLiteral("version")}) {
             auto *button = area->homePage()->findChild<QPushButton *>(QStringLiteral("newSession-") + id);
             QVERIFY2(button, qPrintable(id));
+#ifdef Q_OS_WIN
+            QVERIFY2(button->isEnabled(), qPrintable(id));
+#else
             QVERIFY2(!button->isEnabled(), qPrintable(id));
+#endif
         }
         const QStringList ids = {"file.open", "file.save", "edit.undo", "edit.redo", "nav.prevdiff", "nav.nextdiff"};
         for (const auto &id : ids) {
@@ -139,6 +534,668 @@ private slots:
         QVERIFY(!qatAction(window, "file.save")->isEnabled());
         QVERIFY(!qatAction(window, "edit.undo")->isEnabled());
         QVERIFY(!qatAction(window, "nav.nextdiff")->isEnabled());
+    }
+
+    void ribbonTabsFollowPaletteWithoutChangingNavigation()
+    {
+        struct RestoreApplication {
+            QPalette palette = QApplication::palette();
+            QFont font = QApplication::font();
+            ~RestoreApplication() { QApplication::setPalette(palette); QApplication::setFont(font); }
+        } restore;
+        QTemporaryDir directory;
+        Settings::OptionsRepository options({directory.path(), false});
+        Options::OptionsRuntime runtime(&options);
+        MainWindow window;
+        window.resize(1440, 900);
+        window.show();
+        window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto *ribbon = window.ribbonBar();
+        auto *tabs = ribbon->findChild<QTabBar *>(QStringLiteral("lqRibbonTabBar"));
+        QVERIFY(tabs);
+        QCOMPARE(ribbon->currentPage()->objectName(), QStringLiteral("ribbonHomePage"));
+        const Qt::WindowFlags flags = window.windowFlags();
+        const bool frameTheme = ribbon->isFrameThemeEnabled();
+        const QRect contentGeometry = sessions(window)->geometry();
+        const QString libraryStyle = ribbon->styleSheet();
+        const Qt::FocusPolicy focusPolicy = tabs->focusPolicy();
+        const QString accessibleName = tabs->accessibleName();
+        QList<QWidget *> pages;
+        QList<bool> enabled;
+        QStringList labels, tooltips;
+        for (int i = 0; i < tabs->count(); ++i) {
+            pages << ribbon->widget(i);
+            enabled << tabs->isTabEnabled(i);
+            labels << tabs->tabText(i);
+            tooltips << tabs->tabToolTip(i);
+        }
+        const QString evidence = qEnvironmentVariable("LQCOMPARE_RIBBON_SCREENSHOT_DIR");
+        if (!evidence.isEmpty()) QVERIFY(QDir().mkpath(evidence));
+        for (int cycle = 0; cycle < 3; ++cycle) {
+            for (const QString &theme : {QStringLiteral("system"), QStringLiteral("light"),
+                                         QStringLiteral("dark"), QStringLiteral("system")}) {
+                QVERIFY(options.apply({{QStringLiteral("display.theme"), theme}}).ok);
+                QCoreApplication::processEvents();
+                const QPalette palette = QApplication::palette();
+                tabs->setCurrentIndex(0);
+                tabs->clearFocus();
+                QTest::mouseMove(&window, QPoint(window.width() - 10, window.height() - 10));
+                QTRY_VERIFY(!tabs->underMouse());
+                QTRY_COMPARE(tabBackground(tabs, 1).rgba(), palette.color(QPalette::Window).rgba());
+                const QRect normalFirst = tabs->tabRect(0), normalSecond = tabs->tabRect(1);
+                const int tabHeight = tabs->height();
+                verifyTabPixels(tabs, 0, palette.color(QPalette::Text), palette.color(QPalette::Base));
+                verifyTabPixels(tabs, 1, palette.color(QPalette::WindowText), palette.color(QPalette::Window));
+                if (cycle == 0 && !evidence.isEmpty()) {
+                    QVERIFY(window.grab().save(evidence + "/" + theme + "-home.png"));
+                    QVERIFY(tabs->grab().save(evidence + "/" + theme + "-tabs.png"));
+                }
+                QTest::mouseMove(tabs, tabs->tabRect(1).center());
+                QTRY_VERIFY(tabs->underMouse());
+                QTRY_VERIFY(tabBackground(tabs, 1).rgba() != palette.color(QPalette::Window).rgba());
+                const QColor hover = tabBackground(tabs, 1);
+                QVERIFY(hover.rgba() != palette.color(QPalette::Window).rgba());
+                verifyTabPixels(tabs, 1, palette.color(QPalette::WindowText), hover);
+                QCOMPARE(tabs->tabRect(0), normalFirst);
+                QCOMPARE(tabs->tabRect(1), normalSecond);
+                QCOMPARE(tabs->height(), tabHeight);
+                if (cycle == 0 && !evidence.isEmpty())
+                    QVERIFY(tabs->grab().save(evidence + "/" + theme + "-hover.png"));
+
+                tabs->setFocus(Qt::TabFocusReason);
+                QTRY_VERIFY(tabs->hasFocus());
+                QTest::keyClick(tabs, Qt::Key_Right);
+                QCOMPARE(tabs->currentIndex(), 1);
+                QCOMPARE(ribbon->currentPage()->objectName(), QStringLiteral("ribbonComparePage"));
+                const QRect focusedFirst = tabs->tabRect(0), focusedSecond = tabs->tabRect(1);
+                QCOMPARE(focusedFirst, normalFirst);
+                QCOMPARE(focusedSecond, normalSecond);
+                QCOMPARE(tabs->height(), tabHeight);
+                verifyTabPixels(tabs, 1, palette.color(QPalette::Text), palette.color(QPalette::Base));
+                if (cycle == 0 && !evidence.isEmpty())
+                    QVERIFY(tabs->grab().save(evidence + "/" + theme + "-focus.png"));
+                tabs->clearFocus();
+                QCOMPARE(tabs->tabRect(0), focusedFirst);
+                QCOMPARE(tabs->tabRect(1), focusedSecond);
+                QCOMPARE(tabs->height(), tabHeight);
+                if (cycle == 0 && !evidence.isEmpty())
+                    qInfo() << "Ribbon tab geometry" << theme << "height" << tabHeight
+                            << "Home selected / Compare hovered" << normalFirst << normalSecond
+                            << "Compare selected, with and without focus" << focusedFirst << focusedSecond;
+                tabs->setFocus(Qt::TabFocusReason);
+                QTest::keyClick(tabs, Qt::Key_Left);
+                QCOMPARE(tabs->currentIndex(), 0);
+                for (int i = 0; i < tabs->count(); ++i) tabs->setCurrentIndex(i);
+                tabs->setCurrentIndex(1);
+                CommandRegistry::instance().updateEnabled();
+                QVERIFY(runtime.applyCurrent());
+                QCoreApplication::processEvents();
+                QCOMPARE(tabs->currentIndex(), 1);
+                QCOMPARE(sessions(window)->geometry(), contentGeometry);
+                QCOMPARE(window.windowFlags(), flags);
+                QCOMPARE(ribbon->isFrameThemeEnabled(), frameTheme);
+                QCOMPARE(ribbon->styleSheet(), libraryStyle);
+                QCOMPARE(tabs->focusPolicy(), focusPolicy);
+                QCOMPARE(tabs->accessibleName(), accessibleName);
+                QCOMPARE(tabs->count(), pages.size());
+                for (int i = 0; i < tabs->count(); ++i) {
+                    QCOMPARE(ribbon->widget(i), pages[i]);
+                    QCOMPARE(tabs->isTabEnabled(i), enabled[i]);
+                    QCOMPARE(tabs->tabText(i), labels[i]);
+                    QCOMPARE(tabs->tabToolTip(i), tooltips[i]);
+                }
+            }
+        }
+        ribbon->setRibbonStyle(RibbonBar::Microsoft365Dark);
+        ribbon->setRibbonStyle(RibbonBar::Office2016Blue);
+        QCoreApplication::processEvents();
+        QCOMPARE(tabs->currentIndex(), 1);
+        QCOMPARE(sessions(window)->geometry(), contentGeometry);
+        tabs->clearFocus();
+        const QPalette palette = QApplication::palette();
+        verifyTabPixels(tabs, 0, palette.color(QPalette::WindowText), palette.color(QPalette::Window));
+        verifyTabPixels(tabs, 1, palette.color(QPalette::Text), palette.color(QPalette::Base));
+        QVERIFY(qatAction(window, "file.open")->isEnabled());
+        QVERIFY(!qatAction(window, "file.save")->isEnabled());
+
+        const QString left = directory.filePath("left.txt"), right = directory.filePath("right.txt");
+        writeFile(left, "a\nleft\nend\n"); writeFile(right, "a\nright\nend\n");
+        QVERIFY(window.openPaths({left, right}));
+        QCoreApplication::processEvents();
+        auto *session = qobject_cast<TextCompareSession *>(sessions(window)->currentSession());
+        QVERIFY(session);
+        auto *leftPane = session->widget()->findChild<TextPane *>(QStringLiteral("leftTextPane"));
+        auto *rightPane = session->widget()->findChild<TextPane *>(QStringLiteral("rightTextPane"));
+        QVERIFY(leftPane && rightPane);
+        const QRect leftGeometry = leftPane->geometry(), rightGeometry = rightPane->geometry();
+        const QString leftText = leftPane->toPlainText(), rightText = rightPane->toPlainText();
+        tabs->setCurrentIndex(1);
+        for (const QString &theme : {QStringLiteral("dark"), QStringLiteral("light"), QStringLiteral("system")}) {
+            QVERIFY(options.apply({{QStringLiteral("display.theme"), theme}}).ok);
+            QCoreApplication::processEvents();
+            QCOMPARE(sessions(window)->currentSession(), session);
+            QCOMPARE(tabs->currentIndex(), 1);
+            QCOMPARE(leftPane->geometry(), leftGeometry);
+            QCOMPARE(rightPane->geometry(), rightGeometry);
+            QCOMPARE(leftPane->toPlainText(), leftText);
+            QCOMPARE(rightPane->toPlainText(), rightText);
+            if (!evidence.isEmpty())
+                QVERIFY(window.grab().save(evidence + "/" + theme + "-comparison.png"));
+        }
+    }
+
+    void ribbonTabsSerializePaletteRgb_data()
+    {
+        QTest::addColumn<int>("alpha");
+        for (int alpha : {0, 128, 216, 255})
+            QTest::newRow(qPrintable(QString::number(alpha))) << alpha;
+    }
+
+    void ribbonTabsSerializePaletteRgb()
+    {
+        QFETCH(int, alpha);
+        struct RestorePalette {
+            QPalette palette = QApplication::palette();
+            ~RestorePalette() { QApplication::setPalette(palette); }
+        } restore;
+        QPalette palette = restore.palette;
+        palette.setColor(QPalette::Window, QColor(240, 240, 240));
+        palette.setColor(QPalette::Base, Qt::white);
+        palette.setColor(QPalette::WindowText, QColor(0, 0, 0, alpha));
+        palette.setColor(QPalette::Text, QColor(0, 0, 0, alpha));
+        QApplication::setPalette(palette);
+        MainWindow window;
+        window.resize(1440, 900); window.show(); window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto *tabs = window.ribbonBar()->findChild<QTabBar *>(QStringLiteral("lqRibbonTabBar"));
+        QVERIFY(tabs);
+        QTest::mouseMove(&window, QPoint(1400, 800));
+        QTRY_VERIFY(!tabs->underMouse());
+        tabs->clearFocus();
+        verifyTabPixels(tabs, 0, palette.color(QPalette::Text), palette.color(QPalette::Base));
+        verifyTabPixels(tabs, 1, palette.color(QPalette::WindowText), palette.color(QPalette::Window));
+        QCOMPARE(QApplication::palette().color(QPalette::Text).alpha(), alpha);
+    }
+
+    void ribbonSelectionKeepsCompleteLabels()
+    {
+        MainWindow window;
+        window.resize(1440, 900); window.show(); window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto *tabs = window.ribbonBar()->findChild<QTabBar *>(QStringLiteral("lqRibbonTabBar"));
+        QVERIFY(tabs);
+        // macOS 默认会省略超宽文本；在所有平台主动覆盖这条真实布局路径。
+        tabs->setElideMode(Qt::ElideRight);
+        tabs->setTabText(1, QStringLiteral("Comparison commands"));
+        QTest::mouseMove(&window, QPoint(1400, 800));
+        QTRY_VERIFY(!tabs->underMouse());
+        tabs->clearFocus();
+        const QPalette palette = QApplication::palette();
+        for (int i = 0; i < tabs->count(); ++i) {
+            const QRect before = tabs->tabRect(i);
+            tabs->setCurrentIndex(i);
+            QCOMPARE(tabs->tabRect(i), before);
+            verifyTabPixels(tabs, i, palette.color(QPalette::Text), palette.color(QPalette::Base));
+            tabs->setFocus(Qt::TabFocusReason);
+            QTRY_VERIFY(tabs->hasFocus());
+            QCOMPARE(tabs->tabRect(i), before);
+            verifyTabPixels(tabs, i, palette.color(QPalette::Text), palette.color(QPalette::Base));
+            tabs->clearFocus();
+        }
+    }
+
+    void ribbonHoverRemainsReadableWithUnpairedPaletteRoles()
+    {
+        struct RestorePalette {
+            QPalette palette = QApplication::palette();
+            ~RestorePalette() { QApplication::setPalette(palette); }
+        } restore;
+        MainWindow window;
+        window.resize(1440, 900);
+        window.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto *tabs = window.ribbonBar()->findChild<QTabBar *>(QStringLiteral("lqRibbonTabBar"));
+        QVERIFY(tabs);
+        // 首例检出不安全的 WindowText/Midlight 配对；第二例让完整强调色混色失效：
+        // 原本可读的中灰背景必须减弱混色，或改用调色板中的安全颜色。
+        for (const QColor &background : {QColor(Qt::black), QColor(118, 118, 118)}) {
+            QPalette palette = restore.palette;
+            palette.setColor(QPalette::Window, background);
+            palette.setColor(QPalette::WindowText, Qt::white);
+            palette.setColor(QPalette::Base, Qt::black);
+            palette.setColor(QPalette::Text, Qt::white);
+            palette.setColor(QPalette::Midlight, QColor(250, 250, 250));
+            palette.setColor(QPalette::Highlight, Qt::white);
+            QApplication::setPalette(palette);
+            const QPalette applied = QApplication::palette();
+            QTest::mouseMove(&window, QPoint(1400, 800));
+            tabs->setCurrentIndex(0);
+            // QWidget 版本的 mouseMove 经由窗口服务器异步返回；单次 processEvents
+            // 不保证已收到移动。进入/离开都等待真实状态，不依赖固定睡眠时间。
+            // https://wiki.qt.io/Writing_good_tests#Widgets_and_Windows
+            QTRY_VERIFY(!tabs->underMouse());
+            QTRY_COMPARE(tabBackground(tabs, 1).rgba(), background.rgba());
+            const QRect normal = tabs->tabRect(1);
+            const int height = tabs->height();
+            verifyTabPixels(tabs, 1, palette.color(QPalette::WindowText), background);
+            QTest::mouseMove(tabs, tabs->tabRect(1).center());
+            QTRY_VERIFY(tabs->underMouse());
+            QTRY_VERIFY(tabBackground(tabs, 1).rgba() != background.rgba());
+            const QColor hover = tabBackground(tabs, 1);
+            QVERIFY(hover.rgba() != background.rgba());
+            verifyTabPixels(tabs, 1, palette.color(QPalette::WindowText), hover);
+            QCOMPARE(tabs->tabRect(1), normal);
+            QCOMPARE(tabs->height(), height);
+            QCOMPARE(QApplication::palette(), applied);
+            const QString evidence = qEnvironmentVariable("LQCOMPARE_RIBBON_SCREENSHOT_DIR");
+            if (!evidence.isEmpty()) {
+                QVERIFY(QDir().mkpath(evidence));
+                QVERIFY(tabs->grab().save(evidence + "/adversarial-" + background.name().mid(1) + ".png"));
+            }
+        }
+    }
+
+    void commandSearchStaysAboveRibbonAcrossLayouts()
+    {
+        struct RestoreApplication {
+            QPalette palette = QApplication::palette();
+            QFont font = QApplication::font();
+            ~RestoreApplication() { QApplication::setPalette(palette); QApplication::setFont(font); }
+        } restore;
+        QTemporaryDir directory;
+        Settings::OptionsRepository options({directory.path(), false});
+        Options::OptionsRuntime runtime(&options);
+        // 宽画布验证布局，不要求 CI 的物理屏幕容纳 1920 像素窗口。
+        // 原生鼠标/键盘验证由独立的屏幕内窗口完成，裁切部分不注入输入。
+        QWidget host;
+        host.resize(480, 600);
+        MainWindow window(&host);
+        // QMainWindow 构造时强制顶层标志；仅逻辑画布显式嵌入宿主。
+        window.setParent(&host, Qt::Widget);
+        QVERIFY(!window.isWindow());
+        window.show(); host.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&host));
+        auto *search = window.findChild<QLineEdit *>(QStringLiteral("commandSearch"));
+        auto *tabs = window.ribbonBar()->findChild<QTabBar *>(QStringLiteral("lqRibbonTabBar"));
+        QVERIFY(search && tabs);
+        QCOMPARE(window.menuWidget(), search->parentWidget());
+        QVERIFY(!search->placeholderText().isEmpty());
+        QVERIFY(!search->accessibleName().isEmpty());
+        QVERIFY(!search->accessibleDescription().isEmpty());
+        auto *submit = search->findChild<QAction *>(QStringLiteral("commandSearchSubmit"));
+        QVERIFY(submit); QVERIFY(!submit->icon().isNull());
+        QVERIFY(!submit->text().isEmpty()); QVERIFY(!submit->toolTip().isEmpty());
+        const QString searchLabel = search->placeholderText();
+        search->setPlaceholderText(QStringLiteral("stale")); submit->setText(QStringLiteral("stale"));
+        QVERIFY(QMetaObject::invokeMethod(&window, "switchLanguage", Qt::DirectConnection));
+        QCOMPARE(search->placeholderText(), searchLabel); QCOMPARE(submit->text(), searchLabel);
+        const auto flags = window.windowFlags();
+        const bool frameTheme = window.ribbonBar()->isFrameThemeEnabled();
+        const QString libraryStyle = window.ribbonBar()->styleSheet();
+        const QString evidence = qEnvironmentVariable("LQCOMPARE_SEARCH_SCREENSHOT_DIR");
+        if (!evidence.isEmpty()) QVERIFY(QDir().mkpath(evidence));
+        for (const QString &theme : {QStringLiteral("light"), QStringLiteral("dark")}) {
+            QVERIFY(options.apply({{QStringLiteral("display.theme"), theme}}).ok);
+            for (int points : {8, 16}) {
+                QFont font = restore.font; font.setPointSize(points);
+                QApplication::setFont(font);
+                for (int width : {800, 1024, 1440, 1920}) {
+                    window.resize(width, 900);
+                    for (bool collapsed : {false, true, false}) {
+                        window.ribbonBar()->setMinimized(collapsed);
+                        QCoreApplication::processEvents();
+                        QCOMPARE(window.width(), width);
+                        QVERIFY(search->isVisible());
+                        QVERIFY(!window.ribbonBar()->searchBar()->isVisible());
+                        const QRect searchRect(search->mapTo(&window, QPoint()), search->size());
+                        const QRect tabsRect(tabs->mapTo(&window, QPoint()), tabs->size());
+                        QVERIFY2(searchRect.bottom() < tabsRect.top(), "搜索框必须完全位于标签上方");
+                        QVERIFY(window.rect().contains(searchRect));
+                        QVERIFY(search->width() <= search->fontMetrics().horizontalAdvance(QLatin1Char('M')) * 36);
+                        QVERIFY(qAbs(searchRect.center().x() - window.rect().center().x()) <= 1);
+                        QVERIFY(search->height() >= search->fontMetrics().height() + 4);
+                        QCOMPARE(search->font().pointSize(), points);
+                        const QPalette palette = QApplication::palette();
+                        QVERIFY(contrast(search->palette().color(QPalette::Text),
+                                         search->palette().color(QPalette::Base)) >= 4.5);
+                        QCOMPARE(search->palette().color(QPalette::Text), palette.color(QPalette::Text));
+                        QCOMPARE(search->palette().color(QPalette::Base), palette.color(QPalette::Base));
+                        QCOMPARE(window.windowFlags(), flags);
+                        QCOMPARE(window.ribbonBar()->isFrameThemeEnabled(), frameTheme);
+                        QCOMPARE(window.ribbonBar()->styleSheet(), libraryStyle);
+                    }
+                    QVERIFY(window.width() > host.width());
+                    QVERIFY(window.visibleRegion().boundingRect().width() < window.width());
+                    // 这里只检查逻辑命中区域，不能把屏幕外坐标的直投事件当作用户操作。
+                    for (int i = 0; i < tabs->count(); ++i) {
+                        const QPoint center = tabs->mapTo(&window, tabs->tabRect(i).center());
+                        if (window.rect().contains(center)) QVERIFY(window.childAt(center) != search);
+                    }
+                    qInfo() << "Search logical canvas layout" << theme << "font" << points << "width" << width
+                            << "search" << QRect(search->mapTo(&window, QPoint()), search->size())
+                            << "tabs" << QRect(tabs->mapTo(&window, QPoint()), tabs->size());
+                    if (!evidence.isEmpty()) {
+                        QVERIFY(window.grab().save(QStringLiteral("%1/canvas-%2-%3pt-%4.png")
+                                                  .arg(evidence, theme).arg(points).arg(width)));
+                    }
+                }
+            }
+        }
+    }
+
+    void commandSearchAcceptsNativeInputWithinScreen()
+    {
+        FullKeyboardNavigation navigation;
+        struct RestoreApplication {
+            QPalette palette = QApplication::palette();
+            QFont font = QApplication::font();
+            ~RestoreApplication() { QApplication::setPalette(palette); QApplication::setFont(font); }
+        } restore;
+        QTemporaryDir directory;
+        Settings::OptionsRepository options({directory.path(), false});
+        Options::OptionsRuntime runtime(&options);
+        MainWindow window;
+        const QRect available = QGuiApplication::primaryScreen()->availableGeometry();
+        window.resize(qMin(800, available.width() - 64), qMin(600, available.height() - 96));
+        window.move(available.topLeft() + QPoint(24, 32));
+        window.show(); window.activateWindow();
+        QVERIFY(QTest::qWaitForWindowExposed(&window));
+        auto *search = window.findChild<QLineEdit *>(QStringLiteral("commandSearch"));
+        auto *tabs = window.ribbonBar()->findChild<QTabBar *>(QStringLiteral("lqRibbonTabBar"));
+        QVERIFY(search && tabs);
+        const auto flags = window.windowFlags();
+        const bool frameTheme = window.ribbonBar()->isFrameThemeEnabled();
+        const QString libraryStyle = window.ribbonBar()->styleSheet();
+        for (const QString &theme : {QStringLiteral("light"), QStringLiteral("dark")}) {
+            QVERIFY(options.apply({{QStringLiteral("display.theme"), theme}}).ok);
+            for (int points : {8, 16}) {
+                QFont font = restore.font; font.setPointSize(points); QApplication::setFont(font);
+                for (int requested : {800, 1024}) {
+                    const int width = qMin(requested, available.width() - 64);
+                    window.resize(width, qMin(600, available.height() - 96));
+                    for (bool collapsed : {false, true, false}) {
+                        window.ribbonBar()->setMinimized(collapsed);
+                        QCoreApplication::processEvents();
+                        QCOMPARE(window.width(), width);
+                        QCOMPARE(window.windowFlags(), flags);
+                        QCOMPARE(window.ribbonBar()->isFrameThemeEnabled(), frameTheme);
+                        QCOMPARE(window.ribbonBar()->styleSheet(), libraryStyle);
+                        QVERIFY(available.contains(window.frameGeometry()));
+                        QVERIFY(QRegion(search->rect()).subtracted(search->visibleRegion()).isEmpty());
+                        const QRect searchRect(search->mapToGlobal(QPoint()), search->size());
+                        QVERIFY(available.contains(searchRect));
+                        int visibleTabs = 0;
+                        for (int i = 0; i < tabs->count(); ++i) {
+                            const QRect rect = tabs->tabRect(i);
+                            if (!QRegion(rect).subtracted(tabs->visibleRegion()).isEmpty()) continue;
+                            const QRect global(tabs->mapToGlobal(rect.topLeft()), rect.size());
+                            QVERIFY(available.contains(global));
+                            const QRect inWindow(tabs->mapTo(&window, rect.topLeft()), rect.size());
+                            QVERIFY(window.rect().contains(inWindow));
+                            for (QWidget *ancestor = tabs->parentWidget(); ancestor; ancestor = ancestor->parentWidget())
+                                QVERIFY(ancestor->rect().contains(QRect(tabs->mapTo(ancestor, rect.topLeft()), rect.size())));
+                            QVERIFY(window.childAt(inWindow.center()) != search);
+                            QTest::mouseClick(tabs, Qt::LeftButton, Qt::NoModifier, rect.center());
+                            QCOMPARE(tabs->currentIndex(), i);
+                            ++visibleTabs;
+                        }
+                        QVERIFY(visibleTabs >= 2);
+                        tabs->setCurrentIndex(0);
+                        search->setFocus(Qt::TabFocusReason);
+                        QTRY_VERIFY(search->hasFocus());
+                        QTest::keyClick(search, Qt::Key_Tab);
+                        QTRY_VERIFY(tabs->hasFocus());
+                        QTest::keyClick(tabs, Qt::Key_Backtab);
+                        QTRY_VERIFY(search->hasFocus());
+                        search->setText(QStringLiteral("draft command"));
+                        QTest::keyClick(search, Qt::Key_Escape);
+                        QVERIFY(search->text().isEmpty()); QVERIFY(!search->hasFocus());
+                        QVERIFY(!QApplication::activeModalWidget());
+                    }
+                    qInfo() << "Search screen-bounded native input" << theme << "font" << points
+                            << "width" << width << "screen" << available;
+                    const QString evidence = qEnvironmentVariable("LQCOMPARE_SEARCH_SCREENSHOT_DIR");
+                    if (!evidence.isEmpty()) {
+                        QVERIFY(QDir().mkpath(evidence));
+                        QVERIFY(window.grab().save(QStringLiteral("%1/native-%2-%3pt-%4.png")
+                                                  .arg(evidence, theme).arg(points).arg(width)));
+                    }
+                }
+            }
+        }
+    }
+
+    void commandSearchUsesRegistryConfirmation_data()
+    {
+        QTest::addColumn<QString>("query");
+        QTest::addColumn<int>("answer");
+        QTest::addColumn<bool>("escape");
+        QTest::addColumn<int>("dialogs");
+        QTest::addColumn<int>("calls");
+        QTest::newRow("empty") << QString() << int(QMessageBox::Ok) << false << 0 << 0;
+        QTest::newRow("whitespace") << QStringLiteral("   ") << int(QMessageBox::Ok) << false << 0 << 0;
+        QTest::newRow("missing") << QStringLiteral("no-command-47291") << int(QMessageBox::Ok) << false << 1 << 0;
+        QTest::newRow("literal-markup") << QStringLiteral("<b>&command-not-present</b>") << int(QMessageBox::Ok) << false << 1 << 0;
+        QTest::newRow("id-confirm") << QStringLiteral("test.search-one") << int(QMessageBox::Yes) << false << 1 << 1;
+        QTest::newRow("name-confirm") << QStringLiteral("Unique Search Probe") << int(QMessageBox::Yes) << false << 1 << 1;
+        QTest::newRow("case-trim-confirm") << QStringLiteral("  TEST.SEARCH-ONE  ") << int(QMessageBox::Yes) << false << 1 << 1;
+        QTest::newRow("cancel") << QStringLiteral("test.search-one") << int(QMessageBox::No) << false << 1 << 0;
+        QTest::newRow("escape-dialog") << QStringLiteral("test.search-one") << int(QMessageBox::No) << true << 1 << 0;
+        QTest::newRow("return-default-no") << QStringLiteral("test.search-one") << int(QMessageBox::No) << false << 1 << 0;
+        QTest::newRow("repeat-return-default-no") << QStringLiteral("test.search-one") << int(QMessageBox::No) << false << 1 << 0;
+        QTest::newRow("keyboard-yes") << QStringLiteral("test.search-one") << int(QMessageBox::Yes) << false << 1 << 1;
+        QTest::newRow("keypad-enter") << QStringLiteral("test.search-one") << int(QMessageBox::Yes) << false << 1 << 1;
+        QTest::newRow("mouse-confirm") << QStringLiteral("test.search-one") << int(QMessageBox::Yes) << false << 1 << 1;
+        QTest::newRow("mouse-cancel") << QStringLiteral("test.search-one") << int(QMessageBox::No) << false << 1 << 0;
+        QTest::newRow("mouse-disabled") << QStringLiteral("test.search-disabled") << int(QMessageBox::Yes) << false << 1 << 0;
+        QTest::newRow("multiple") << QStringLiteral("test.search-many") << int(QMessageBox::Ok) << false << 1 << 0;
+        QTest::newRow("disabled") << QStringLiteral("test.search-disabled") << int(QMessageBox::Yes) << false << 1 << 0;
+        QTest::newRow("unimplemented") << QStringLiteral("test.search-stub") << int(QMessageBox::Ok) << false << 1 << 0;
+    }
+
+    void commandSearchUsesRegistryConfirmation()
+    {
+        QFETCH(QString, query); QFETCH(int, answer); QFETCH(bool, escape);
+        QFETCH(int, dialogs); QFETCH(int, calls);
+        MainWindow window; window.resize(1024, 800); window.show(); window.activateWindow();
+        auto *search = window.findChild<QLineEdit *>(QStringLiteral("commandSearch"));
+        QVERIFY(search);
+        int executed = 0;
+        for (const QString &suffix : {QStringLiteral("one"), QStringLiteral("many-first"),
+                                      QStringLiteral("many-second"), QStringLiteral("disabled"), QStringLiteral("stub")}) {
+            Command command;
+            command.id = QStringLiteral("test.search-") + suffix;
+            command.text = suffix == QLatin1String("one") ? QStringLiteral("Unique Search Probe") : suffix;
+            command.actionId = QStringLiteral("UI-004"); command.module = QStringLiteral("界面");
+            command.description = QStringLiteral("仅用于测试的无副作用命令");
+            if (suffix != QLatin1String("stub")) command.handler = [&] { ++executed; };
+            command.enabled = suffix != QLatin1String("disabled");
+            QVERIFY(CommandRegistry::instance().add(command));
+        }
+        const QByteArray tag = QTest::currentDataTag();
+        const SearchConfirmation confirmation = tag == "return-default-no" ? SearchConfirmation::Return
+            : tag == "repeat-return-default-no" ? SearchConfirmation::RepeatedReturn
+            : tag == "keyboard-yes" ? SearchConfirmation::KeyboardYes : SearchConfirmation::Button;
+        const SearchResult result = submitSearch(search, query, QMessageBox::StandardButton(answer), escape,
+                                                true, [&] { QCOMPARE(executed, 0); }, confirmation,
+                                                tag == "keypad-enter" ? Qt::Key_Enter : Qt::Key_Return, tag.startsWith("mouse-"));
+        QCOMPARE(result.dialogs, dialogs); QCOMPARE(executed, calls);
+        if (dialogs) QCOMPARE(result.format, Qt::PlainText);
+        if (query.startsWith(QLatin1Char('<'))) QVERIFY(result.text.contains(query));
+        if (query == QLatin1String("no-command-47291")) QVERIFY(result.text.contains(QStringLiteral("No command matches")));
+        if (query == QLatin1String("test.search-many")) {
+            QVERIFY(result.text.contains(QStringLiteral("many-first")));
+            QVERIFY(result.text.contains(QStringLiteral("many-second")));
+        }
+        QVERIFY(!QApplication::activeModalWidget());
+        // 模拟长按产生的自动重复事件，不能再次确认或执行。
+        QKeyEvent repeat(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier, QString(), true, 1);
+        QApplication::sendEvent(search, &repeat);
+        QCOMPARE(executed, calls); QVERIFY(!QApplication::activeModalWidget());
+    }
+
+    void commandSearchCancelsStaleQueuedInput()
+    {
+        QPointer<MainWindow> window = new MainWindow;
+        window->show(); window->activateWindow();
+        auto *search = window->findChild<QLineEdit *>(QStringLiteral("commandSearch"));
+        QVERIFY(search);
+        auto *submit = search->findChild<QAction *>(QStringLiteral("commandSearchSubmit"));
+        QVERIFY(submit);
+        QStringList calls;
+        for (const QString &suffix : {QStringLiteral("first"), QStringLiteral("second")}) {
+            Command command; command.id = QStringLiteral("test.queued-") + suffix; command.text = suffix;
+            command.handler = [&, suffix] { calls << suffix; };
+            QVERIFY(CommandRegistry::instance().add(command));
+        }
+        int prompts = 0;
+        QString lastPrompt;
+        QTimer responder; responder.setInterval(1);
+        connect(&responder, &QTimer::timeout, [&] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            if (!box) return;
+            ++prompts; lastPrompt = box->text();
+            if (!box->button(QMessageBox::Yes)) qFatal("Expected queued command confirmation");
+            box->button(QMessageBox::Yes)->click();
+        });
+        QTimer::singleShot(2000, &responder, [] { qFatal("Queued search did not return"); });
+        responder.start();
+        const auto enter = [&] {
+            QKeyEvent press(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
+            QApplication::sendEvent(search, &press);
+        };
+        search->setText(QStringLiteral("test.queued-first")); enter();
+        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        QApplication::sendEvent(search, &escape);
+        QCoreApplication::processEvents();
+        QCOMPARE(prompts, 0); QVERIFY(calls.isEmpty()); QVERIFY(search->text().isEmpty());
+        search->setText(QStringLiteral("test.queued-first")); enter();
+        search->setText(QStringLiteral("test.queued-second"));
+        QCoreApplication::processEvents();
+        QCOMPARE(prompts, 0); QVERIFY(calls.isEmpty());
+        // 未处理事件前混合回车与鼠标入口，只保留新查询的一次请求。
+        search->setText(QStringLiteral("test.queued-first")); enter();
+        search->setText(QStringLiteral("test.queued-second")); enter(); enter(); submit->trigger();
+        QCoreApplication::processEvents();
+        QCOMPARE(prompts, 1); QCOMPARE(calls, QStringList{QStringLiteral("second")});
+        QVERIFY(lastPrompt.contains(QStringLiteral("second"))); QVERIFY(!lastPrompt.contains(QStringLiteral("first")));
+        search->setText(QStringLiteral("test.queued-first")); enter();
+        QCoreApplication::processEvents();
+        QCOMPARE(prompts, 2); QCOMPARE(calls, (QStringList{QStringLiteral("second"), QStringLiteral("first")}));
+        // 排队期间销毁窗口，带上下文的回调必须自动取消。
+        enter(); delete window.data(); QCoreApplication::processEvents();
+        QCOMPARE(prompts, 2); QCOMPARE(calls.size(), 2); QVERIFY(!QApplication::activeModalWidget());
+    }
+
+    void commandSearchAllowsOwnerDestruction_data()
+    {
+        QTest::addColumn<bool>("duringConfirmation");
+        QTest::addColumn<QString>("query");
+        QTest::newRow("command-deletes-owner") << false << QStringLiteral("test.destroy-owner");
+        QTest::newRow("owner-deleted-during-modal") << true << QStringLiteral("test.destroy-owner");
+        QTest::newRow("owner-deleted-during-empty-state") << true << QStringLiteral("no-command-47291");
+        QTest::newRow("owner-deleted-during-multiple-results") << true << QStringLiteral("test.");
+    }
+
+    void commandSearchAllowsOwnerDestruction()
+    {
+        QFETCH(bool, duringConfirmation); QFETCH(QString, query);
+        QPointer<MainWindow> window = new MainWindow;
+        window->show(); window->activateWindow();
+        auto *search = window->findChild<QLineEdit *>(QStringLiteral("commandSearch"));
+        QVERIFY(search);
+        int executed = 0;
+        Command command;
+        command.id = QStringLiteral("test.destroy-owner");
+        command.text = QStringLiteral("Owner Lifetime Probe");
+        command.handler = [&] { ++executed; delete window.data(); };
+        QVERIFY(CommandRegistry::instance().add(command));
+        Command other = command; other.id = QStringLiteral("test.another-owner");
+        QVERIFY(CommandRegistry::instance().add(other));
+        QTimer responder;
+        responder.setInterval(1);
+        connect(&responder, &QTimer::timeout, [&] {
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            if (!box) return;
+            responder.stop();
+            if (duringConfirmation) delete window.data();
+            else {
+                if (!box->button(QMessageBox::Yes)) qFatal("Expected command confirmation");
+                box->button(QMessageBox::Yes)->click();
+            }
+        });
+        responder.start();
+        search->setText(query);
+        QTest::keyClick(search, Qt::Key_Return);
+        QTRY_VERIFY_WITH_TIMEOUT(window.isNull(), 2000);
+        QVERIFY(window.isNull()); QCOMPARE(executed, duringConfirmation ? 0 : 1);
+        QVERIFY(!QApplication::activeModalWidget());
+    }
+
+    void commandSearchProtectsCurrentSessionAndOriginalFiles()
+    {
+        QTemporaryDir directory; QVERIFY(directory.isValid());
+        const QString left = directory.filePath("left.txt"), right = directory.filePath("right.txt");
+        const QByteArray originalLeft("left original\r\n"), originalRight("right original\r\n");
+        writeFile(left, originalLeft); writeFile(right, originalRight);
+        MainWindow window; window.resize(1024, 800); window.show(); window.activateWindow();
+        auto *first = qobject_cast<TextCompareSession *>(window.openComparison("text", left, right));
+        QVERIFY(first);
+        auto *pane = first->widget()->findChild<TextPane *>(QStringLiteral("rightTextPane"));
+        QVERIFY(pane);
+        bool editorShown = false;
+        QTimer::singleShot(0, [&] {
+            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            auto *editor = dialog ? dialog->findChild<QPlainTextEdit *>(QStringLiteral("textBufferEditor")) : nullptr;
+            auto *buttons = dialog ? dialog->findChild<QDialogButtonBox *>() : nullptr;
+            if (!editor || !buttons || !buttons->button(QDialogButtonBox::Apply)) qFatal("Expected text editor");
+            editorShown = true; editor->setFocus();
+            QTest::keyClick(editor, Qt::Key_A, Qt::ControlModifier);
+            QTest::keyClicks(editor, "edited fixture");
+            buttons->button(QDialogButtonBox::Apply)->click();
+        });
+        auto *edit = first->widget()->findChild<QPushButton *>(QStringLiteral("editRight"));
+        QVERIFY(edit && edit->isEnabled()); edit->click(); QVERIFY(editorShown);
+        QVERIFY(first->isDirty());
+        const QString edited = pane->toPlainText();
+        auto *search = window.findChild<QLineEdit *>(QStringLiteral("commandSearch"));
+        QVERIFY(search);
+        // 为有歧义的 Save/Save As 子串建立测试别名，执行体仍是应用注册的保存处理器。
+        const Command *save = CommandRegistry::instance().find(QStringLiteral("file.save"));
+        QVERIFY(save); Command alias = *save;
+        alias.id = QStringLiteral("test.fixture-save"); alias.text = QStringLiteral("Fixture Save Probe");
+        alias.sessionTypes = QStringList{QStringLiteral("text")};
+        alias.enabledWhen = [&window] { auto *current = sessions(window)->currentSession(); return current && current->canSave(); };
+        QVERIFY(CommandRegistry::instance().add(alias));
+        QCOMPARE(submitSearch(search, alias.id, QMessageBox::No).dialogs, 1);
+        QCOMPARE(readFile(left), originalLeft); QCOMPARE(readFile(right), originalRight);
+        QCOMPARE(pane->toPlainText(), edited); QVERIFY(first->isDirty());
+        QCOMPARE(submitSearch(search, alias.id, QMessageBox::No, true).dialogs, 1);
+        QCOMPARE(readFile(left), originalLeft); QCOMPARE(readFile(right), originalRight);
+        QVERIFY(first->isDirty());
+        QCOMPARE(submitSearch(search, alias.id, QMessageBox::No, false, false, {},
+                              SearchConfirmation::RepeatedReturn).dialogs, 1);
+        QCOMPARE(readFile(left), originalLeft); QCOMPARE(readFile(right), originalRight);
+        QCOMPARE(pane->toPlainText(), edited); QVERIFY(first->isDirty());
+        auto *second = window.openComparison("text", left, right); QVERIFY(second);
+        QCOMPARE(submitSearch(search, alias.id, QMessageBox::Yes).dialogs, 1);
+        QCOMPARE(readFile(left), originalLeft); QCOMPARE(readFile(right), originalRight);
+        QVERIFY(first->isDirty()); QVERIFY(!second->isDirty());
+        sessions(window)->setCurrentWidget(first->widget());
+        // 确认框打开后切换到主页，执行时仍必须重新校验当前上下文。
+        QCOMPARE(submitSearch(search, alias.id, QMessageBox::Yes, false, false, [&] {
+            sessions(window)->setCurrentWidget(sessions(window)->homePage());
+        }).dialogs, 1);
+        QCOMPARE(readFile(left), originalLeft); QCOMPARE(readFile(right), originalRight);
+        QVERIFY(first->isDirty());
+        sessions(window)->setCurrentWidget(first->widget());
+        QCOMPARE(submitSearch(search, alias.id, QMessageBox::Yes).dialogs, 1);
+        QCOMPARE(readFile(left), originalLeft); QCOMPARE(readFile(right), QByteArray("edited fixture"));
+        QVERIFY(!first->isDirty()); QVERIFY(!second->isDirty());
+        QCOMPARE(submitSearch(search, alias.id, QMessageBox::Yes).dialogs, 1);
+        QCOMPARE(readFile(left), originalLeft); QCOMPARE(readFile(right), QByteArray("edited fixture"));
+        QVERIFY(sessions(window)->closeAllSessions());
     }
 
     void opensTextFolderHexTableAndArchiveInActualTabs()
@@ -196,6 +1253,47 @@ private slots:
         QCOMPARE(area->sessionCount(), 5);
         QVERIFY(area->closeAllSessions());
         QCOMPARE(area->sessionCount(), 0);
+    }
+
+    void destroyingWindowBeforeDeferredSessionDeletion_data()
+    {
+        QTest::addColumn<int>("closedCount");
+        QTest::newRow("open-tabs") << 0;
+        QTest::newRow("one-closed-tab") << 1;
+        QTest::newRow("all-tabs-closed") << 3;
+    }
+
+    void destroyingWindowBeforeDeferredSessionDeletion()
+    {
+        QFETCH(int, closedCount);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto path = directory.filePath("text.txt");
+        writeFile(path, "contents\n");
+        QScopedPointer<MainWindow> window(new MainWindow);
+        auto *area = sessions(*window);
+        QVERIFY(area);
+        QList<QPointer<CompareSession>> trackedSessions;
+        QList<QPointer<QWidget>> trackedViews;
+        for (int i = 0; i < 3; ++i) {
+            auto *session = window->openComparison("text", path, path);
+            QVERIFY(session);
+            trackedSessions.append(session);
+            trackedViews.append(session->widget());
+        }
+        for (int i = 0; i < closedCount; ++i) {
+            QVERIFY(area->closeSession(area->indexOf(trackedViews.at(i))));
+            // DeferredDelete 尚未执行，已关闭会话仍然是窗口的子对象。
+            QVERIFY(!trackedSessions.at(i).isNull());
+            QCOMPARE(trackedSessions.at(i)->state(), CompareSession::State::Closed);
+        }
+        QCOMPARE(area->sessionCount(), 3 - closedCount);
+        // 故意不处理事件：关闭标签后立即退出，也必须先断开会话回调。
+        window.reset();
+        for (const auto &session : trackedSessions) QVERIFY(session.isNull());
+        for (const auto &view : trackedViews) QVERIFY(view.isNull());
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QCoreApplication::processEvents();
     }
 
     void activeTabDirtyStateAndQatSaveTrackCurrentBuffer()

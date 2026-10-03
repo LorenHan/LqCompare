@@ -37,7 +37,9 @@ isEmpty(DESTDIR) {
     else: DESTDIR = $$clean_path($$PWD/../dist/linux)
 }
 
-win32: RC_ICONS = $$PWD/Pictures/ribbon_about.svg
+# RC_ICONS 需要 Windows ICO 数据；界面继续使用原有的 Qt SVG 资源。
+# 用 tools/generate_windows_icon.py 重新生成仓库中的可执行文件图标。
+win32: RC_ICONS = $$PWD/Pictures/lqcompare.ico
 
 macx {
     CONFIG += app_bundle

@@ -527,11 +527,18 @@ Report Executor::execute(const Plan &plan, const Confirmation &confirmation,
                     && !QDir(target).entryList(QDir::AllEntries | QDir::Hidden | QDir::System | QDir::NoDotAndDotDot).isEmpty())
                     error = QStringLiteral("目录仍有未删除或范围外条目，保留目录；请重新预演");
                 if (error.isEmpty()) {
-                    const auto trashed = m_trash->deleteToTrash({target});
-                    if (trashed.records.size() != 1) error = QStringLiteral("回收站未返回完整的删除结果");
-                    else if (!trashed.succeeded()) error = Files::errorReport(trashed.firstErrorCode(), target);
-                    else { result.trashedPath = trashed.records.first().trashedPath;
-                        if (QFileInfo::exists(target)) error = QStringLiteral("回收站未移走目标，删除未完成"); }
+                    const auto availability = m_trash->availabilityFor(target);
+                    if (!Files::isTrashUsable(availability)) {
+                        const auto decision = Files::decideTrash(availability);
+                        error = QStringLiteral("%1：%2。%3").arg(target, decision.reason, decision.advice);
+                    } else {
+                        // 这里只增加可读诊断；真正删除仍由基类再次查可用性，不能省去第二道检查。
+                        const auto trashed = m_trash->deleteToTrash({target});
+                        if (trashed.records.size() != 1) error = QStringLiteral("回收站未返回完整的删除结果");
+                        else if (!trashed.succeeded()) error = Files::errorReport(trashed.firstErrorCode(), target);
+                        else { result.trashedPath = trashed.records.first().trashedPath;
+                            if (QFileInfo::exists(target)) error = QStringLiteral("回收站未移走目标，删除未完成"); }
+                    }
                 }
             }
             if (error.isEmpty()) {

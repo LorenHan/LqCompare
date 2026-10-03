@@ -10,6 +10,7 @@
 #include <QMutexLocker>
 #include <QSet>
 #include <QTemporaryDir>
+#include <QTextCodec>
 #include <QThread>
 #include <QVector>
 
@@ -575,6 +576,39 @@ void TstLogging::fileTargetReceivesExactlyWhatConsoleWould()
     const QString text = readWholeFile(path);
     QVERIFY2(text.startsWith(capture.records.first().line()), qPrintable(text));
     QVERIFY(text.endsWith(QLatin1Char('\n')));
+}
+
+void TstLogging::fileTargetUsesUtf8RegardlessOfLocale_data()
+{
+    QTest::addColumn<QByteArray>("codecName");
+    QTest::newRow("utf8") << QByteArray("UTF-8");
+    QTest::newRow("windows1252") << QByteArray("Windows-1252");
+    QTest::newRow("gb18030") << QByteArray("GB18030");
+}
+
+void TstLogging::fileTargetUsesUtf8RegardlessOfLocale()
+{
+    QFETCH(QByteArray, codecName);
+    auto *codec = QTextCodec::codecForName(codecName);
+    QVERIFY(codec);
+    struct RestoreLocaleCodec {
+        QTextCodec *previous = QTextCodec::codecForLocale();
+        ~RestoreLocaleCodec() { QTextCodec::setCodecForLocale(previous); }
+    } restore;
+    // 在任意开发平台重现 Windows 非 UTF-8 默认编码，失败也必须恢复进程状态。
+    QTextCodec::setCodecForLocale(codec);
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = directory.filePath(QStringLiteral("utf8.log"));
+    QVERIFY(LqCompare::Log::setLogFile(path));
+    const QString message = QStringLiteral("中文路径／繁體 café 🙂");
+    LQCOMPARE_WARN("unicode", message);
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::ReadOnly));
+    const QByteArray bytes = file.readAll();
+    QVERIFY2(bytes.contains(message.toUtf8()), bytes.toHex().constData());
+    QVERIFY(!bytes.startsWith(QByteArray::fromHex("efbbbf")));
+    QCOMPARE(QString::fromUtf8(bytes).count(message), 1);
 }
 
 // =============================================================================

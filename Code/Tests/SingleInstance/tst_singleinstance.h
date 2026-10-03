@@ -113,6 +113,14 @@ private slots:
     void aDisabledReportCarriesNoRelay();
     void theReportExitCodeFollowsTheRelayStatus();
 
+    // --- H2 子进程夹具自身：不依赖本地套接字 ---------------------------------
+    void childReadyPreservesBufferedOutput_data();
+    void childReadyPreservesBufferedOutput();
+    void childFinishWaitPreservesBufferedOutput();
+    void childFinishPreservesOutputAfterExit();
+    void childEnvironmentPreservesUnicode_data();
+    void childEnvironmentPreservesUnicode();
+
     // --- I 真的第二个进程：首个实例与转交 -------------------------------------
     void aLoneProcessBecomesPrimary();
     void primaryTakesAnIdentifierAndListensOnAnEndpoint();

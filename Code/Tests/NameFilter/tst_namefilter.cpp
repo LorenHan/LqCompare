@@ -9,7 +9,25 @@
 using namespace LqCompare;
 using namespace LqCompare::Filter;
 
+Q_DECLARE_METATYPE(LqCompare::Filter::MaskPlatform)
+
 namespace {
+
+void addPlatformRows()
+{
+    QTest::addColumn<MaskPlatform>("platform");
+    QTest::addColumn<bool>("caseInsensitive");
+    QTest::newRow("posix") << MaskPlatform::Posix << false;
+    QTest::newRow("windows") << MaskPlatform::Windows << true;
+}
+
+void addNameModeRows()
+{
+    QTest::addColumn<QString>("declaration");
+    QTest::newRow("exact") << QStringLiteral("= README.md");
+    QTest::newRow("wildcard") << QStringLiteral("*.md");
+    QTest::newRow("regex") << QStringLiteral("re:^README\\.md$");
+}
 
 /// 供 D 组使用的可编排运行器：按脚本依次报「超时」或「真跑一遍」。
 ///
@@ -132,9 +150,16 @@ QString TstNameFilter::readSourceFile(const QString &relativePath)
 // A 三种匹配模式（第 1 条）
 // -----------------------------------------------------------------------------
 
+void TstNameFilter::exactMatchesOnlyWholeName_data()
+{
+    addPlatformRows();
+}
+
 void TstNameFilter::exactMatchesOnlyWholeName()
 {
-    const NameFilterParseResult parsed = NameFilter::parse(QStringLiteral("= README.md"));
+    QFETCH(MaskPlatform, platform);
+    QFETCH(bool, caseInsensitive);
+    const NameFilterParseResult parsed = NameFilter::parse(QStringLiteral("= README.md"), platform);
     QCOMPARE(parsed.filter.expressionCount(), 1);
     QCOMPARE(modeId(parsed.filter.expressions().at(0).mode), QStringLiteral("exact"));
     QCOMPARE(parsed.filter.expressions().at(0).text, QStringLiteral("README.md"));
@@ -142,8 +167,7 @@ void TstNameFilter::exactMatchesOnlyWholeName()
     QVERIFY(parsed.filter.accepts(QStringLiteral("README.md")));
     QVERIFY2(!parsed.filter.accepts(QStringLiteral("README.md.bak")),
              "精确名不应当命中更长的名字");
-    QVERIFY2(!parsed.filter.accepts(QStringLiteral("readme.md")),
-             "posix 默认大小写敏感");
+    QCOMPARE(parsed.filter.accepts(QStringLiteral("readme.md")), caseInsensitive);
     QVERIFY(!parsed.filter.accepts(QStringLiteral("README.md ")));
 }
 
@@ -209,31 +233,47 @@ void TstNameFilter::regexKeepsUserAnchorsWorking()
              "`a|b` 的整名匹配不应当命中 `ab`");
 }
 
+void TstNameFilter::regexSubstringNeedsExplicitDotStar_data()
+{
+    addPlatformRows();
+}
+
 void TstNameFilter::regexSubstringNeedsExplicitDotStar()
 {
-    const NameFilterParseResult parsed = NameFilter::parse(QStringLiteral("re:.*READ.*"));
+    QFETCH(MaskPlatform, platform);
+    QFETCH(bool, caseInsensitive);
+    const NameFilterParseResult parsed = NameFilter::parse(QStringLiteral("re:.*READ.*"), platform);
     QVERIFY(parsed.filter.accepts(QStringLiteral("xREADMEx")));
     QVERIFY(parsed.filter.accepts(QStringLiteral("READ")));
-    QVERIFY(!parsed.filter.accepts(QStringLiteral("readme")));
+    QCOMPARE(parsed.filter.accepts(QStringLiteral("readme")), caseInsensitive);
+}
+
+void TstNameFilter::regexHonorsCaseSensitivity_data()
+{
+    addPlatformRows();
 }
 
 void TstNameFilter::regexHonorsCaseSensitivity()
 {
+    QFETCH(MaskPlatform, platform);
+    QFETCH(bool, caseInsensitive);
     // 三个模式都要遵守同一个大小写开关。正则这一支最容易漏：它的选项被编进了
     // 正则对象里，而不是每次判定现算的（漏掉的现象是「正则模式下开关不起作用」，
     // 另外两个模式却正常）。
-    NameFilterParseResult parsed = NameFilter::parse(QStringLiteral("re:^readme$"));
+    NameFilterParseResult parsed = NameFilter::parse(QStringLiteral("re:^readme$"), platform);
     QVERIFY(parsed.filter.accepts(QStringLiteral("readme")));
-    QVERIFY2(!parsed.filter.accepts(QStringLiteral("README")), "posix 默认大小写敏感");
+    QCOMPARE(parsed.filter.accepts(QStringLiteral("README")), caseInsensitive);
 
     parsed.filter.setCaseSensitivity(Qt::CaseInsensitive);
     QVERIFY(parsed.filter.accepts(QStringLiteral("README")));
     QVERIFY(parsed.filter.accepts(QStringLiteral("ReadMe")));
 
-    // 平台默认也要能真实执行到正则这一支。
-    const NameFilterParseResult windows =
-        NameFilter::parse(QStringLiteral("re:^readme$"), MaskPlatform::Windows);
-    QVERIFY(windows.filter.accepts(QStringLiteral("README")));
+    // 两个平台上都反向切回敏感，防止选项只会放宽、不能重新收紧。
+    parsed.filter.setCaseSensitivity(Qt::CaseSensitive);
+    QVERIFY(parsed.filter.accepts(QStringLiteral("readme")));
+    QVERIFY(!parsed.filter.accepts(QStringLiteral("README")));
+    QVERIFY(!parsed.filter.accepts(QStringLiteral("ReadMe")));
+    QVERIFY(!parsed.filter.accepts(QStringLiteral("readme.bak")));
 }
 
 void TstNameFilter::wildcardMetacharactersAreNotRegex()
@@ -1287,25 +1327,85 @@ void TstNameFilter::declarationKeyIsStable()
     QCOMPARE(nameFilterDeclarationKey(), QStringLiteral("name-filter"));
 }
 
+void TstNameFilter::describeMentionsCombineCountAndCase_data()
+{
+    addPlatformRows();
+}
+
 void TstNameFilter::describeMentionsCombineCountAndCase()
 {
-    const NameFilter filter = buildFilter(QStringLiteral("*.cpp\n*.h"), NameCombineMode::NoneOf);
-    const QString text = filter.describe();
-    QVERIFY(text.contains(QStringLiteral("不包含任何")));
-    QVERIFY(text.contains(QStringLiteral("2 条表达式")));
-    QVERIFY(text.contains(QStringLiteral("敏感")));
-    QVERIFY(text.contains(QStringLiteral("posix")));
+    QFETCH(MaskPlatform, platform);
+    QFETCH(bool, caseInsensitive);
+    const NameFilter filter = buildFilter(QStringLiteral("*.cpp\n*.h"),
+                                         NameCombineMode::NoneOf, platform);
+    const QString expected = caseInsensitive
+        ? QStringLiteral("不包含任何，2 条表达式，大小写不敏感（平台默认：windows）")
+        : QStringLiteral("不包含任何，2 条表达式，大小写敏感（平台默认：posix）");
+    QCOMPARE(filter.describe(), expected);
+}
+
+void TstNameFilter::caseSensitivityOverrideIsReported_data()
+{
+    addPlatformRows();
 }
 
 void TstNameFilter::caseSensitivityOverrideIsReported()
 {
-    NameFilterParseResult parsed = NameFilter::parse(QStringLiteral("*.cpp"));
-    QVERIFY2(!parsed.filter.isCaseSensitivityOverridden(), "刚解析出来时应当跟随平台默认");
-    parsed.filter.setCaseSensitivity(Qt::CaseInsensitive);
-    QVERIFY(parsed.filter.isCaseSensitivityOverridden());
-    parsed.filter.clearCaseSensitivityOverride();
+    QFETCH(MaskPlatform, platform);
+    QFETCH(bool, caseInsensitive);
+    const QStringList declarations{QStringLiteral("= README.md"), QStringLiteral("*.md"),
+                                   QStringLiteral("re:^README\\.md$")};
+    // 精确、通配、正则都要覆盖两个方向；否则 Windows 上的覆盖可能根本没改变行为。
+    for (const QString &declaration : declarations) {
+        NameFilterParseResult parsed = NameFilter::parse(declaration, platform);
+        QVERIFY(!parsed.filter.isCaseSensitivityOverridden());
+        QCOMPARE(parsed.filter.accepts(QStringLiteral("README.MD")), caseInsensitive);
+
+        parsed.filter.setCaseSensitivity(caseInsensitive ? Qt::CaseSensitive : Qt::CaseInsensitive);
+        QVERIFY(parsed.filter.isCaseSensitivityOverridden());
+        QCOMPARE(parsed.filter.accepts(QStringLiteral("README.MD")), !caseInsensitive);
+        QVERIFY(parsed.filter.accepts(QStringLiteral("README.md")));
+        QVERIFY(!parsed.filter.accepts(QStringLiteral("other.txt")));
+        QVERIFY(!parsed.filter.accepts(QStringLiteral("README.md.bak")));
+
+        parsed.filter.clearCaseSensitivityOverride();
+        QVERIFY(!parsed.filter.isCaseSensitivityOverridden());
+        QCOMPARE(parsed.filter.caseSensitivity(),
+                 caseInsensitive ? Qt::CaseInsensitive : Qt::CaseSensitive);
+        QCOMPARE(parsed.filter.accepts(QStringLiteral("README.MD")), caseInsensitive);
+        // 重复清除不会把平台默认再翻转一次。
+        parsed.filter.clearCaseSensitivityOverride();
+        QCOMPARE(parsed.filter.accepts(QStringLiteral("README.MD")), caseInsensitive);
+    }
+}
+
+void TstNameFilter::nativePlatformDefaultMatchesHost_data()
+{
+    addNameModeRows();
+}
+
+void TstNameFilter::nativePlatformDefaultMatchesHost()
+{
+    QFETCH(QString, declaration);
+    // 本机默认单独从编译目标断言，不能拿被测函数的返回值充当预期值。
+#ifdef Q_OS_WIN
+    const MaskPlatform expectedPlatform = MaskPlatform::Windows;
+    const Qt::CaseSensitivity expectedCase = Qt::CaseInsensitive;
+    const bool acceptsDifferentCase = true;
+#else
+    const MaskPlatform expectedPlatform = MaskPlatform::Posix;
+    const Qt::CaseSensitivity expectedCase = Qt::CaseSensitive;
+    const bool acceptsDifferentCase = false;
+#endif
+    QCOMPARE(currentMaskPlatform(), expectedPlatform);
+    const NameFilterParseResult parsed = NameFilter::parse(declaration);
+    QCOMPARE(parsed.filter.platform(), expectedPlatform);
+    QCOMPARE(parsed.filter.caseSensitivity(), expectedCase);
     QVERIFY(!parsed.filter.isCaseSensitivityOverridden());
-    QCOMPARE(parsed.filter.caseSensitivity(), Qt::CaseSensitive);
+    QVERIFY(parsed.filter.accepts(QStringLiteral("README.md")));
+    QCOMPARE(parsed.filter.accepts(QStringLiteral("README.MD")), acceptsDifferentCase);
+    QVERIFY(!parsed.filter.accepts(QStringLiteral("other.txt")));
+    QVERIFY(!parsed.filter.accepts(QStringLiteral("README.md.bak")));
 }
 
 void TstNameFilter::caseInsensitiveWildcardMatchesWindowsStyleNames()

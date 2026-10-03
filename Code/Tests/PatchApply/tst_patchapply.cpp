@@ -7,6 +7,7 @@
 // 把旧值还原——否则后面的用例会莫名其妙地走到别的目录去。
 // -----------------------------------------------------------------------------
 
+#include "../Support/patchtestsymlink.h"
 #include <QtTest>
 #include <QDir>
 #include <QFile>
@@ -257,6 +258,7 @@ private slots:
     void failureAuditStopsAtTheStageThatFailed();
     void auditJsonCarriesStatusPathsAndStages();
     void auditJsonEscapesUnicodeAndQuotes();
+    void auditJsonPreservesUnicodePathsAfterApply();
     void auditJsonReportsRecoveryRequiredWithItsBackup();
     void auditJsonKeepsDiagnosticLines();
     void auditJsonOfARejectedPlanHasNoTarget();
@@ -503,7 +505,7 @@ void PatchApplyTests::symlinkedTargetIsRejected()
     const QString outsideFile = outside.filePath(QStringLiteral("real.txt"));
     QVERIFY(putFile(outsideFile, "alpha\nbeta\n"));
     const QString link = root.filePath(QStringLiteral("sample.txt"));
-    QVERIFY(QFile(outsideFile).link(link));
+    LQCOMPARE_REQUIRE_PATCH_SYMLINK(outsideFile, link, false);
     QVERIFY(QFileInfo(link).isSymLink());
 
     const Document document = documentFor("alpha\nbeta\n", "alpha\nBETA\n");
@@ -1152,10 +1154,11 @@ void PatchApplyTests::symlinkSwappedInAfterPrepareIsRejected()
     const QString outsideFile = outside.filePath(QStringLiteral("real.txt"));
     QVERIFY(putFile(outsideFile, original));
     QVERIFY(QFile::remove(target));
-    QVERIFY(QFile(outsideFile).link(target));
+    LQCOMPARE_REQUIRE_PATCH_SYMLINK(outsideFile, target, false);
 
     const ApplicationResult result = executeApplication(plan, true);
     QCOMPARE(statusName(result.status), QStringLiteral("rejected"));
+    QVERIFY(allDiagnostics(result.diagnostics).contains(QStringLiteral("符号链接")));
     QVERIFY(QFileInfo(target).isSymLink()); // 链接本身没有被替换成普通文件
     QCOMPARE(bytesOf(outsideFile), original);
 }
@@ -1293,9 +1296,41 @@ void PatchApplyTests::auditJsonCarriesStatusPathsAndStages()
 
 void PatchApplyTests::auditJsonEscapesUnicodeAndQuotes()
 {
+    // JSON 的转义契约独立于宿主文件系统：Windows 不能创建含双引号的文件。
+    const QString path = QStringLiteral("中文目录/\"引用\".txt");
+    const QString message = QStringLiteral("包含\"引号\"、反斜杠\\与换行\n的诊断");
+    ApplicationResult result;
+    result.status = ApplicationStatus::RecoveryRequired;
+    result.targetPath = path;
+    result.backupPath = path + QStringLiteral(".orig");
+    result.diagnostics.append({17, message});
+    result.audit.append({ApplicationStage::Rollback, false, path, message, QDateTime::currentDateTimeUtc()});
+
+    const QByteArray json = applicationAuditJson(result);
+    QVERIFY(json.contains("\\\""));
+    QVERIFY(json.contains("\\n"));
+    QJsonParseError error;
+    const QJsonDocument parsed = QJsonDocument::fromJson(json, &error);
+    QCOMPARE(error.error, QJsonParseError::NoError);
+    const QJsonObject object = parsed.object();
+    QCOMPARE(object.value(QStringLiteral("targetPath")).toString(), path);
+    QCOMPARE(object.value(QStringLiteral("backupPath")).toString(), result.backupPath);
+    QCOMPARE(object.value(QStringLiteral("diagnostics")).toArray().first().toObject()
+                 .value(QStringLiteral("message")).toString(), message);
+    const QJsonObject audit = object.value(QStringLiteral("audit")).toArray().first().toObject();
+    QCOMPARE(audit.value(QStringLiteral("path")).toString(), path);
+    QCOMPARE(audit.value(QStringLiteral("message")).toString(), message);
+}
+
+void PatchApplyTests::auditJsonPreservesUnicodePathsAfterApply()
+{
     QTemporaryDir root;
     QVERIFY(root.isValid());
+#ifdef Q_OS_WIN
+    const QString name = QStringLiteral("中文 '引用'.txt");
+#else
     const QString name = QStringLiteral("中文 \"引用\".txt");
+#endif
     const QString target = root.filePath(name);
     const QByteArray original = "alpha\nbeta\n";
     QVERIFY(putFile(target, original));
@@ -1310,9 +1345,11 @@ void PatchApplyTests::auditJsonEscapesUnicodeAndQuotes()
     QJsonParseError error;
     const QJsonDocument parsed = QJsonDocument::fromJson(json, &error);
     QCOMPARE(error.error, QJsonParseError::NoError);
-    // 往返一致：路径里的引号与中文都不能把报表变成坏 JSON 或被截断。
+    // 实际应用后的路径与字节都必须完整保留；POSIX 还验证实盘双引号文件名。
     QCOMPARE(parsed.object().value(QStringLiteral("targetPath")).toString(), result.targetPath);
     QVERIFY(result.targetPath.endsWith(name));
+    QCOMPARE(bytesOf(target), QByteArray("alpha\nBETA\n"));
+    QCOMPARE(bytesOf(result.backupPath), original);
 }
 
 void PatchApplyTests::auditJsonReportsRecoveryRequiredWithItsBackup()

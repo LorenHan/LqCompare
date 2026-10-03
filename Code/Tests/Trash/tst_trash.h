@@ -49,16 +49,25 @@ private slots:
     void unavailableTrashReportsEveryEntry();
     void batchWithOneUnusableEntryIsRejectedWholly();
     void batchKeepsPartlySucceededEntries();
+    void successfulRecordMayHaveNoFilesystemPath();
+    void trashedPathsContainsOnlyKnownSuccessfulPaths();
     void trashNeverRecordsPermanentDeletion();
     void undoUsesTheActualTrashedPath();
     void undoWithoutPriorDeleteIsNotFound();
     void undoClearsTheUndoPoint();
     void lastDeleteKeepsFailedBatches();
 
+    // --- Windows 保守后端（同一生产实现，在任意平台执行）-----------------
+    void windowsTrashRefusesUnverifiedRecovery();
+    void windowsTrashRejectsFilesWithoutChangingTheirBytes();
+    void windowsTrashRejectsDirectoriesWithoutChangingTheirContents();
+    void windowsTrashEmptyBatchIsANoopAndMissingTargetsAreRejected();
+
     // --- 真实实现（本机平台）----------------------------------------------
     void nativeTrashServiceReportsItsPlatform();
     void nativeTrashServiceHasDisplayLocation();
     void nativeTrashAvailabilityNeverAssumesUsable();
+    void nativeTrashUndoWithoutPriorDeleteReportsCapability();
     void nativeTrashRoundTripRestoresTheFile();
     void nativeTrashRestoreRefusesToOverwrite();
 };

@@ -12,6 +12,9 @@
 # 另有一组是真实实现用例：会真的把文件移进本机废纸篓再还原回来。
 # 它们比任何替身都更能说明「删除确实可逆」，但也在用户的废纸篓上动手，
 # 因此每个用例都带清理守卫，失败路径同样会尽力把文件收回来。
+# Windows 当前后端拒绝未验证可恢复性的删除：只跳过两条真实恢复用例，删除前即跳过。
+# Shell 位置、无文件路径的成功报告、NotSupported 能力边界仍分别执行断言；
+# 不会为了测试而向 Windows 回收站投放无法自动收回的文件。
 # -----------------------------------------------------------------------------
 QT += core testlib
 
@@ -29,6 +32,9 @@ INCLUDEPATH += $$CODE_ROOT/Tests/Support
 
 include($$CODE_ROOT/Services/Files/files.pri)
 include($$CODE_ROOT/Tests/Support/support.pri)
+
+# Windows 保守后端不依赖 WinAPI；其他平台也执行同一生产实现的拒绝删除回归。
+!win32: SOURCES += $$CODE_ROOT/Services/Files/trash_win.cpp
 
 SOURCES += $$PWD/tst_trash.cpp
 HEADERS += $$PWD/tst_trash.h

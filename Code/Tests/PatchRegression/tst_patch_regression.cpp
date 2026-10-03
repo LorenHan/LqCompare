@@ -1,3 +1,4 @@
+#include "../Support/patchtestsymlink.h"
 #include <QtTest>
 #include <QDir>
 #include <QFile>
@@ -71,6 +72,8 @@ struct ProcessResult {
     bool finished = false;
     int exitCode = -1;
     QByteArray output;
+    QByteArray standardError;
+    QByteArray diagnosticOutput() const { return output + standardError; }
 };
 
 ProcessResult runProcess(const QString &program, const QStringList &arguments,
@@ -78,7 +81,8 @@ ProcessResult runProcess(const QString &program, const QStringList &arguments,
 {
     QProcess process;
     process.setWorkingDirectory(directory);
-    process.setProcessChannelMode(QProcess::MergedChannels);
+    // 工具警告不是补丁数据；保留 stderr 供失败诊断，但解析只接收 stdout。
+    process.setProcessChannelMode(QProcess::SeparateChannels);
     process.start(program, arguments);
     ProcessResult result;
     if (!process.waitForStarted(5000)) {
@@ -91,7 +95,8 @@ ProcessResult runProcess(const QString &program, const QStringList &arguments,
         process.waitForFinished(5000);
     }
     result.exitCode = process.exitCode();
-    result.output = process.readAll();
+    result.output = process.readAllStandardOutput();
+    result.standardError = process.readAllStandardError();
     return result;
 }
 }
@@ -141,8 +146,16 @@ private slots:
         QCOMPARE(readBytes(path), QByteArray("one\nold\nthree\n"));
     }
 
+    void parsesRealGitDiffOutput_data()
+    {
+        QTest::addColumn<QString>("autoCrlf");
+        QTest::newRow("literal-LF") << QStringLiteral("false");
+        QTest::newRow("autocrlf-warning-on-stderr") << QStringLiteral("true");
+    }
+
     void parsesRealGitDiffOutput()
     {
+        QFETCH(QString, autoCrlf);
         const QString git = QStandardPaths::findExecutable(QStringLiteral("git"));
         QVERIFY2(!git.isEmpty(), "Real git is required for source compatibility verification");
         QTemporaryDir repository;
@@ -151,18 +164,22 @@ private slots:
         const QByteArray before = QStringLiteral("首行\n旧内容\n末行").toUtf8();
         const QByteArray after = QStringLiteral("首行\n新内容\n末行").toUtf8();
         const auto init = runProcess(git, {"init", "--quiet"}, repository.path());
-        QVERIFY2(init.finished && init.exitCode == 0, init.output);
+        QVERIFY2(init.finished && init.exitCode == 0, init.diagnosticOutput());
+        const QStringList gitOptions = {"-c", QStringLiteral("core.autocrlf=") + autoCrlf,
+                                        "-c", "core.safecrlf=warn"};
         QVERIFY(writeBytes(repository.filePath(name), before));
-        const auto add = runProcess(git, {"add", "--", name}, repository.path());
-        QVERIFY2(add.finished && add.exitCode == 0, add.output);
+        const auto add = runProcess(git, gitOptions + QStringList{"add", "--", name}, repository.path());
+        QVERIFY2(add.finished && add.exitCode == 0, add.diagnosticOutput());
         QVERIFY(writeBytes(repository.filePath(name), after));
-        const auto diff = runProcess(git, {"--no-pager", "-c", "core.quotePath=true", "diff", "--no-ext-diff",
+        const auto diff = runProcess(git, gitOptions + QStringList{"--no-pager", "-c", "core.quotePath=true", "diff", "--no-ext-diff",
                                           "--no-textconv", "--no-color", "--", name}, repository.path());
-        QVERIFY2(diff.finished && diff.exitCode == 0, diff.output);
-        QVERIFY(diff.output.contains("diff --git "));
+        QVERIFY2(diff.finished && diff.exitCode == 0, diff.diagnosticOutput());
+        // 在每个平台主动生成 CRLF 警告，避免仅在 Windows 上偶然覆盖通道隔离。
+        if (autoCrlf == QStringLiteral("true")) QVERIFY(!diff.standardError.isEmpty());
+        QVERIFY2(diff.output.startsWith("diff --git "), diff.diagnosticOutput());
         QVERIFY(diff.output.contains("index "));
         const auto parsed = parse(diff.output);
-        QVERIFY2(parsed.ok, diagnostics(parsed.diagnostics) + diff.output);
+        QVERIFY2(parsed.ok, diagnostics(parsed.diagnostics) + diff.diagnosticOutput());
         QCOMPARE(parsed.document.files.size(), 1);
         QCOMPARE(parsed.document.files.first().oldPath, QStringLiteral("a/") + name);
         const auto forward = previewBytes(parsed.document.files.first(), before);
@@ -187,9 +204,9 @@ private slots:
         QVERIFY(writeBytes(root.filePath("old/sample.txt"), before));
         QVERIFY(writeBytes(root.filePath("new/sample.txt"), after));
         const auto diff = runProcess(diffTool, {"-u", "old/sample.txt", "new/sample.txt"}, root.path());
-        QVERIFY2(diff.finished && diff.exitCode == 1, diff.output);
+        QVERIFY2(diff.finished && diff.exitCode == 1, diff.diagnosticOutput());
         const auto parsed = parse(diff.output);
-        QVERIFY2(parsed.ok, diagnostics(parsed.diagnostics) + diff.output);
+        QVERIFY2(parsed.ok, diagnostics(parsed.diagnostics) + diff.diagnosticOutput());
         QCOMPARE(parsed.document.files.size(), 1);
         QCOMPARE(parsed.document.files.first().oldPath, QStringLiteral("old/sample.txt"));
         const auto forward = previewBytes(parsed.document.files.first(), before);
@@ -392,21 +409,29 @@ private slots:
         QCOMPARE(QDir(root.path()).entryList(QDir::Files | QDir::Hidden | QDir::NoDotAndDotDot).size(), 1);
     }
 
-    void atomicExportRejectsSymlinkAndDirectory()
+    void atomicExportRejectsDirectory()
+    {
+        QTemporaryDir root;
+        QVERIFY(root.isValid());
+        QString error;
+        QVERIFY(!writeFile(root.path(), "replacement\n", &error, true));
+        QVERIFY(!error.isEmpty());
+        QVERIFY(QFileInfo(root.path()).isDir());
+    }
+
+    void atomicExportRejectsSymlink()
     {
         QTemporaryDir root;
         QVERIFY(root.isValid());
         const QString target = root.filePath("original.diff");
         const QString link = root.filePath("linked.diff");
         QVERIFY(writeBytes(target, "original\n"));
-        QVERIFY(QFile::link(target, link));
+        LQCOMPARE_REQUIRE_PATCH_SYMLINK(target, link, false);
         QString error;
         QVERIFY(!writeFile(link, "replacement\n", &error, true));
         QVERIFY(!error.isEmpty());
         QCOMPARE(readBytes(target), QByteArray("original\n"));
-        QVERIFY(!writeFile(root.path(), "replacement\n", &error, true));
-        QVERIFY(!error.isEmpty());
-        QVERIFY(QFileInfo(root.path()).isDir());
+        QVERIFY(QFileInfo(link).isSymbolicLink());
     }
 
     void exactContextOffset_data()
@@ -674,16 +699,22 @@ private slots:
         QVERIFY(root.isValid()); QVERIFY(outside.isValid());
         const QString external = outside.filePath("sample.txt");
         QVERIFY(writeBytes(external, "old\n"));
-        QVERIFY(QFile::link(external, root.filePath("sample.txt")));
+        LQCOMPARE_REQUIRE_PATCH_SYMLINK(external, root.filePath("sample.txt"), false);
         const auto target = preview(documentWithPaths("a/sample.txt", "b/sample.txt"), root.path());
         QVERIFY(!target.ok);
+        QCOMPARE(target.files.size(), 1);
+        QVERIFY(diagnostics(target.files.first().diagnostics).contains(QStringLiteral("符号链接").toUtf8()));
         QCOMPARE(readBytes(external), QByteArray("old\n"));
-        QVERIFY(QFile::link(outside.path(), root.filePath("linked")));
+        LQCOMPARE_REQUIRE_PATCH_SYMLINK(outside.path(), root.filePath("linked"), true);
         const auto component = preview(documentWithPaths("a/linked/sample.txt", "b/linked/sample.txt"), root.path());
         QVERIFY(!component.ok);
+        QCOMPARE(component.files.size(), 1);
+        QVERIFY(diagnostics(component.files.first().diagnostics).contains(QStringLiteral("符号链接").toUtf8()));
         QCOMPARE(readBytes(external), QByteArray("old\n"));
         const auto create = preview(documentWithPaths("/dev/null", "b/linked/created.txt"), root.path());
         QVERIFY(!create.ok);
+        QCOMPARE(create.files.size(), 1);
+        QVERIFY(diagnostics(create.files.first().diagnostics).contains(QStringLiteral("符号链接").toUtf8()));
         QVERIFY(!QFileInfo::exists(outside.filePath("created.txt")));
     }
 
@@ -744,7 +775,11 @@ private slots:
         const QVector<FileInput> files = {
             modified(QStringLiteral("第一行\n旧内容\n末行\n").toUtf8(), QStringLiteral("第一行\n新内容\n末行\n").toUtf8(), QStringLiteral("中文 文件.txt")),
             modified("old\n", "new\n", QStringLiteral("directory with spaces/file name.txt")),
+            modified("old\n", "new\n", QStringLiteral("'quoted'.txt")),
+#ifndef Q_OS_WIN
+            // Windows 不允许实盘双引号；内存往返用例在所有平台继续覆盖双引号。
             modified("old\n", "new\n", QStringLiteral("\"quoted\".txt")),
+#endif
             modified("one\r\nold\r\nlast\r\n", "one\r\nnew\r\nlast\r\n", "crlf.txt"),
             modified(QByteArray::fromHex("efbbbf") + "old\n", QByteArray::fromHex("efbbbf") + "new\n", "bom.txt"),
             modified("first\nold", "first\nnew", "no-final-newline.txt"),
@@ -755,26 +790,32 @@ private slots:
         QTemporaryDir root;
         QTemporaryDir patchLocation;
         QVERIFY(root.isValid()); QVERIFY(patchLocation.isValid());
-        for (const auto &file : files) QVERIFY(writeBytes(root.filePath(file.oldPath), file.oldBytes));
+        for (const auto &file : files)
+            QVERIFY2(writeBytes(root.filePath(file.oldPath), file.oldBytes), qPrintable(file.oldPath));
         const QString patchPath = patchLocation.filePath("generated.diff");
         QVERIFY(writeBytes(patchPath, generated.bytes));
+        QStringList patchOptions = {"-p1", "--batch"};
+#ifdef Q_OS_WIN
+        // Windows 的 GNU patch 默认文本模式会转换 CRLF；正反应用都必须保留原始字节。
+        patchOptions << "--binary";
+#endif
         if (tool == QStringLiteral("git")) {
             const auto init = runProcess(executable, {"init", "--quiet"}, root.path());
-            QVERIFY2(init.finished && init.exitCode == 0, init.output);
-            const auto check = runProcess(executable, {"apply", "--check", patchPath}, root.path());
-            QVERIFY2(check.finished && check.exitCode == 0, check.output + generated.bytes);
-            const auto applied = runProcess(executable, {"apply", patchPath}, root.path());
-            QVERIFY2(applied.finished && applied.exitCode == 0, applied.output + generated.bytes);
+            QVERIFY2(init.finished && init.exitCode == 0, init.diagnosticOutput());
+            const auto check = runProcess(executable, {"-c", "core.autocrlf=false", "apply", "--check", patchPath}, root.path());
+            QVERIFY2(check.finished && check.exitCode == 0, check.diagnosticOutput() + generated.bytes);
+            const auto applied = runProcess(executable, {"-c", "core.autocrlf=false", "apply", patchPath}, root.path());
+            QVERIFY2(applied.finished && applied.exitCode == 0, applied.diagnosticOutput() + generated.bytes);
         } else {
-            const auto applied = runProcess(executable, {"-p1", "--batch", "-i", patchPath}, root.path());
-            QVERIFY2(applied.finished && applied.exitCode == 0, applied.output + generated.bytes);
+            const auto applied = runProcess(executable, patchOptions + QStringList{"-i", patchPath}, root.path());
+            QVERIFY2(applied.finished && applied.exitCode == 0, applied.diagnosticOutput() + generated.bytes);
         }
         for (const auto &file : files) QCOMPARE(readBytes(root.filePath(file.newPath)), file.newBytes);
         const QStringList reverseArguments = tool == QStringLiteral("git")
-            ? QStringList{"apply", "--reverse", patchPath}
-            : QStringList{"-p1", "--batch", "-R", "-i", patchPath};
+            ? QStringList{"-c", "core.autocrlf=false", "apply", "--reverse", patchPath}
+            : patchOptions + QStringList{"-R", "-i", patchPath};
         const auto reversed = runProcess(executable, reverseArguments, root.path());
-        QVERIFY2(reversed.finished && reversed.exitCode == 0, reversed.output + generated.bytes);
+        QVERIFY2(reversed.finished && reversed.exitCode == 0, reversed.diagnosticOutput() + generated.bytes);
         for (const auto &file : files) QCOMPARE(readBytes(root.filePath(file.oldPath)), file.oldBytes);
     }
 };

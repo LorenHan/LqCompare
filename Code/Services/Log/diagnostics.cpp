@@ -103,6 +103,18 @@ QString writeTextFile(const QString &path, const QString &content, QString *erro
     return path;
 }
 
+QString writeLogBytes(const QString &path, const QByteArray &content, QString *error)
+{
+    QFile file(path);
+    // 日志档案保留原始换行，不启用 Windows 的 Text 模式转换。
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)
+        || file.write(content) != content.size() || !file.flush()) {
+        *error = QStringLiteral("无法写入 %1：%2").arg(path, file.errorString());
+        return QString();
+    }
+    return path;
+}
+
 } // namespace
 
 QVector<RedactionRule> defaultRedactionRules(const QString &homeDirectory,
@@ -267,12 +279,12 @@ DiagnosticBundleResult buildDiagnosticBundle(const DiagnosticBundleRequest &requ
             if (!file.open(QIODevice::ReadOnly)) {
                 return fail(QStringLiteral("无法读取日志 %1：%2").arg(path, file.errorString()));
             }
-            const QString content = QString::fromUtf8(file.readAll());
+            const QByteArray content = file.readAll();
             file.close();
 
             int hits = 0;
-            const QString outgoing = request.redactPaths
-                    ? sanitizeDiagnosticText(content, rules, &hits)
+            const QByteArray outgoing = request.redactPaths
+                    ? sanitizeDiagnosticText(QString::fromUtf8(content), rules, &hits).toUtf8()
                     : content;
             redactedOccurrences += hits;
 
@@ -280,7 +292,7 @@ DiagnosticBundleResult buildDiagnosticBundle(const DiagnosticBundleRequest &requ
                                              .arg(kLogArchiveDirectoryName,
                                                   QFileInfo(path).fileName());
             QString writeError;
-            if (writeTextFile(bundleDirectory.filePath(relative), outgoing, &writeError).isEmpty())
+            if (writeLogBytes(bundleDirectory.filePath(relative), outgoing, &writeError).isEmpty())
                 return fail(writeError);
             result.files << relative;
             result.archivedLogs << path;
