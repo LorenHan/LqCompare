@@ -1,3 +1,9 @@
+// 真实符号链接夹具使用 Vista 起提供的 API；在 Qt/CRT 头之前设置缺省目标。
+// 保留构建方显式提供的版本，不改变非 Windows 测试。
+#if defined(_WIN32) && !defined(_WIN32_WINNT)
+#define _WIN32_WINNT 0x0600
+#endif
+
 #include <QtTest>
 #include <QDateTime>
 #include <QDir>
@@ -57,6 +63,25 @@ bool symbolicLink(const QString &source, const QString &link, bool directory = f
 #else
     Q_UNUSED(directory)
     return ::symlink(QFile::encodeName(source).constData(), QFile::encodeName(link).constData()) == 0;
+#endif
+}
+
+bool removeDirectorySymbolicLink(const QString &link)
+{
+#ifdef Q_OS_WIN
+    const QString native = QDir::toNativeSeparators(link);
+    const auto path = reinterpret_cast<LPCWSTR>(native.utf16());
+    const DWORD attributes = GetFileAttributesW(path);
+    if (attributes == INVALID_FILE_ATTRIBUTES
+        || !(attributes & FILE_ATTRIBUTE_REPARSE_POINT)
+        || !(attributes & FILE_ATTRIBUTE_DIRECTORY))
+        return false;
+    // Windows 的目录链接必须用 RemoveDirectoryW 解链；不递归、不删除目标内容。
+    return RemoveDirectoryW(path) != 0;
+#else
+    if (!QFileInfo(link).isSymLink())
+        return false;
+    return QFile::remove(link);
 #endif
 }
 }
@@ -290,12 +315,30 @@ private slots:
         QString error;
         QVERIFY2(output.setPath(QDir(link).filePath("merged"), {}, &error), qPrintable(error));
         QVERIFY2(output.save("first saved", &error), qPrintable(error));
-        QVERIFY(QFile::remove(link));
+        QVERIFY(removeDirectorySymbolicLink(link));
+        QVERIFY(!QFileInfo(link).isSymLink());
+        QCOMPARE(readFile(QDir(first).filePath("merged")), QByteArray("first saved"));
+        QCOMPARE(readFile(QDir(second).filePath("merged")), QByteArray("second"));
         QVERIFY(symbolicLink(second, link, true));
         QVERIFY(!output.save("new", &error));
         QVERIFY(error.contains("directory"));
         QCOMPARE(readFile(QDir(first).filePath("merged")), QByteArray("first saved"));
         QCOMPARE(readFile(QDir(second).filePath("merged")), QByteArray("second"));
+        // 清理仍只解除链接，避免 Qt 5 的临时目录清理把 Windows 目录链接当文件。
+        QVERIFY(removeDirectorySymbolicLink(link));
+        QCOMPARE(readFile(QDir(second).filePath("merged")), QByteArray("second"));
+    }
+
+    void directoryLinkRemovalRejectsOrdinaryDirectory()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        QVERIFY(!removeDirectorySymbolicLink(directory.path()));
+        QVERIFY(QDir(directory.path()).exists());
+        const QString file = directory.filePath("keep.txt");
+        writeFile(file, "keep");
+        QVERIFY(!removeDirectorySymbolicLink(file));
+        QCOMPARE(readFile(file), QByteArray("keep"));
     }
 
     void rejectNonRegularAndMissingParent()

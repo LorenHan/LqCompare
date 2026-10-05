@@ -10,6 +10,8 @@
 
 #include <QStringList>
 
+Q_DECLARE_METATYPE(LqCompare::Filter::MaskPlatform)
+
 namespace {
 
 using LqCompare::Filter::FilterLayer;
@@ -28,6 +30,14 @@ using LqCompare::MemorySessionSettings;
 using LqCompare::ScopedSessionSettings;
 using LqCompare::SettingScope;
 
+void addPlatformRows()
+{
+    QTest::addColumn<MaskPlatform>("platform");
+    QTest::addColumn<bool>("caseInsensitive");
+    QTest::newRow("posix") << MaskPlatform::Posix << false;
+    QTest::newRow("windows") << MaskPlatform::Windows << true;
+}
+
 ///
 /// \brief 造一个装好三层声明的栈。
 ///
@@ -36,9 +46,11 @@ using LqCompare::SettingScope;
 ///
 FilterStack stackWith(const QString &format,
                       const QString &session,
-                      const QString &view)
+                      const QString &view,
+                      MaskPlatform platform = LqCompare::Filter::currentMaskPlatform())
 {
     FilterStack stack;
+    stack.setPlatform(platform);
     stack.setDeclaration(FilterLayer::Format, format);
     stack.setDeclaration(FilterLayer::Session, session);
     stack.setDeclaration(FilterLayer::View, view);
@@ -625,64 +637,176 @@ void TstFilterStack::setLayerStateForcesTheLayerField()
     QVERIFY(stack.declaration(FilterLayer::Format).isEmpty());
 }
 
+void TstFilterStack::caseSensitivityOverrideAppliesToEveryLayer_data()
+{
+    addPlatformRows();
+}
+
 void TstFilterStack::caseSensitivityOverrideAppliesToEveryLayer()
 {
-    FilterStack stack = stackWith(QStringLiteral("*.CPP"),
-                                  QStringLiteral("*.CPP"),
-                                  QStringLiteral("*.CPP"));
-    QVERIFY(!acceptsName(stack, QStringLiteral("a.cpp")));
+    QFETCH(MaskPlatform, platform);
+    QFETCH(bool, caseInsensitive);
+    FilterStack stack = stackWith(QStringLiteral("*.CPP"), QStringLiteral("*.CPP"),
+                                 QStringLiteral("*.CPP"), platform);
+    QCOMPARE(acceptsName(stack, QStringLiteral("a.cpp")), caseInsensitive);
 
-    stack.setCaseSensitivity(Qt::CaseInsensitive);
+    const Qt::CaseSensitivity overridden = caseInsensitive ? Qt::CaseSensitive : Qt::CaseInsensitive;
+    stack.setCaseSensitivity(overridden);
     QVERIFY(stack.isCaseSensitivityOverridden());
-    QVERIFY(acceptsName(stack, QStringLiteral("a.cpp")));
-    // 三层都要被覆盖到——只改一层的话，失败现象是「有的层认大小写、有的不认」。
-    for (FilterLayer layer : LqCompare::Filter::allFilterLayers())
-        QCOMPARE(stack.filter(layer).caseSensitivity(), Qt::CaseInsensitive);
+    QCOMPARE(acceptsName(stack, QStringLiteral("a.cpp")), !caseInsensitive);
+    QVERIFY(acceptsName(stack, QStringLiteral("a.CPP")));
+    QVERIFY(!acceptsName(stack, QStringLiteral("a.h")));
+    // 三层逐个检查真实匹配；交集的最终拒绝结果掩盖得了一层漏改的错误。
+    for (FilterLayer layer : LqCompare::Filter::allFilterLayers()) {
+        QCOMPARE(stack.filter(layer).caseSensitivity(), overridden);
+        QVERIFY(stack.filter(layer).isCaseSensitivityOverridden());
+        QCOMPARE(stack.filter(layer).accepts(MaskSubject::forName(QStringLiteral("a.cpp"))),
+                 !caseInsensitive);
+        QVERIFY(!stack.filter(layer).accepts(MaskSubject::forName(QStringLiteral("a.h"))));
+    }
+}
+
+void TstFilterStack::caseOverrideSurvivesLaterDeclarations_data()
+{
+    addPlatformRows();
 }
 
 void TstFilterStack::caseOverrideSurvivesLaterDeclarations()
 {
-    // 覆盖是在**解析时**应用的，而 `FilterStack::setDeclaration` 会重新解析。
-    // 忘了重新应用的话，用户在对话框里勾了「忽略大小写」，再改一次掩码就失效了——
-    // 而那个勾还打着勾。
+    QFETCH(MaskPlatform, platform);
+    QFETCH(bool, caseInsensitive);
+    // 先设覆盖再写声明，保证重解析不会把用户的覆盖悄悄重置成平台默认。
     FilterStack stack;
-    stack.setCaseSensitivity(Qt::CaseInsensitive);
-    stack.setDeclaration(FilterLayer::View, QStringLiteral("*.CPP"));
-    QVERIFY(acceptsName(stack, QStringLiteral("a.cpp")));
+    stack.setPlatform(platform);
+    const Qt::CaseSensitivity overridden = caseInsensitive ? Qt::CaseSensitive : Qt::CaseInsensitive;
+    stack.setCaseSensitivity(overridden);
+    for (FilterLayer layer : LqCompare::Filter::allFilterLayers()) {
+        stack.setDeclaration(layer, QStringLiteral("*.CPP"));
+        QCOMPARE(stack.filter(layer).caseSensitivity(), overridden);
+        QVERIFY(stack.filter(layer).isCaseSensitivityOverridden());
+        QCOMPARE(stack.filter(layer).accepts(MaskSubject::forName(QStringLiteral("a.cpp"))),
+                 !caseInsensitive);
+    }
+    QCOMPARE(acceptsName(stack, QStringLiteral("a.cpp")), !caseInsensitive);
 
-    // 换平台重建解析也要保住覆盖。
-    stack.setPlatform(MaskPlatform::Windows);
-    QVERIFY(acceptsName(stack, QStringLiteral("a.cpp")));
+    // 来回换平台都要保住覆盖；只切到覆盖恰好等于默认值的平台不能证明它仍然有效。
+    const MaskPlatform other = platform == MaskPlatform::Windows ? MaskPlatform::Posix
+                                                               : MaskPlatform::Windows;
+    for (MaskPlatform next : {other, platform}) {
+        stack.setPlatform(next);
+        QVERIFY(stack.isCaseSensitivityOverridden());
+        QCOMPARE(acceptsName(stack, QStringLiteral("a.cpp")), !caseInsensitive);
+        for (FilterLayer layer : LqCompare::Filter::allFilterLayers()) {
+            QCOMPARE(stack.filter(layer).platform(), next);
+            QCOMPARE(stack.filter(layer).caseSensitivity(), overridden);
+            QVERIFY(stack.filter(layer).isCaseSensitivityOverridden());
+        }
+    }
+}
+
+void TstFilterStack::switchingPlatformReparsesEveryLayer_data()
+{
+    addPlatformRows();
 }
 
 void TstFilterStack::switchingPlatformReparsesEveryLayer()
 {
-    // 平台只影响**默认**大小写敏感性，而它是在解析时固化进 MaskFilter 的。
-    // 只记下来不重解析的话，「切到 Windows 语义」看起来生效了、实际一条都没变。
-    FilterStack stack = stackWith(QStringLiteral("*.CPP"), QString(), QString());
-    QCOMPARE(stack.platform(), MaskPlatform::Posix);
-    QVERIFY(!acceptsName(stack, QStringLiteral("a.cpp")));
+    QFETCH(MaskPlatform, platform);
+    QFETCH(bool, caseInsensitive);
+    // 显式指定起点，两个方向都要在任意宿主系统上执行。
+    FilterStack stack = stackWith(QStringLiteral("*.CPP"), QStringLiteral("*.CPP"),
+                                 QStringLiteral("*.CPP"), platform);
+    QCOMPARE(stack.platform(), platform);
+    QCOMPARE(acceptsName(stack, QStringLiteral("a.cpp")), caseInsensitive);
 
-    stack.setPlatform(MaskPlatform::Windows);
-    QVERIFY(acceptsName(stack, QStringLiteral("a.cpp")));
+    const MaskPlatform other = platform == MaskPlatform::Windows ? MaskPlatform::Posix
+                                                               : MaskPlatform::Windows;
+    for (MaskPlatform next : {other, platform}) {
+        const bool insensitive = next == MaskPlatform::Windows;
+        stack.setPlatform(next);
+        QCOMPARE(stack.platform(), next);
+        QVERIFY(!stack.isCaseSensitivityOverridden());
+        QCOMPARE(acceptsName(stack, QStringLiteral("a.cpp")), insensitive);
+        for (FilterLayer layer : LqCompare::Filter::allFilterLayers()) {
+            QCOMPARE(stack.declaration(layer), QStringLiteral("*.CPP"));
+            QCOMPARE(stack.filter(layer).platform(), next);
+            QCOMPARE(stack.filter(layer).caseSensitivity(),
+                     insensitive ? Qt::CaseInsensitive : Qt::CaseSensitive);
+            QVERIFY(!stack.filter(layer).isCaseSensitivityOverridden());
+            QCOMPARE(stack.filter(layer).accepts(MaskSubject::forName(QStringLiteral("a.cpp"))),
+                     insensitive);
+            QVERIFY(stack.filter(layer).accepts(MaskSubject::forName(QStringLiteral("a.CPP"))));
+            QVERIFY(!stack.filter(layer).accepts(MaskSubject::forName(QStringLiteral("a.h"))));
+        }
+    }
+}
 
-    stack.setPlatform(MaskPlatform::Posix);
-    QVERIFY(!acceptsName(stack, QStringLiteral("a.cpp")));
+void TstFilterStack::clearingCaseOverrideReturnsToPlatformDefault_data()
+{
+    addPlatformRows();
 }
 
 void TstFilterStack::clearingCaseOverrideReturnsToPlatformDefault()
 {
-    FilterStack stack = stackWith(QStringLiteral("*.CPP"), QString(), QString());
-    stack.setCaseSensitivity(Qt::CaseInsensitive);
-    QVERIFY(acceptsName(stack, QStringLiteral("a.cpp")));
+    QFETCH(MaskPlatform, platform);
+    QFETCH(bool, caseInsensitive);
+    FilterStack stack = stackWith(QStringLiteral("*.CPP"), QStringLiteral("*.CPP"),
+                                 QStringLiteral("*.CPP"), platform);
+    stack.setCaseSensitivity(caseInsensitive ? Qt::CaseSensitive : Qt::CaseInsensitive);
+    QCOMPARE(acceptsName(stack, QStringLiteral("a.cpp")), !caseInsensitive);
 
     stack.clearCaseSensitivityOverride();
     QVERIFY(!stack.isCaseSensitivityOverridden());
-    QVERIFY(!acceptsName(stack, QStringLiteral("a.cpp")));
+    QCOMPARE(acceptsName(stack, QStringLiteral("a.cpp")), caseInsensitive);
+    for (FilterLayer layer : LqCompare::Filter::allFilterLayers()) {
+        QCOMPARE(stack.filter(layer).caseSensitivity(),
+                 caseInsensitive ? Qt::CaseInsensitive : Qt::CaseSensitive);
+        QVERIFY(!stack.filter(layer).isCaseSensitivityOverridden());
+        QCOMPARE(stack.filter(layer).accepts(MaskSubject::forName(QStringLiteral("a.cpp"))),
+                 caseInsensitive);
+    }
+    stack.clearCaseSensitivityOverride();
+    QCOMPARE(acceptsName(stack, QStringLiteral("a.cpp")), caseInsensitive);
 
-    // 平台上本来就默认不敏感时，清掉覆盖之后应当跟着平台走——而不是一律变敏感。
-    stack.setPlatform(MaskPlatform::Windows);
-    QVERIFY(acceptsName(stack, QStringLiteral("a.cpp")));
+    // 清除后再切换平台应恢复跟随默认，不能保留之前的覆盖或旧平台的默认值。
+    const MaskPlatform other = platform == MaskPlatform::Windows ? MaskPlatform::Posix
+                                                               : MaskPlatform::Windows;
+    stack.setPlatform(other);
+    QCOMPARE(acceptsName(stack, QStringLiteral("a.cpp")), !caseInsensitive);
+    for (FilterLayer layer : LqCompare::Filter::allFilterLayers()) {
+        QVERIFY(!stack.filter(layer).isCaseSensitivityOverridden());
+        QCOMPARE(stack.filter(layer).accepts(MaskSubject::forName(QStringLiteral("a.cpp"))),
+                 !caseInsensitive);
+    }
+}
+
+void TstFilterStack::nativePlatformDefaultMatchesHost()
+{
+    // 与显式双平台矩阵分开验证默认构造；预期值不能再由被测函数自己提供。
+#ifdef Q_OS_WIN
+    const MaskPlatform expectedPlatform = MaskPlatform::Windows;
+    const Qt::CaseSensitivity expectedCase = Qt::CaseInsensitive;
+    const bool acceptsDifferentCase = true;
+#else
+    const MaskPlatform expectedPlatform = MaskPlatform::Posix;
+    const Qt::CaseSensitivity expectedCase = Qt::CaseSensitive;
+    const bool acceptsDifferentCase = false;
+#endif
+    QCOMPARE(LqCompare::Filter::currentMaskPlatform(), expectedPlatform);
+    FilterStack stack;
+    QCOMPARE(stack.platform(), expectedPlatform);
+    QVERIFY(!stack.isCaseSensitivityOverridden());
+    for (FilterLayer layer : LqCompare::Filter::allFilterLayers()) {
+        stack.setDeclaration(layer, QStringLiteral("*.CPP"));
+        QCOMPARE(stack.filter(layer).platform(), expectedPlatform);
+        QCOMPARE(stack.filter(layer).caseSensitivity(), expectedCase);
+        QVERIFY(!stack.filter(layer).isCaseSensitivityOverridden());
+        QCOMPARE(stack.filter(layer).accepts(MaskSubject::forName(QStringLiteral("a.cpp"))),
+                 acceptsDifferentCase);
+    }
+    QCOMPARE(acceptsName(stack, QStringLiteral("a.cpp")), acceptsDifferentCase);
+    QVERIFY(acceptsName(stack, QStringLiteral("a.CPP")));
+    QVERIFY(!acceptsName(stack, QStringLiteral("a.h")));
 }
 
 void TstFilterStack::settingTheSamePlatformIsANoOp()

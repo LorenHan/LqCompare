@@ -21,6 +21,7 @@
 #include <QUuid>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
 
 #include <cstdio>
 #include <cstdlib>
@@ -58,27 +59,29 @@ QString outputRoot()
 
 QString childMode()
 {
-    return QString::fromLocal8Bit(qgetenv("LQCOMPARE_TST_SI_MODE"));
+    return qEnvironmentVariable("LQCOMPARE_TST_SI_MODE");
 }
 
 QString childSeed()
 {
-    return QString::fromLocal8Bit(qgetenv("LQCOMPARE_TST_SI_SEED"));
+    return qEnvironmentVariable("LQCOMPARE_TST_SI_SEED");
 }
 
 QString childOutput()
 {
-    return QString::fromLocal8Bit(qgetenv("LQCOMPARE_TST_SI_OUT"));
+    return qEnvironmentVariable("LQCOMPARE_TST_SI_OUT");
 }
 
 QString childWorkingDirectory()
 {
-    return QString::fromLocal8Bit(qgetenv("LQCOMPARE_TST_SI_CWD"));
+    return qEnvironmentVariable("LQCOMPARE_TST_SI_CWD");
 }
 
 QStringList childArguments()
 {
-    const QByteArray raw = qgetenv("LQCOMPARE_TST_SI_ARGS");
+    // QProcessEnvironment 传入的是 Unicode 字符串。Windows 的 qgetenv 会先
+    // 经本地代码页丢字；用 Unicode API 读回，再显式转成 JSON 要求的 UTF-8。
+    const QByteArray raw = qEnvironmentVariable("LQCOMPARE_TST_SI_ARGS").toUtf8();
     if (raw.isEmpty()) {
         return QStringList();
     }
@@ -152,6 +155,32 @@ bool runChildProcessIfRequested(int *exitCode)
     }
     if (exitCode) {
         *exitCode = 0;
+    }
+
+    // 这几个角色只校验测试夹具，不创建守卫、共享内存或本地套接字。
+    if (mode == QLatin1String("fixture-ready-hold")
+        || mode == QLatin1String("fixture-ready-exit")) {
+        announceReady();
+        if (mode == QLatin1String("fixture-ready-hold") && exitCode) {
+            *exitCode = QCoreApplication::exec();
+        }
+        return true;
+    }
+
+    if (mode == QLatin1String("fixture-environment-echo")) {
+        QJsonObject report;
+        report.insert(QStringLiteral("arguments"), QJsonArray::fromStringList(childArguments()));
+        report.insert(QStringLiteral("cwd"), childWorkingDirectory());
+        report.insert(QStringLiteral("seed"), childSeed());
+        report.insert(QStringLiteral("output"), childOutput());
+        const QByteArray data = QJsonDocument(report).toJson(QJsonDocument::Compact);
+        QFile output(childOutput());
+        if (!output.open(QIODevice::WriteOnly) || output.write(data) != data.size()
+            || !output.flush()) {
+            std::fputs("FIXTURE-OUTPUT-FAILED\n", stderr);
+            if (exitCode) *exitCode = 8;
+        }
+        return true;
     }
 
     if (mode == QLatin1String("hold-primary") || mode == QLatin1String("compete-primary")) {
@@ -495,18 +524,19 @@ public:
         QElapsedTimer timer;
         timer.start();
         while (timer.elapsed() < milliseconds) {
-            if (m_process.waitForReadyRead(50)) {
-                m_stdout.append(m_process.readAll());
-            }
+            // qWait 的事件循环可能已经读入全部字节；等待「新字节」的返回值
+            // 不能决定是否读取现有缓冲，进程退出后也必须先收尾再判断状态。
+            m_stdout.append(m_process.readAll());
             if (m_stdout.contains("READY")) {
                 return true;
             }
             if (m_process.state() == QProcess::NotRunning) {
-                return m_stdout.contains("READY");
+                return false;
             }
             QTest::qWait(10);
         }
-        return false;
+        m_stdout.append(m_process.readAll());
+        return m_stdout.contains("READY");
     }
 
     /// 轮询等它退出。**不能**用 `waitForFinished()`：见类注释。
@@ -515,16 +545,15 @@ public:
         QElapsedTimer timer;
         timer.start();
         while (timer.elapsed() < milliseconds) {
-            if (m_process.waitForReadyRead(20)) {
-                m_stdout.append(m_process.readAll());
-            }
+            m_stdout.append(m_process.readAll());
             if (m_process.state() == QProcess::NotRunning) {
-                m_stdout.append(m_process.readAll());
                 return true;
             }
             QTest::qWait(10);
         }
-        return false;
+        // 最后一次 qWait 可能刚好收到尾部输出或退出通知，截止时再读一次。
+        m_stdout.append(m_process.readAll());
+        return m_process.state() == QProcess::NotRunning;
     }
 
     int exitCode() const { return m_process.exitCode(); }
@@ -637,7 +666,7 @@ int main(int argc, char *argv[])
 
     QTimer shutdown;
     if (!childMode().isEmpty()) {
-        const QString stopPath = QString::fromLocal8Bit(qgetenv("LQCOMPARE_TST_SI_STOP"));
+        const QString stopPath = qEnvironmentVariable("LQCOMPARE_TST_SI_STOP");
         QObject::connect(&shutdown, &QTimer::timeout, &application, [&application, stopPath]() {
             if (!stopPath.isEmpty() && QFile::exists(stopPath)) application.quit();
         });
@@ -1531,6 +1560,109 @@ void Tst_SingleInstance::theReportExitCodeFollowsTheRelayStatus()
     secondary.relay = RelayStatus::Delivered;
     QVERIFY(secondary.shouldExit());
     QCOMPARE(secondary.exitCode(), relayExitCodeBandFirst());
+}
+
+// =============================================================================
+// H2 子进程夹具自身：不依赖本地套接字
+// =============================================================================
+
+void Tst_SingleInstance::childReadyPreservesBufferedOutput_data()
+{
+    QTest::addColumn<QString>("mode");
+    QTest::addColumn<bool>("alreadyExited");
+    QTest::newRow("still-running") << QStringLiteral("fixture-ready-hold") << false;
+    QTest::newRow("already-exited") << QStringLiteral("fixture-ready-exit") << true;
+}
+
+void Tst_SingleInstance::childReadyPreservesBufferedOutput()
+{
+    QFETCH(QString, mode);
+    QFETCH(bool, alreadyExited);
+    ChildProcess child(mode, m_seed);
+    // 先由事件循环把 READY 收进 QProcess 缓冲区，故意不调用 readAll。
+    // 此后子进程不会再写字节，waitForReadyRead 不能代替检查已缓冲的数据。
+    if (alreadyExited) {
+        QTRY_COMPARE_WITH_TIMEOUT(child.process()->state(), QProcess::NotRunning, 5000);
+    } else {
+        QTRY_VERIFY_WITH_TIMEOUT(child.process()->bytesAvailable() > 0, 5000);
+        QCOMPARE(child.process()->state(), QProcess::Running);
+    }
+    QVERIFY(child.process()->bytesAvailable() > 0);
+    QVERIFY2(child.waitForReady(150), qPrintable(child.childOutput()));
+    QVERIFY(child.childOutput().contains(QStringLiteral("READY")));
+}
+
+void Tst_SingleInstance::childFinishWaitPreservesBufferedOutput()
+{
+    ChildProcess child(QStringLiteral("fixture-ready-hold"), m_seed);
+    QTRY_VERIFY_WITH_TIMEOUT(child.process()->bytesAvailable() > 0, 5000);
+    // 直接排队一个事件，验证事件分派本身；不依赖 CI 调度是否赶上短周期定时器。
+    bool eventDispatched = false;
+    QObject receiver;
+    QVERIFY(QMetaObject::invokeMethod(&receiver, [&eventDispatched]() {
+        eventDispatched = true;
+    }, Qt::QueuedConnection));
+    QVERIFY(!eventDispatched);
+    // 等退出时即使超时，也应留下已输出的诊断，不能把它误报成空白。
+    QVERIFY(!child.waitForFinished(50));
+    // 首实例依靠父进程的事件循环回话，等待期间必须仍能分派事件。
+    QVERIFY(eventDispatched);
+    QVERIFY2(child.childOutput().contains(QStringLiteral("READY")),
+             qPrintable(child.childOutput()));
+    child.stop();
+    QCOMPARE(child.process()->state(), QProcess::NotRunning);
+    QCOMPARE(child.process()->exitStatus(), QProcess::NormalExit);
+    QCOMPARE(child.exitCode(), 0);
+}
+
+void Tst_SingleInstance::childFinishPreservesOutputAfterExit()
+{
+    ChildProcess child(QStringLiteral("fixture-ready-exit"), m_seed);
+    QTRY_COMPARE_WITH_TIMEOUT(child.process()->state(), QProcess::NotRunning, 5000);
+    QVERIFY(child.process()->bytesAvailable() > 0);
+    QVERIFY(child.waitForFinished(150));
+    QCOMPARE(child.process()->exitStatus(), QProcess::NormalExit);
+    QCOMPARE(child.exitCode(), 0);
+    QVERIFY(child.childOutput().contains(QStringLiteral("READY")));
+}
+
+void Tst_SingleInstance::childEnvironmentPreservesUnicode_data()
+{
+    QTest::addColumn<QStringList>("arguments");
+    QTest::newRow("unicode-and-whitespace")
+        << (QStringList{QString(), QStringLiteral("line one\nline two"),
+                        QStringLiteral(" leading\t中文 \U0001F680 trailing "),
+                        QStringLiteral("quote\" and backslash\\")});
+    QTest::newRow("empty-list") << QStringList();
+    QTest::newRow("single-empty-argument") << (QStringList{QString()});
+}
+
+void Tst_SingleInstance::childEnvironmentPreservesUnicode()
+{
+    QFETCH(QStringList, arguments);
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString cwd = directory.filePath(QStringLiteral("工作 目录-\U0001F680"));
+    QVERIFY(QDir().mkpath(cwd));
+    const QString output = QDir(cwd).filePath(QStringLiteral("收到-\U0001F680.json"));
+    const QString seed = QStringLiteral("夹具-\U0001F680-") + m_seed;
+    ChildProcess child(QStringLiteral("fixture-environment-echo"), seed, arguments, cwd, output);
+    QVERIFY2(child.waitForFinished(), qPrintable(child.childOutput()));
+    QCOMPARE(child.process()->exitStatus(), QProcess::NormalExit);
+    QCOMPARE(child.exitCode(), 0);
+
+    QFile file(output);
+    QVERIFY2(file.open(QIODevice::ReadOnly), qPrintable(file.errorString()));
+    QJsonParseError error;
+    const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &error);
+    QCOMPARE(error.error, QJsonParseError::NoError);
+    QVERIFY(document.isObject());
+    const QJsonObject report = document.object();
+    QCOMPARE(report.value(QStringLiteral("arguments")).toArray(),
+             QJsonArray::fromStringList(arguments));
+    QCOMPARE(report.value(QStringLiteral("cwd")).toString(), cwd);
+    QCOMPARE(report.value(QStringLiteral("seed")).toString(), seed);
+    QCOMPARE(report.value(QStringLiteral("output")).toString(), output);
 }
 
 // =============================================================================

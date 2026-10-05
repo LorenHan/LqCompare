@@ -27,6 +27,8 @@ const char *trashAvailabilityIdentifier(TrashAvailability availability)
         return "platform-not-supported";
     case TrashAvailability::Unknown:
         return "unknown";
+    case TrashAvailability::RecoverabilityNotGuaranteed:
+        return "recoverability-not-guaranteed";
     }
     return "unknown";
 }
@@ -75,6 +77,11 @@ TrashDecision decideTrash(TrashAvailability availability)
     case TrashAvailability::Unknown:
         decision.reason = QStringLiteral("无法确认这个位置是否支持回收站");
         decision.advice = QStringLiteral("建议取消本次删除；确认不需要后可以选择永久删除");
+        break;
+
+    case TrashAvailability::RecoverabilityNotGuaranteed:
+        decision.reason = QStringLiteral("当前回收站后端尚不能保证删除可恢复，已阻止本次删除");
+        decision.advice = QStringLiteral("请取消并保留文件；待安全的回收站删除支持完成后再试");
         break;
     }
 
@@ -341,7 +348,7 @@ QString parseXdgTrashInfoPath(const QString &contents)
 // 三个工厂函数由各自的平台文件提供实现：
 //   trash_mac.mm    —— macOS（Foundation，必须是 .mm）
 //   trash_linux.cpp —— Linux（XDG 规范）
-//   trash_win.cpp   —— Windows（SHFileOperation + FOF_ALLOWUNDO）
+//   trash_win.cpp   —— Windows（可恢复保证未验证时拒绝删除的保守后端）
 TrashService *createMacTrashService();
 TrashService *createLinuxTrashService();
 TrashService *createWindowsTrashService();

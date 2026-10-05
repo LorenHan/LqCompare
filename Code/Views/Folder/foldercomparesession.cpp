@@ -8,6 +8,7 @@
 #include <QScopedValueRollback>
 
 #include <cmath>
+#include <limits>
 
 namespace LqCompare {
 namespace {
@@ -18,6 +19,8 @@ const QString recursiveKey = QStringLiteral("folder.recursive");
 const QString contentKey = QStringLiteral("folder.compareContent");
 const QString depthKey = QStringLiteral("folder.maximumDepth");
 const QString bytesKey = QStringLiteral("folder.compareFirstBytes");
+const QString timestampsKey = QStringLiteral("folder.compareTimestamps");
+const QString toleranceKey = QStringLiteral("folder.timeToleranceMs");
 
 QString optionsError(const Folder::Options &options)
 {
@@ -31,6 +34,8 @@ QString optionsError(const Folder::Options &options)
             .arg(Folder::kMaximumRecursionDepth);
     if (options.compareFirstBytes < 0)
         return QObject::tr("「只比较前 N 字节」必须是 0（关闭）或正整数。");
+    if (options.timeToleranceMs < 0)
+        return QObject::tr("时间容差必须是非负整数毫秒。");
     const auto parsed = Filter::MaskFilter::parse(options.scanMaskDeclaration);
     return parsed.ok() ? QString() : QObject::tr("扫描掩码无效：\n%1").arg(parsed.describeErrors());
 }
@@ -90,6 +95,13 @@ QString settingsOptions(SessionSettings *settings, Folder::Options *options)
     if (content.type() != QVariant::Bool)
         return invalid(contentKey);
     restored.compareContent = content.toBool();
+    const QVariant timestamps = settings->value(timestampsKey, restored.compareTimestamps);
+    if (timestamps.type() != QVariant::Bool)
+        return invalid(timestampsKey);
+    restored.compareTimestamps = timestamps.toBool();
+    if (!exactInteger(settings->value(toleranceKey, restored.timeToleranceMs), 0,
+                      std::numeric_limits<int>::max(), &restored.timeToleranceMs))
+        return invalid(toleranceKey);
     int caseValue = int(restored.nameCaseSensitivity);
     if (!exactInteger(settings->value(caseKey, caseValue), int(Qt::CaseInsensitive),
                       int(Qt::CaseSensitive), &caseValue))
@@ -118,7 +130,8 @@ FolderCompareSession::FolderCompareSession(QObject *parent)
         if (m_writingSettings)
             return;
         if (key.isEmpty() || key == maskKey || key == caseKey || key == recursiveKey
-            || key == contentKey || key == depthKey || key == bytesKey)
+            || key == contentKey || key == depthKey || key == bytesKey
+            || key == timestampsKey || key == toleranceKey)
             readComparisonSettings();
     });
     // Persist defaults too: a saved session keeps its comparison semantics if
@@ -343,6 +356,8 @@ bool FolderCompareSession::setComparisonOptions(const Folder::Options &options, 
     settings->setValue(contentKey, options.compareContent);
     settings->setValue(depthKey, options.maximumDepth);
     settings->setValue(bytesKey, options.compareFirstBytes);
+    settings->setValue(timestampsKey, options.compareTimestamps);
+    settings->setValue(toleranceKey, options.timeToleranceMs);
     if (view())
         view()->setOptions(options);
     if (error)

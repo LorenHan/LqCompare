@@ -9,6 +9,7 @@
 #include <QColor>
 #include <QComboBox>
 #include <QDateTime>
+#include <QDoubleSpinBox>
 #include <QEvent>
 #include <QFileDialog>
 #include <QHeaderView>
@@ -35,6 +36,7 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include <memory>
+#include <limits>
 #include <vector>
 
 namespace LqCompare {
@@ -47,6 +49,22 @@ namespace {
 bool usesDarkPalette()
 {
     return QApplication::palette().color(QPalette::Base).lightness() < 128;
+}
+
+QString timeDifferenceText(const Folder::TimeDifference &difference)
+{
+    if (!difference.valid)
+        return QObject::tr("未知");
+    QString seconds = QString::number(difference.nanoseconds / 1000000000);
+    const quint64 fraction = difference.nanoseconds % 1000000000;
+    if (fraction) {
+        QString decimals = QString::number(fraction).rightJustified(9, QLatin1Char('0'));
+        while (decimals.endsWith(QLatin1Char('0')))
+            decimals.chop(1);
+        seconds += QLocale().decimalPoint() + decimals;
+    }
+    return (difference.negative ? QStringLiteral("−")
+        : difference.nanoseconds ? QStringLiteral("+") : QString()) + seconds + QStringLiteral(" s");
 }
 
 } // namespace
@@ -85,7 +103,8 @@ QIcon themedStatusIcon(Folder::Status status, const Folder::ColorScheme &scheme,
 class FolderTreeModel : public QAbstractItemModel
 {
 public:
-    enum Column { LeftName, LeftSize, LeftModified, State, RightName, RightSize, RightModified, ColumnCount };
+    enum Column { LeftName, LeftSize, LeftModified, State, RightName, RightSize, RightModified,
+                  TimeDelta, ColumnCount };
     enum Role { PathRole = Qt::UserRole + 1, StatusRole, SortRole, InComparisonRole, DirectoryRole };
     explicit FolderTreeModel(QObject *parent) : QAbstractItemModel(parent) {}
 
@@ -129,6 +148,8 @@ public:
     // 本次比较有没有用上有效基线（DIR-011 第 3 条）。「为什么是这个状态」
     // 要如实回答这一条，不能靠猜。
     bool baselineApplied() const { return m_result.baselineApplied; }
+    bool timestampsCompared() const { return m_result.timestampsCompared; }
+    int timeToleranceMs() const { return m_result.timeToleranceMs; }
 
     QModelIndex index(int row, int column, const QModelIndex &parent = {}) const override
     {
@@ -159,7 +180,11 @@ public:
 
     QVariant headerData(int section, Qt::Orientation orientation, int role) const override
     {
-        if (orientation != Qt::Horizontal || role != Qt::DisplayRole)
+        if (orientation != Qt::Horizontal)
+            return {};
+        if (role == Qt::ToolTipRole && section == TimeDelta)
+            return tr("修改时间差（左减右，UTC）：正值表示左侧较新，负值表示右侧较新。容差只影响时间关系，不证明内容相同。");
+        if (role != Qt::DisplayRole)
             return {};
         switch (section) {
         case LeftName: return tr("左侧名称");
@@ -167,6 +192,7 @@ public:
         case LeftSize: case RightSize: return tr("大小（字节）");
         case LeftModified: case RightModified: return tr("修改时间");
         case State: return tr("状态");
+        case TimeDelta: return tr("时间差（左−右）");
         }
         return {};
     }
@@ -189,11 +215,17 @@ public:
         if (role == DirectoryRole)
             return item->isDirectory();
         if (role == Qt::ToolTipRole) {
+            if (index.column() == TimeDelta)
+                return !m_result.timestampsCompared ? tr("本次比较已忽略时间戳。")
+                    : tr("%1\nUTC 时间差（左减右）：%2\n容差：%3 ms；时间关系不影响内容是否相同。")
+                        .arg(Folder::timeRelationLabel(item->timeRelation),
+                             timeDifferenceText(Folder::timeDifferenceFor(*item)))
+                        .arg(m_result.timeToleranceMs);
             return QStringLiteral("%1\n%2\n%3\n%4")
                 .arg(item->relativePath, item->left.info.path, item->right.info.path,
                      item->explanation + (item->excludedByMask ? QStringLiteral("\n") + item->filterReason : QString())).trimmed();
         }
-        if (role == Qt::TextAlignmentRole && sizeColumn)
+        if (role == Qt::TextAlignmentRole && (sizeColumn || index.column() == TimeDelta))
             return int(Qt::AlignRight | Qt::AlignVCenter);
         if (role == Qt::ForegroundRole) {
             const bool dark = usesDarkPalette();
@@ -224,6 +256,8 @@ public:
                 ? QStyle::SP_FileLinkIcon : QStyle::SP_FileIcon);
         }
         if (role == SortRole) {
+            if (index.column() == TimeDelta)
+                return {}; // 差值由代理按精确符号与幅度排序。
             if (nameColumn)
                 return item->relativePath;
             if (sizeColumn)
@@ -235,6 +269,17 @@ public:
         }
         if (role != Qt::DisplayRole)
             return {};
+        if (index.column() == TimeDelta) {
+            if (!m_result.timestampsCompared)
+                return tr("已忽略");
+            const auto delta = Folder::timeDifferenceFor(*item);
+            return delta.valid
+                ? tr("%1 · %2").arg(item->timeRelation == Folder::TimeRelation::Same
+                    ? tr("同") : item->timeRelation == Folder::TimeRelation::LeftNewer
+                    ? tr("左新") : item->timeRelation == Folder::TimeRelation::RightNewer
+                    ? tr("右新") : tr("未知"), timeDifferenceText(delta))
+                : tr("未知");
+        }
         if (index.column() == State) {
             if (!item->inComparison())
                 return tr("已排除（未比较）");
@@ -309,6 +354,25 @@ public:
     }
 
 protected:
+    bool lessThan(const QModelIndex &left, const QModelIndex &right) const override
+    {
+        if (left.column() != FolderTreeModel::TimeDelta)
+            return QSortFilterProxyModel::lessThan(left, right);
+        const auto *model = static_cast<const FolderTreeModel *>(sourceModel());
+        if (!model->timestampsCompared())
+            return false;
+        const auto a = Folder::timeDifferenceFor(*model->entry(left));
+        const auto b = Folder::timeDifferenceFor(*model->entry(right));
+        // 按原始有符号差值排序，不按文案、绝对值或浮点近似排序。
+        if (a.valid != b.valid)
+            return a.valid;
+        if (!a.valid)
+            return false;
+        if (a.negative != b.negative)
+            return a.negative;
+        return a.negative ? a.nanoseconds > b.nanoseconds : a.nanoseconds < b.nanoseconds;
+    }
+
     bool filterAcceptsRow(int row, const QModelIndex &parent) const override
     {
         const QModelIndex index = sourceModel()->index(row, 0, parent);
@@ -397,6 +461,7 @@ FolderCompareView::FolderCompareView(QWidget *parent) : QWidget(parent)
     m_maximumDepth->setRange(0, Folder::kMaximumRecursionDepth);
     toolbar->addWidget(m_maximumDepth);
     m_content = new QCheckBox(tr("逐字节比较内容"), this);
+    m_content->setObjectName(QStringLiteral("folderCompareContent"));
     m_content->setChecked(true);
     m_content->setToolTip(tr("关闭后仅比较大小；大小相同会显示未知。符号链接只比较链接本身。"));
     toolbar->addWidget(m_content);
@@ -418,7 +483,9 @@ FolderCompareView::FolderCompareView(QWidget *parent) : QWidget(parent)
     layout->addLayout(toolbar);
 
     auto *optionsPanel = new QWidget(this);
-    auto *optionsLayout = new QHBoxLayout(optionsPanel);
+    auto *optionsRows = new QVBoxLayout(optionsPanel);
+    optionsRows->setContentsMargins(0, 0, 0, 0);
+    auto *optionsLayout = new QHBoxLayout;
     optionsLayout->setContentsMargins(0, 0, 0, 0);
     auto *optionsDescription = new QLabel(tr("扫描掩码\n每行一条，- 开头排除"), optionsPanel);
     optionsLayout->addWidget(optionsDescription);
@@ -442,12 +509,58 @@ FolderCompareView::FolderCompareView(QWidget *parent) : QWidget(parent)
     m_maskError->setWordWrap(true);
     optionsNotes->addWidget(m_maskError);
     optionsLayout->addLayout(optionsNotes, 1);
+    optionsRows->addLayout(optionsLayout);
+    auto *timeRow = new QHBoxLayout;
+    m_compareTimestamps = new QCheckBox(tr("比较时间戳"), optionsPanel);
+    m_compareTimestamps->setObjectName(QStringLiteral("folderCompareTimestamps"));
+    m_compareTimestamps->setToolTip(tr("比较 UTC 修改时间，不受时区或夏令时影响；时间关系与内容结论独立。改动后重新比较当前来源。"));
+    m_compareTimestamps->setAccessibleName(tr("比较时间戳"));
+    timeRow->addWidget(m_compareTimestamps);
+    auto *toleranceLabel = new QLabel(tr("容差："), optionsPanel);
+    timeRow->addWidget(toleranceLabel);
+    m_timeTolerance = new QDoubleSpinBox(optionsPanel);
+    m_timeTolerance->setObjectName(QStringLiteral("folderTimeTolerance"));
+    m_timeTolerance->setDecimals(3);
+    m_timeTolerance->setRange(0, std::numeric_limits<int>::max() / 1000.0);
+    m_timeTolerance->setSingleStep(0.1);
+    m_timeTolerance->setSuffix(QStringLiteral(" s"));
+    m_timeTolerance->setKeyboardTracking(false);
+    m_timeTolerance->setAccessibleName(tr("时间容差（秒）"));
+    m_timeTolerance->setToolTip(tr("差值小于或等于容差时，时间关系为相同。默认 2 秒兼容 FAT 精度；0 表示严格比较。"));
+    toleranceLabel->setBuddy(m_timeTolerance);
+    timeRow->addWidget(m_timeTolerance);
+    auto *ignoreTime = new QPushButton(tr("仅大小与内容"), optionsPanel);
+    ignoreTime->setObjectName(QStringLiteral("folderIgnoreTimePreset"));
+    ignoreTime->setToolTip(tr("忽略时间，只比大小与完整内容；同时关闭前 N 字节限制。"));
+    ignoreTime->setAccessibleName(tr("忽略时间，只比大小与内容"));
+    timeRow->addWidget(ignoreTime);
+    timeRow->addStretch();
+    optionsRows->addLayout(timeRow);
     optionsPanel->setVisible(false);
     layout->addWidget(optionsPanel);
     connect(optionsToggle, &QToolButton::toggled, optionsPanel, &QWidget::setVisible);
     connect(m_scanMask, &QPlainTextEdit::textChanged, this, [this] {
         const auto parsed = Filter::MaskFilter::parse(m_scanMask->toPlainText());
         m_maskError->setText(parsed.ok() ? QString() : parsed.describeErrors());
+    });
+    connect(m_compareTimestamps, &QCheckBox::toggled, this, [this](bool enabled) {
+        m_timeTolerance->setEnabled(enabled);
+        emit rescanRequested();
+    });
+    connect(m_timeTolerance, qOverload<double>(&QDoubleSpinBox::valueChanged), this, [this] {
+        if (m_compareTimestamps->isChecked())
+            emit rescanRequested();
+    });
+    connect(ignoreTime, &QPushButton::clicked, this, [this] {
+        auto staged = options();
+        if (!staged.compareTimestamps && staged.compareContent && staged.compareFirstBytes == 0)
+            return;
+        staged.compareTimestamps = false;
+        staged.compareContent = true;
+        staged.compareFirstBytes = 0;
+        // 一次回填、一次重扫，不能扫描预设的中间状态。
+        setOptions(staged);
+        emit rescanRequested();
     });
 
     auto *displayToolbar = new QHBoxLayout;
@@ -512,6 +625,13 @@ FolderCompareView::FolderCompareView(QWidget *parent) : QWidget(parent)
         tree->header()->setStretchLastSection(false);
         tree->header()->setSectionResizeMode(QHeaderView::Interactive);
         tree->header()->setSectionResizeMode(FolderTreeModel::State, QHeaderView::Stretch);
+        connect(tree->header(), &QHeaderView::sortIndicatorChanged, this,
+                [this, tree](int column, Qt::SortOrder order) {
+            auto *other = tree == m_leftTree ? m_rightTree : m_leftTree;
+            // 只有时间差是共同的排序依据，单侧列不能冒充对侧列已排序。
+            const QSignalBlocker blocker(other->header());
+            other->header()->setSortIndicator(column == FolderTreeModel::TimeDelta ? column : -1, order);
+        });
         // QTreeView emits activated for both double-click and Return. Connecting
         // doubleClicked as well would open the same pair twice on some platforms.
         connect(tree, &QTreeView::activated, this, &FolderCompareView::activate);
@@ -535,12 +655,14 @@ FolderCompareView::FolderCompareView(QWidget *parent) : QWidget(parent)
         m_rightTree->hideColumn(column);
     m_rightTree->setTreePosition(FolderTreeModel::RightName);
     m_rightTree->header()->moveSection(m_rightTree->header()->visualIndex(FolderTreeModel::State), 6);
-    m_leftTree->setColumnWidth(FolderTreeModel::LeftName, 210);
-    m_rightTree->setColumnWidth(FolderTreeModel::RightName, 210);
-    m_leftTree->setColumnWidth(FolderTreeModel::LeftSize, 100);
-    m_rightTree->setColumnWidth(FolderTreeModel::RightSize, 100);
-    m_leftTree->setColumnWidth(FolderTreeModel::LeftModified, 195);
-    m_rightTree->setColumnWidth(FolderTreeModel::RightModified, 195);
+    m_leftTree->setColumnWidth(FolderTreeModel::LeftName, 180);
+    m_rightTree->setColumnWidth(FolderTreeModel::RightName, 180);
+    m_leftTree->setColumnWidth(FolderTreeModel::LeftSize, 85);
+    m_rightTree->setColumnWidth(FolderTreeModel::RightSize, 85);
+    m_leftTree->setColumnWidth(FolderTreeModel::LeftModified, 170);
+    m_rightTree->setColumnWidth(FolderTreeModel::RightModified, 170);
+    m_leftTree->setColumnWidth(FolderTreeModel::TimeDelta, 145);
+    m_rightTree->setColumnWidth(FolderTreeModel::TimeDelta, 145);
     m_leftTree->sortByColumn(FolderTreeModel::LeftName, Qt::AscendingOrder);
     connect(m_leftTree, &QTreeView::expanded, m_rightTree, &QTreeView::expand);
     connect(m_rightTree, &QTreeView::expanded, m_leftTree, &QTreeView::expand);
@@ -859,6 +981,8 @@ Folder::Options FolderCompareView::options() const
     options.scanMaskDeclaration = m_scanMask->toPlainText();
     options.nameCaseSensitivity = m_caseSensitive->isChecked() ? Qt::CaseSensitive : Qt::CaseInsensitive;
     options.compareFirstBytes = m_compareFirstBytes;
+    options.compareTimestamps = m_compareTimestamps->isChecked();
+    options.timeToleranceMs = qRound(m_timeTolerance->value() * 1000.0);
     return options;
 }
 
@@ -878,6 +1002,11 @@ void FolderCompareView::setOptions(const Folder::Options &options)
     m_scanMask->setPlainText(options.scanMaskDeclaration);
     m_caseSensitive->setChecked(options.nameCaseSensitivity == Qt::CaseSensitive);
     m_compareFirstBytes = options.compareFirstBytes;
+    const QSignalBlocker timestampsBlocker(m_compareTimestamps);
+    const QSignalBlocker toleranceBlocker(m_timeTolerance);
+    m_compareTimestamps->setChecked(options.compareTimestamps);
+    m_timeTolerance->setValue(options.timeToleranceMs / 1000.0);
+    m_timeTolerance->setEnabled(options.compareTimestamps);
 }
 
 void FolderCompareView::activate(const QModelIndex &index)
@@ -940,7 +1069,10 @@ QString FolderCompareView::statusExplanation(const QModelIndex &index) const
     const auto *entry = entryForIndex(index);
     if (!entry)
         return {};
-    const auto lines = Folder::statusReasonLines(*entry, options(), m_model->baselineApplied());
+    auto comparedOptions = options();
+    comparedOptions.compareTimestamps = m_model->timestampsCompared();
+    comparedOptions.timeToleranceMs = m_model->timeToleranceMs();
+    const auto lines = Folder::statusReasonLines(*entry, comparedOptions, m_model->baselineApplied());
     // 三节**恒定**出现，哪怕某一节没有内容。规格要求这一栏「列出各准则、
     // 覆盖策略与最终结论」；按需省略空小节会让读者分不清「这一节没有内容」
     // 和「这一节根本没实现」，而排查一个诡异状态时最要紧的恰恰是这一区分。

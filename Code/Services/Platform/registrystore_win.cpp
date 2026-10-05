@@ -1,9 +1,8 @@
 /// \file
 /// \brief 注册表存储的 Windows 原生后端（PRD: PLAT-005）。
 ///
-/// **本文件在本项目的开发机（macOS）上从未被编译过。**
-/// 这一点必须如实标出来，与 filesystem_win.cpp / trash_win.cpp / iconservice_win.cpp
-/// 是同一类遗留，见 docs/development/current-handoff.md 的「已知未验证」一节。
+/// **本文件已在 Linux 上用 Windows Qt 头文件交叉编译，尚未执行真实注册表操作。**
+/// 交叉编译只证明声明与类型可用，不能代替 Windows 上的安装、卸载与资源管理器验收。
 ///
 /// 正因为它无法在开发机上验证，本文件刻意写得**薄**：
 /// 所有规则（写哪些键、卸载怎么还原、残留怎么查、大小写怎么归一）
@@ -20,6 +19,15 @@
 ///   3. **写入字符串要带上结尾的 NUL**（长度用 `(字符数 + 1) * 2`）。
 ///      少了它，值在 regedit 里看起来正常，但某些读取方会把结尾的
 ///      垃圾字节一起读进去。
+
+// RegDeleteTreeW 从 Vista 起可用；旧版 MinGW 会按目标版本隐藏它的声明。
+// 必须早于 Qt/标准库头文件，避免 CRT 先设置更旧的默认目标；只影响本编译单元。
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0600
+#endif
+#ifndef WINVER
+#define WINVER _WIN32_WINNT
+#endif
 
 #include "registrystore.h"
 
@@ -352,7 +360,7 @@ QStringList Win32RegistryStore::valueNames(const QString &key) const
 
     // 与内存后端保持同样的顺序：默认值在最前，其余按名字排序。
     // 顺序不一致会让「校验报告」在两个后端上给出不同的 diff。
-    QString named = result;
+    QStringList named = result;
     named.removeAll(QString());
     std::sort(named.begin(), named.end());
 

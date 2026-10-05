@@ -244,6 +244,7 @@ const char *rawErrorName(ErrorDomain domain, qint64 raw)
         case Win32Error::InvalidName:            return "ERROR_INVALID_NAME";
         case Win32Error::FilenameExceededRange:  return "ERROR_FILENAME_EXCED_RANGE";
         case Win32Error::DirectoryNotEmpty:      return "ERROR_DIR_NOT_EMPTY";
+        case Win32Error::Directory:             return "ERROR_DIRECTORY";
         default:
             return nullptr;
         }
@@ -390,6 +391,8 @@ FileSystemError classifyWindowsErrorCode(unsigned long code)
         return FileSystemError::NoSpace;
     if (code == NotSupported)
         return FileSystemError::NotSupported;
+    if (code == Directory)
+        return FileSystemError::NotDirectory;
     // ERROR_DIR_NOT_EMPTY 在这里归为 Unknown 而不是 Busy：
     // 「目录非空」不会因为重试而改变，界面绝不能把它当成可重试的占用问题。
     return FileSystemError::Unknown;
@@ -480,6 +483,7 @@ static_assert(Win32Error::DiskFull == ERROR_DISK_FULL, "Win32 错误码常量不
 static_assert(Win32Error::InvalidName == ERROR_INVALID_NAME, "Win32 错误码常量不匹配");
 static_assert(Win32Error::FilenameExceededRange == ERROR_FILENAME_EXCED_RANGE, "Win32 错误码常量不匹配");
 static_assert(Win32Error::DirectoryNotEmpty == ERROR_DIR_NOT_EMPTY, "Win32 错误码常量不匹配");
+static_assert(Win32Error::Directory == ERROR_DIRECTORY, "Win32 错误码常量不匹配");
 #endif
 
 // -----------------------------------------------------------------------------

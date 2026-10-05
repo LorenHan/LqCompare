@@ -2,16 +2,80 @@
 #include "comparesession.h"
 #include "homepage.h"
 
+#include <QApplication>
 #include <QMenu>
 #include <QMessageBox>
+#include <QPainter>
+#include <QProxyStyle>
+#include <QStyleOption>
 #include <QTabBar>
 
 namespace LqCompare {
+namespace {
+// QTabBar 原有关闭按钮仍负责点击、索引和 tabCloseRequested；只替换它的
+// 关闭图元。原生样式的缓存图标可能一直是黑色，不能靠文字调色板给它着色。
+class SessionTabCloseStyle final : public QProxyStyle {
+public:
+    void drawPrimitive(PrimitiveElement element, const QStyleOption *option,
+                       QPainter *painter, const QWidget *widget = nullptr) const override
+    {
+        if (element != PE_IndicatorTabClose) {
+            QProxyStyle::drawPrimitive(element, option, painter, widget);
+            return;
+        }
+        const QPalette::ColorGroup group = option->state & State_Enabled
+                ? QPalette::Active : QPalette::Disabled;
+        const QPalette palette = QApplication::palette("QTabBar");
+        painter->save();
+        if (option->state & (State_MouseOver | State_Sunken))
+            painter->fillRect(option->rect, palette.brush(group, QPalette::Midlight));
+        if (option->state & State_HasFocus) {
+            painter->setPen(palette.color(group, QPalette::Highlight));
+            painter->drawRect(option->rect.adjusted(0, 0, -1, -1));
+        }
+        painter->setRenderHint(QPainter::Antialiasing);
+        painter->setPen(QPen(palette.color(group, QPalette::ButtonText), 1.5));
+        const qreal side = qMax(6, qMin(option->rect.width(), option->rect.height()) / 2);
+        const QRectF cross(QPointF(option->rect.center()) - QPointF(side / 2, side / 2),
+                           QSizeF(side, side));
+        painter->drawLine(cross.topLeft(), cross.bottomRight());
+        painter->drawLine(cross.topRight(), cross.bottomLeft());
+        painter->restore();
+    }
+};
+}
+
 SessionArea::SessionArea(QWidget *parent) : QTabWidget(parent)
 {
     setDocumentMode(true);
     setTabsClosable(true);
     setMovable(true);
+    // 原生标签可能忽略背景色而保留浅色文字。范围限定到会话栏，不影响
+    // Ribbon 或会话内容；和首页一样，主题/字体改变时更新局部样式缓存。
+    const auto updateAppearance = [this] {
+        const QPalette palette = QApplication::palette("QTabBar");
+        const auto color = [&palette](QPalette::ColorRole role,
+                                      QPalette::ColorGroup group = QPalette::Active) {
+            const QColor value = palette.color(group, role);
+            return QStringLiteral("rgba(%1,%2,%3,%4)")
+                    .arg(value.red()).arg(value.green()).arg(value.blue()).arg(value.alpha());
+        };
+        tabBar()->setStyleSheet(QStringLiteral(
+            "QTabBar::tab { background-color: %1; color: %2;"
+            " border: 1px solid %3; border-bottom: 2px solid %3;"
+            " border-radius: 0; padding: 4px 10px; }"
+            "QTabBar::tab:hover:enabled { background-color: %4; }"
+            "QTabBar::tab:selected { background-color: %5; border-bottom-color: %6; }"
+            "QTabBar:focus::tab:selected { border-color: %6; }"
+            "QTabBar::tab:disabled { background-color: %7; color: %8; }")
+            .arg(color(QPalette::Button), color(QPalette::ButtonText), color(QPalette::Mid),
+                 color(QPalette::Midlight), color(QPalette::Base), color(QPalette::Highlight),
+                 color(QPalette::Button, QPalette::Disabled),
+                 color(QPalette::ButtonText, QPalette::Disabled)));
+    };
+    updateAppearance();
+    connect(qApp, &QApplication::paletteChanged, tabBar(), updateAppearance);
+    connect(qApp, &QApplication::fontChanged, tabBar(), updateAppearance);
     m_home = new HomePage(this);
     addTab(m_home, tr("Home"));
     tabBar()->setTabButton(indexOf(m_home), QTabBar::RightSide, nullptr);
@@ -65,6 +129,14 @@ int SessionArea::addSession(CompareSession *session)
     session->setParent(this);
     m_sessions.insert(page, session);
     const int index = addTab(page, session->title());
+    // 关闭按钮所在侧由原生风格决定，保留 Qt 创建的同一个按钮及其连接。
+    for (const auto side : {QTabBar::LeftSide, QTabBar::RightSide}) {
+        if (QWidget *closeButton = tabBar()->tabButton(index, side)) {
+            auto *appearance = new SessionTabCloseStyle;
+            appearance->setParent(closeButton);
+            closeButton->setStyle(appearance);
+        }
+    }
     connect(session, &CompareSession::titleChanged, this, [this, session] { updateLabel(session); });
     connect(session, &CompareSession::dirtyChanged, this, [this, session] {
         updateLabel(session);

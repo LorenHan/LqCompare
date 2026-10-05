@@ -2,6 +2,7 @@
 #include "textdiff.h"
 #include "compareconclusion.h"
 
+#include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QSaveFile>
@@ -30,8 +31,9 @@ QByteArray fileIdentity(HANDLE handle)
 {
     BY_HANDLE_FILE_INFORMATION info;
     if (handle == INVALID_HANDLE_VALUE || !GetFileInformationByHandle(handle, &info)) return {};
-    return QByteArray::number(info.dwVolumeSerialNumber) + ':'
-        + QByteArray::number(info.nFileIndexHigh) + ':' + QByteArray::number(info.nFileIndexLow);
+    // DWORD 在 MinGW 中是 unsigned long；明确选无符号重载，保留高位值。
+    return QByteArray::number(qulonglong(info.dwVolumeSerialNumber)) + ':'
+        + QByteArray::number(qulonglong(info.nFileIndexHigh)) + ':' + QByteArray::number(qulonglong(info.nFileIndexLow));
 }
 #else
 QByteArray fileIdentity(const struct stat &info)

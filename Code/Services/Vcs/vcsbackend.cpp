@@ -48,6 +48,16 @@ bool validUtf8(const QByteArray &bytes) {
     QTextCodec::codecForName("UTF-8")->toUnicode(bytes.constData(), bytes.size(), &state);
     return state.invalidChars == 0 && state.remainingChars == 0;
 }
+bool validBlamePath(const QString &path) {
+    // 历史路径来自 Git 树，不是本机文件系统；Windows 的 cleanPath 会改写反斜杠。
+    // 这里只验证并保留元数据，实际文件访问仍由 relativePath 与工作副本边界检查负责。
+    if (path.isEmpty() || path.contains(QChar::Null))
+        return false;
+    const auto components = path.split(QLatin1Char('/'));
+    return std::all_of(components.cbegin(), components.cend(), [](const QString &component) {
+        return !component.isEmpty() && component != QStringLiteral(".") && component != QStringLiteral("..");
+    });
+}
 Result<QString> blameFilename(const QByteArray &encoded) {
     Result<QString> result;
     QByteArray decoded;
@@ -647,8 +657,7 @@ Result<QVector<BlameLine>> GitBackend::blame(const Repository &repo, const QStri
             field = Filename;
             const auto filename = blameFilename(line.mid(9));
             if (!filename.ok()) { result.value.clear(); result.error = filename.error; return result; }
-            const auto checkedPath = relativePath(repo, filename.value);
-            if (!checkedPath.ok() || checkedPath.value != filename.value)
+            if (!validBlamePath(filename.value))
                 return invalid(QStringLiteral("历史文件名不是有效的仓库相对路径"));
             current.originalPath = filename.value;
         }

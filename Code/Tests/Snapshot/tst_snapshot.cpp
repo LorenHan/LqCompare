@@ -113,6 +113,9 @@ public:
     QString inaccessibleDirectory;
     QString changedFile;
     mutable int changedFileStats = 0;
+    QString changedDirectory;
+    int directoryMutation = 0;
+    mutable int changedDirectoryStats = 0;
 
     Qt::CaseSensitivity caseSensitivity() const override { return native->caseSensitivity(); }
     QChar separator() const override { return native->separator(); }
@@ -125,6 +128,20 @@ public:
         auto info = native->stat(path, error);
         if (path == changedFile && ++changedFileStats > 1)
             ++info.size;
+        // 目录稳定性各字段独立注入；不能因修正平台查询而放宽一致性检查。
+        if (path == changedDirectory && ++changedDirectoryStats > 1) {
+            switch (directoryMutation) {
+            case 0: ++info.size; break;
+            case 1: info.lastModified = Files::FileTime::fromNanosecondsSinceEpoch(
+                        info.lastModified.nanosecondsSinceEpoch() + 1); break;
+            case 2: info.attributes ^= Files::FileAttribute::ReadOnly; break;
+            case 3: info.exists = false; break;
+            case 4: info.isDirectory = false; break;
+            case 5: info.isSymLink = true; break;
+            case 6: info.lastModified = Files::FileTime(); break;
+            case 7: if (error) *error = Files::FileSystemError::PermissionDenied; break;
+            }
+        }
         return info;
     }
     QString linkTarget(const QString &path, Files::ErrorCode *error) const override
@@ -165,6 +182,8 @@ private slots:
     void captureDepthLimitCannotBeComplete();
     void captureEnumerationFailureDiscardsPartialResult();
     void captureChangedFileDiscardsPartialResult();
+    void captureChangedDirectoryDiscardsPartialResult_data();
+    void captureChangedDirectoryDiscardsPartialResult();
     void captureSymbolicLinks();
     void saveLoadRoundTripWithoutContents();
     void saveLoadPreserves64BitIntegers();
@@ -339,6 +358,38 @@ void SnapshotTests::captureChangedFileDiscardsPartialResult()
     QVERIFY(!result.document.complete);
     QVERIFY(result.document.entries.isEmpty());
     QCOMPARE(readFile(path), QByteArray("real bytes"));
+}
+
+void SnapshotTests::captureChangedDirectoryDiscardsPartialResult_data()
+{
+    QTest::addColumn<int>("mutation");
+    QTest::newRow("size") << 0;
+    QTest::newRow("modified") << 1;
+    QTest::newRow("attributes") << 2;
+    QTest::newRow("removed") << 3;
+    QTest::newRow("type") << 4;
+    QTest::newRow("symlink") << 5;
+    QTest::newRow("invalid-time") << 6;
+    QTest::newRow("stat-error") << 7;
+}
+
+void SnapshotTests::captureChangedDirectoryDiscardsPartialResult()
+{
+    QFETCH(int, mutation);
+    QTemporaryDir root;
+    QVERIFY(root.isValid());
+    QVERIFY(writeFile(root.filePath(QStringLiteral("file.txt")), "contents"));
+    FaultFileSystem fs;
+    fs.changedDirectory = root.path();
+    fs.directoryMutation = mutation;
+    const auto result = Snap::capture(root.path(), {}, nullptr, {}, &fs);
+    QVERIFY(fs.changedDirectoryStats >= 2);
+    QVERIFY(!result.ok());
+    QVERIFY(!result.cancelled);
+    QVERIFY(!result.error.isEmpty());
+    QVERIFY(!result.document.complete);
+    QVERIFY(result.document.entries.isEmpty());
+    QCOMPARE(readFile(root.filePath(QStringLiteral("file.txt"))), QByteArray("contents"));
 }
 
 void SnapshotTests::captureSymbolicLinks()

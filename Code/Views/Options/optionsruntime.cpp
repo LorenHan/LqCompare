@@ -71,8 +71,24 @@ bool OptionsRuntime::applyKeys(const QStringList &keys)
     }
     if (displayChanged) {
         const QString theme = m_repository->value(QStringLiteral("display.theme")).toString();
-        qApp->setPalette(theme == QStringLiteral("system") ? m_systemPalette
-                                                         : themePalette(theme == QStringLiteral("dark")));
+        if (theme == QStringLiteral("system")) {
+            if (QApplication::palette() != m_systemPalette) {
+                // Qt 5.15.2 WindowsVista 的基底会从当前应用补齐未解析的 Link；
+                // 直接回填 resolve=0 的启动快照，反而会留下深色主题的链接色。
+                // 先显式还原全部画刷，再恢复原解析位，避免残留自定义调色板标志，
+                // 让 Qt 同步重建菜单、按钮等原生类调色板。两步之间不处理事件。
+                QPalette explicitPalette = m_systemPalette;
+                for (int group = 0; group < QPalette::NColorGroups; ++group)
+                    for (int role = 0; role < QPalette::NColorRoles; ++role)
+                        explicitPalette.setBrush(QPalette::ColorGroup(group), QPalette::ColorRole(role),
+                                                 m_systemPalette.brush(QPalette::ColorGroup(group),
+                                                                       QPalette::ColorRole(role)));
+                QApplication::setPalette(explicitPalette);
+            }
+            QApplication::setPalette(m_systemPalette);
+        } else {
+            QApplication::setPalette(themePalette(theme == QStringLiteral("dark")));
+        }
         QFont uiFont = m_systemFont;
         const QString uiFamily = m_repository->value(QStringLiteral("display.uiFontFamily")).toString();
         if (!uiFamily.isEmpty()) uiFont.setFamily(uiFamily);

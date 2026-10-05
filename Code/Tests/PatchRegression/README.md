@@ -33,6 +33,18 @@ one is missing. Git and patch apply and reverse generated multi-file patches in
 temporary directories, including Chinese and space-containing filenames. Every
 result is compared byte-for-byte with the intended content.
 
+跨平台夹具约束：
+
+- 真实 Git 输出只从 stdout 读取；stderr 保留用于失败诊断。用例显式测试
+  `core.autocrlf=false/true`，并在每个平台主动触发 CRLF 警告，验证它不会污染补丁。
+- Windows 使用 `CreateSymbolicLinkW` 创建原生符号链接，POSIX 使用 `symlink`；
+  创建后必须验证原生链接类型。仅 Windows 明确返回 `ERROR_PRIVILEGE_NOT_HELD`
+  时允许跳过对应链接用例，其他创建失败一律导致测试失败。
+- Unicode、空格和单引号文件名在所有平台执行真实工具往返；双引号文件名在
+  POSIX 上执行实盘往返，在全部平台保留内存生成、解析和预演覆盖。
+- PatchApply 的 JSON 转义测试不依赖文件系统支持双引号，另有真实 Unicode
+  文件应用、备份和审计路径的往返测试。目录拒绝测试独立于符号链接权限。
+
 The API currently supplies a read-only application plan. These tests do not
 claim actual patch application, transaction rollback, backups, context-diff
 support or git binary patch support. Only temporary fixtures are modified by

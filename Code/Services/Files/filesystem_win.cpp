@@ -1,21 +1,12 @@
 #include "filesystem.h"
 #include "pathutils.h"
+#include "windowsreparse.h"
+#include "windowsfiletime.h"
 
 // 本文件是 Windows 实现。非 Windows 平台上整体不参与编译。
 //
-// ⚠ 未在本机编译验证
-// -------------------
-// 当前开发机是 macOS，没有 Windows 下的 Qt，因此**本文件没有被编译器检查过**。
-// 这一点必须说清楚，不能让它看起来和 filesystem_posix.cpp 一样可靠：
-//   - POSIX 实现：本机可编译、可运行、有测试覆盖。
-//   - Windows 实现：仅经人工检查，首次在 Windows 上构建时很可能需要修语法/类型问题。
-//
-// 为降低这个风险，两件事已经做在前面：
-//   1. 路径规则（分隔符、盘符、UNC、长路径前缀）全部提取到 pathutils.cpp，
-//      它是平台无关的纯字符串逻辑，已在 macOS 上被完整测试——包括 Windows 规则。
-//   2. Win32 错误码常量在 Windows 下由 static_assert 与本头文件里的真实常量比对
-//      （见 filesystem.cpp），写错会在编译期失败。
-// 剩下的就是这层薄薄的 API 调用，只能靠首次在 Windows 上构建来验证。
+// 重解析点的字节解析在 windowsreparse.cpp 中，可在所有平台执行边界测试。
+// 本文件的 Win32 调用仍需 Windows CI / 运行验证，纯解析测试不能代替它。
 #ifndef Q_OS_WIN
 #  error "filesystem_win.cpp 只能在 Windows 上编译"
 #endif
@@ -28,21 +19,25 @@
 #endif
 
 #include <windows.h>
+#include <winioctl.h> // FSCTL_GET_REPARSE_POINT 不由所有版本的 windows.h 间接提供
 
 namespace LqCompare {
 namespace Files {
 
 namespace {
 
+// 纯解析器的公开常量与当前 Windows SDK 保持一致。
+static_assert(WindowsReparse::SymbolicLinkTag == IO_REPARSE_TAG_SYMLINK,
+              "Symbolic link tag must match the Windows SDK");
+static_assert(WindowsReparse::MountPointTag == IO_REPARSE_TAG_MOUNT_POINT,
+              "Mount point tag must match the Windows SDK");
+static_assert(WindowsReparse::MaximumBufferSize == MAXIMUM_REPARSE_DATA_BUFFER_SIZE,
+              "Reparse buffer limit must match the Windows SDK");
+
 PathUtils::Style windowsStyle()
 {
     return PathUtils::Style::windows();
 }
-
-/// Windows 的 FILETIME 纪元是 1601-01-01，而我们的内部表示以 1970-01-01 为 0。
-/// 两者相差 11644473600 秒，这个常量是固定的，不随时区变化。
-constexpr qint64 kSecondsBetween1601And1970 = 11644473600LL;
-constexpr qint64 kNanosecondsPerSecond = 1000000000LL;
 
 /// FILETIME（100 纳秒为单位、UTC、1601 纪元）→ 内部 FileTime。
 FileTime fileTimeFromWindows(const FILETIME &fileTime)
@@ -51,25 +46,23 @@ FileTime fileTimeFromWindows(const FILETIME &fileTime)
     value.LowPart = fileTime.dwLowDateTime;
     value.HighPart = fileTime.dwHighDateTime;
 
-    // FILETIME 的单位是 100 纳秒，乘 100 得到纳秒。
-    // 用 unsigned 组合完再转有符号，避免先转有符号时高位被当成符号位。
-    const qint64 hundredsOfNanoseconds = static_cast<qint64>(value.QuadPart);
-    const qint64 nanoseconds = hundredsOfNanoseconds * 100;
-    return FileTime::fromNanosecondsSinceEpoch(
-        nanoseconds - kSecondsBetween1601And1970 * kNanosecondsPerSecond);
+    qint64 nanoseconds;
+    if (!WindowsFileTime::fromTicks(value.QuadPart, &nanoseconds))
+        return FileTime();
+    return FileTime::fromNanosecondsSinceEpoch(nanoseconds);
 }
 
-/// 内部 FileTime → FILETIME。传回的 FileTime 必须有效，调用方负责判断。
-FILETIME fileTimeToWindows(const FileTime &time)
+/// 内部 FileTime → FILETIME。不可表示的时间必须报告失败，不回绕或钳位。
+bool fileTimeToWindows(const FileTime &time, FILETIME *result)
 {
+    quint64 ticks;
+    if (!time.isValid() || !WindowsFileTime::toTicks(time.nanosecondsSinceEpoch(), &ticks))
+        return false;
     ULARGE_INTEGER value;
-    value.QuadPart = static_cast<ULONGLONG>(
-        time.nanosecondsSinceEpoch() + kSecondsBetween1601And1970 * kNanosecondsPerSecond);
-
-    FILETIME result;
-    result.dwLowDateTime = value.LowPart;
-    result.dwHighDateTime = value.HighPart;
-    return result;
+    value.QuadPart = ticks;
+    result->dwLowDateTime = value.LowPart;
+    result->dwHighDateTime = value.HighPart;
+    return true;
 }
 
 /// QString → 以 L'\0' 结尾的宽字符串。
@@ -91,7 +84,7 @@ LPCWSTR toWide(const QString &path)
 //      一起改的重复实现，比删掉更容易出问题。
 // 现在需要把 Win32 原始码变成可读文本时，用 errorDetail(fromWindowsError(code))。
 
-/// 把 WIN32_FIND_DATAW 的属性位翻译成 FileAttributes。
+/// 把 Win32 的属性位翻译成 FileAttributes。
 FileAttributes attributesFromWin32(DWORD win32Attributes)
 {
     FileAttributes attributes = FileAttribute::None;
@@ -110,7 +103,7 @@ FileAttributes attributesFromWin32(DWORD win32Attributes)
     return attributes;
 }
 
-FileInfo infoFromWin32(const QString &path, const WIN32_FIND_DATAW &data)
+FileInfo infoFromHandle(const QString &path, const BY_HANDLE_FILE_INFORMATION &data)
 {
     FileInfo info;
     info.path = path;
@@ -121,8 +114,8 @@ FileInfo infoFromWin32(const QString &path, const WIN32_FIND_DATAW &data)
     info.isSymLink = info.attributes.testFlag(FileAttribute::SymLink);
     info.isDirectory = (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 
-    // 大小由高低两个 32 位拼成。目录也给了这个字段，但它不代表目录内容的
-    // 总大小（Windows 一律低估），所以不要拿它当目录大小用。
+    // 大小由高低两个 32 位拼成；目录字段不代表其内容总大小。
+    // 保留系统原值，不能为绕过稳定性校验而忽略或清零。
     info.size = (static_cast<quint64>(data.nFileSizeHigh) << 32)
                 | static_cast<quint64>(data.nFileSizeLow);
 
@@ -133,11 +126,8 @@ FileInfo infoFromWin32(const QString &path, const WIN32_FIND_DATAW &data)
     return info;
 }
 
-/// 用 FindFirstFileW 读单个条目的元数据。
-///
-/// 用 FindFirstFile 而不是 GetFileAttributesEx，是为了让 stat 与
-/// enumerateDirectory 拿到**完全相同**的字段集合与语义——
-/// 两条路径若用不同 API，就可能出现「列表里的时间和属性面板里的时间不一致」。
+/// 链接类型与属性写入的预检；不能把搜索索引缓存用于稳定性校验。
+/// 当前大小、时间和属性由 stat 的 GetFileInformationByHandle 查询。
 bool findFirst(const QString &path, WIN32_FIND_DATAW *out, ErrorCode *error)
 {
     const HANDLE handle = ::FindFirstFileW(toWide(path), out);
@@ -191,12 +181,32 @@ public:
 
     FileInfo stat(const QString &path, ErrorCode *error) const override
     {
-        // FindFirstFileW 对符号链接返回的是链接自身的属性，
-        // 与 POSIX 的 lstat 语义一致（不是 GetFileAttributesEx 的跟随语义）。
-        WIN32_FIND_DATAW data;
-        if (!findFirst(path, &data, error))
+        // FindFirstFileW 的 NTFS 搜索索引可能仍是旧值；读取文件或枚举子目录
+        // 后缓存刷新，会把未变化的源误判成发生变化。当前元数据必须由句柄查询。
+        // access=0 只查询元数据，不请求内容读取、写入或额外权限。
+        // BACKUP_SEMANTICS 支持目录/卷根，OPEN_REPARSE_POINT 保持 lstat 的不跟随语义。
+        const HANDLE handle = ::CreateFileW(
+            toWide(toNativePath(path)), 0,
+            FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING,
+            FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, nullptr);
+        if (handle == INVALID_HANDLE_VALUE) {
+            if (error)
+                *error = fromWindowsError(::GetLastError());
             return FileInfo();
-        return infoFromWin32(path, data);
+        }
+        BY_HANDLE_FILE_INFORMATION data{};
+        const BOOL ok = ::GetFileInformationByHandle(handle, &data);
+        // CloseHandle 可能改写线程错误码，必须先保存查询结果。
+        const DWORD code = ok ? ERROR_SUCCESS : ::GetLastError();
+        ::CloseHandle(handle);
+        if (!ok) {
+            if (error)
+                *error = fromWindowsError(code);
+            return FileInfo();
+        }
+        if (error)
+            *error = FileSystemError::None;
+        return infoFromHandle(path, data);
     }
 
     QString linkTarget(const QString &path, ErrorCode *error) const override
@@ -224,23 +234,23 @@ public:
             return QString();
         }
 
-        // 一个重解析点数据最多约 16 KB，用固定缓冲足够；
-        // 返回的 size 会告诉我们实际长度。
-        QByteArray buffer(MAXIMUM_REPARSE_DATA_BUFFER_SIZE, Qt::Uninitialized);
+        // 重解析点数据最多 16 KB；解析时仍必须遵守系统实际返回的字节数。
+        QByteArray buffer(WindowsReparse::MaximumBufferSize, Qt::Uninitialized);
         DWORD returned = 0;
         const BOOL ok = ::DeviceIoControl(handle, FSCTL_GET_REPARSE_POINT, nullptr, 0,
                                           buffer.data(),
                                           static_cast<DWORD>(buffer.size()), &returned, nullptr);
+        // CloseHandle 也可能改写线程错误码，必须先保存 DeviceIoControl 的失败原因。
+        const DWORD code = ok ? ERROR_SUCCESS : ::GetLastError();
         ::CloseHandle(handle);
 
         if (!ok) {
             if (error)
-                *error = fromWindowsError(::GetLastError());
+                *error = fromWindowsError(code);
             return QString();
         }
 
-        const auto *reparse = reinterpret_cast<const REPARSE_DATA_BUFFER *>(buffer.constData());
-        const QString raw = extractReparseTarget(reparse);
+        const QString raw = WindowsReparse::target(buffer, returned);
         if (raw.isEmpty()) {
             if (error)
                 *error = FileSystemError::NotSupported;
@@ -249,13 +259,15 @@ public:
 
         if (error)
             *error = FileSystemError::None;
-        return PathUtils::normalize(raw, windowsStyle());
+        // NT 的 \??\C:\ / \??\UNC\ 前缀不是 Qt 的普通绝对路径空间。
+        // 先转换已知命名空间，再沿用现有分隔符规范化，才能识别绝对目标循环。
+        return PathUtils::normalize(WindowsReparse::toWin32Target(raw), windowsStyle());
     }
 
     bool exists(const QString &path, ErrorCode *error) const override
     {
-        WIN32_FIND_DATAW data;
-        return findFirst(path, &data, error);
+        // 与 stat 共用卷根、长路径和不跟随链接语义，不能退回搜索索引查询。
+        return stat(path, error).exists;
     }
 
     QVector<FileInfo> enumerateDirectory(const QString &path, ErrorCode *error) const override
@@ -289,6 +301,7 @@ public:
 
         const QChar separator = QLatin1Char('\\');
         const bool pathEndsWithSeparator = normalized.endsWith(separator);
+        ErrorCode enumerationError;
 
         for (;;) {
             const QString name = QString::fromWCharArray(data.cFileName);
@@ -296,23 +309,49 @@ public:
             if (name != QLatin1String(".") && name != QLatin1String("..")) {
                 const QString childPath =
                     pathEndsWithSeparator ? normalized + name : normalized + separator + name;
-                entries.append(infoFromWin32(childPath, data));
+                // 搜索 API 只负责名称；与 POSIX readdir+lstat 一样逐项读取当前
+                // 元数据，避免多轮比较把搜索索引缓存与句柄当前值混在一起。
+                ErrorCode childError;
+                const auto child = stat(childPath, &childError);
+                if (childError.ok())
+                    entries.append(child);
+                else if (enumerationError.ok())
+                    enumerationError = childError;
             }
 
-            if (!::FindNextFileW(handle, &data))
+            if (!::FindNextFileW(handle, &data)) {
+                // 正常结束与读取失败必须区分；不能把不完整列表报告成完整目录。
+                const DWORD code = ::GetLastError();
+                if (code != ERROR_NO_MORE_FILES && enumerationError.ok())
+                    enumerationError = fromWindowsError(code);
                 break;
+            }
         }
 
         ::FindClose(handle);
 
         if (error)
-            *error = FileSystemError::None;
+            *error = enumerationError;
         return entries;
     }
 
     bool setTimes(const QString &path, const FileTime &lastModified,
                   const FileTime &lastAccessed, ErrorCode *error) const override
     {
+        FILETIME modified;
+        FILETIME accessed;
+        // 所有指定字段先校验，再打开文件；失败时不能只写入一部分时间。
+        if ((lastModified.isValid() && !fileTimeToWindows(lastModified, &modified))
+            || (lastAccessed.isValid() && !fileTimeToWindows(lastAccessed, &accessed))) {
+            if (error)
+                *error = FileSystemError::NotSupported;
+            return false;
+        }
+        // 传 nullptr 表示「该时间保持不变」。绝不能填当前时间——
+        // 那会把「只改修改时间」变成「顺手改掉访问时间」。
+        const FILETIME *pModified = lastModified.isValid() ? &modified : nullptr;
+        const FILETIME *pAccessed = lastAccessed.isValid() ? &accessed : nullptr;
+
         // 需要 FILE_WRITE_ATTRIBUTES 才能改时间戳。用 BACKUP_SEMANTICS
         // 以便对目录也生效（否则目录会因缺少 FILE_FLAG_BACKUP_SEMANTICS 而无法打开）。
         const HANDLE handle = ::CreateFileW(
@@ -326,28 +365,15 @@ public:
             return false;
         }
 
-        FILETIME modified;
-        FILETIME accessed;
-        // 传 nullptr 表示「该时间保持不变」。绝不能填当前时间——
-        // 那会把「只改修改时间」变成「顺手改掉访问时间」。
-        LPFILETIME pModified = nullptr;
-        LPFILETIME pAccessed = nullptr;
-        if (lastModified.isValid()) {
-            modified = fileTimeToWindows(lastModified);
-            pModified = &modified;
-        }
-        if (lastAccessed.isValid()) {
-            accessed = fileTimeToWindows(lastAccessed);
-            pAccessed = &accessed;
-        }
-
         // 第一个参数（创建时间）恒传 nullptr：本接口不提供修改创建时间的能力。
         const BOOL ok = ::SetFileTime(handle, nullptr, pAccessed, pModified);
+        // 关闭句柄可能改写线程错误码，先保留实际设置失败的原因。
+        const DWORD code = ok ? ERROR_SUCCESS : ::GetLastError();
         ::CloseHandle(handle);
 
         if (!ok) {
             if (error)
-                *error = fromWindowsError(::GetLastError());
+                *error = fromWindowsError(code);
             return false;
         }
         if (error)
@@ -393,38 +419,6 @@ public:
     // deleteToTrash 不在这里覆写：真实实现属 PLAT-003
     // （SHFileOperation / IFileOperation 带 FOF_ALLOWUNDO）。
     // 目前由基类返回 NotSupported，绝不会静默变成永久删除。
-
-private:
-    /// 从重解析点数据里取出链接目标。
-    ///
-    /// 符号链接与目录联接的目标分别存放在两个不同的字段里，且都是
-    /// 「字节偏移 + 字节长度」的形式（因为它们可以包含不能直接当字符串
-    /// 解释的内容）。这里按各自的布局取出来。
-    static QString extractReparseTarget(const REPARSE_DATA_BUFFER *reparse)
-    {
-        if (reparse == nullptr)
-            return QString();
-
-        if (reparse->ReparseTag == IO_REPARSE_TAG_SYMLINK) {
-            const USHORT offset =
-                reparse->SymbolicLinkReparseBuffer.SubstituteNameOffset / sizeof(WCHAR);
-            const USHORT length =
-                reparse->SymbolicLinkReparseBuffer.SubstituteNameLength / sizeof(WCHAR);
-            return QString::fromWCharArray(
-                reparse->SymbolicLinkReparseBuffer.PathBuffer + offset, length);
-        }
-
-        if (reparse->ReparseTag == IO_REPARSE_TAG_MOUNT_POINT) {
-            const USHORT offset =
-                reparse->MountPointReparseBuffer.SubstituteNameOffset / sizeof(WCHAR);
-            const USHORT length =
-                reparse->MountPointReparseBuffer.SubstituteNameLength / sizeof(WCHAR);
-            return QString::fromWCharArray(
-                reparse->MountPointReparseBuffer.PathBuffer + offset, length);
-        }
-
-        return QString();
-    }
 };
 
 } // namespace

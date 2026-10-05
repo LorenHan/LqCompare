@@ -1,6 +1,7 @@
 #include "homepage.h"
 #include "sessiontype.h"
 
+#include <QApplication>
 #include <QFrame>
 #include <QLabel>
 #include <QPushButton>
@@ -11,6 +12,35 @@ namespace LqCompare {
 
 HomePage::HomePage(QWidget *parent) : QWidget(parent)
 {
+    // 原生 Windows/macOS 按钮可能保留浅色表面，却采用深色主题的浅色文字。
+    // 仅接管首页按钮的表面与边框，前景/背景一起读取当前调色板；新建的最近
+    // 会话按钮也继承这些规则。显式区分禁用组，避免样式表统一文字色覆盖它。
+    const auto updateAppearance = [this] {
+        const QPalette palette = QApplication::palette("QPushButton");
+        const auto color = [&palette](QPalette::ColorRole role,
+                                      QPalette::ColorGroup group = QPalette::Active) {
+            const QColor value = palette.color(group, role);
+            return QStringLiteral("rgba(%1,%2,%3,%4)")
+                    .arg(value.red()).arg(value.green()).arg(value.blue()).arg(value.alpha());
+        };
+        setStyleSheet(QStringLiteral(
+            "QPushButton { background-color: %1; color: %2;"
+            " border: 1px solid %3; border-radius: 0; padding: 4px 8px; }"
+            "QPushButton:hover:enabled { background-color: %4; }"
+            "QPushButton:focus { border-color: %5; }"
+            "QPushButton:pressed:enabled { background-color: %6; }"
+            "QPushButton:disabled { background-color: %7; color: %8; }")
+            .arg(color(QPalette::Button), color(QPalette::ButtonText), color(QPalette::Mid),
+                 color(QPalette::Midlight), color(QPalette::Highlight), color(QPalette::Base),
+                 color(QPalette::Button, QPalette::Disabled),
+                 color(QPalette::ButtonText, QPalette::Disabled)));
+    };
+    updateAppearance();
+    // Qt 5 的局部样式表会缓存调色板及字体解析，应用选项改变后重新解析，
+    // 不硬编码主题颜色或字号，也不切换全局原生样式。
+    connect(qApp, &QApplication::paletteChanged, this, updateAppearance);
+    connect(qApp, &QApplication::fontChanged, this, updateAppearance);
+
     auto *outer = new QVBoxLayout(this);
     outer->setContentsMargins(0, 0, 0, 0);
 

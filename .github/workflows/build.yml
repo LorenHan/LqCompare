@@ -26,6 +26,12 @@ on:
   pull_request:
   workflow_dispatch:
 
+# 每个提交均需三平台验证及产物，不再以较新提交替换旧提交的排队项。
+# PR 使用实际 head SHA，其他触发使用 github.sha；只对相同源码快照去重。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.head.sha || github.sha }}
+  cancel-in-progress: false
+
 jobs:
   checks:
     name: Repository checks
@@ -76,8 +82,9 @@ jobs:
             qt_arch: win32_mingw81
             qt_tools: tools_mingw,qt.tools.win32_mingw810
             package_ext: zip
-    env:
-      QT_QPA_PLATFORM: offscreen
+    # Qt 平台由 run-tests.sh 按实际宿主选择：Windows 用 windows 原生插件，
+    # Linux / macOS 保留 offscreen。不要在作业级强制 offscreen，否则 Qt 5.15.2
+    # 的 Windows QMessageBox 会在访问原生系统菜单时崩溃。
     # Windows 上 `run:` 默认走 pwsh，而下面每一步都是 bash 语法
     # （`case`、`[ -n ]`、`>> "$GITHUB_OUTPUT"`），所以整作业统一用 bash。
     # Windows 的 bash 由 Git for Windows 提供，运行器自带。
@@ -166,6 +173,8 @@ jobs:
       - name: 运行器自测（ENG-003）
         shell: bash
         run: |
+          # 纯 shell 平台选择自测无需 POSIX 信号，Windows 也必须执行。
+          bash Code/Tests/run-tests.sh --self-test-platform
           if [ "${RUNNER_OS}" = "Windows" ]; then
             echo "::warning::已跳过 run-tests.sh --self-test：超时分支未在 Windows 上实测过"
             exit 0

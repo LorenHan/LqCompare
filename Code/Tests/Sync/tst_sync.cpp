@@ -33,10 +33,11 @@ public:
     QString root;
     QString failName;
     bool unavailable = false;
+    Files::TrashAvailability availability = Files::TrashAvailability::Available;
     mutable int calls = 0;
     QString platformName() const override { return QStringLiteral("temporary-test-trash"); }
     Files::TrashAvailability availabilityFor(const QString &) const override {
-        return unavailable ? Files::TrashAvailability::VolumeNotSupported : Files::TrashAvailability::Available;
+        return unavailable ? Files::TrashAvailability::VolumeNotSupported : availability;
     }
     QString displayLocation() const override { return root; }
     bool undoLastDelete(Files::ErrorCode *error) const override {
@@ -91,6 +92,7 @@ private slots:
     void wrongBaselineFallsBack();
     void cancellationRetainsCompletedAndListsRemaining();
     void failureContinuesAndTrashNeverFallsBack();
+    void unverifiedRecoveryPreservesFilesAndExplainsWhy();
     void symlinkReplacementRefused();
     void childDeselectionProtectsDirectory();
     void restoreRefusesNewUserChanges();
@@ -251,6 +253,38 @@ void SyncTests::failureContinuesAndTrashNeverFallsBack() {
     trash.unavailable = true; plan = Sync::preview(f.left, f.right, mirror());
     report = executor.execute(plan, confirm(plan)); QCOMPARE(report.failedCount(), 1);
     QCOMPARE(get(f.r("a")), QByteArray("blocked")); QCOMPARE(trash.calls, 2);
+}
+void SyncTests::unverifiedRecoveryPreservesFilesAndExplainsWhy() {
+    Fixture f;
+    QVERIFY(put(f.r("extra/sub/file"), "original bytes"));
+    const auto before = QDir(f.right).entryList(QDir::AllEntries | QDir::NoDotAndDotDot);
+    TemporaryTrash trash(f.temp.filePath("trash"));
+    trash.availability = Files::TrashAvailability::RecoverabilityNotGuaranteed;
+    const auto plan = Sync::preview(f.left, f.right, mirror());
+    QVERIFY2(plan.executable(), qPrintable(plan.error));
+    Sync::Executor executor(f.backup, &trash);
+    const auto report = executor.execute(plan, confirm(plan));
+
+    QCOMPARE(report.succeededCount(), 0);
+    QCOMPARE(report.failedCount(), 3);
+    QCOMPARE(trash.calls, 0);
+    QVERIFY(trash.lastDelete().records.isEmpty());
+    QVERIFY(!report.baselineEligible);
+    QCOMPARE(get(f.r("extra/sub/file")), QByteArray("original bytes"));
+    QVERIFY(QFileInfo(f.r("extra/sub")).isDir());
+    QVERIFY(QFileInfo(f.r("extra")).isDir());
+    QCOMPARE(QDir(f.right).entryList(QDir::AllEntries | QDir::NoDotAndDotDot), before);
+
+    const auto leaf = std::find_if(report.items.cbegin(), report.items.cend(),
+                                 [](const Sync::ItemResult &item) {
+        return item.item.relativePath == QStringLiteral("extra/sub/file");
+    });
+    QVERIFY(leaf != report.items.cend());
+    QCOMPARE(leaf->outcome, Sync::Outcome::Failed);
+    QVERIFY(leaf->message.contains(f.r("extra/sub/file")));
+    QVERIFY(leaf->message.contains(QStringLiteral("不能保证删除可恢复")));
+    QVERIFY(leaf->message.contains(QStringLiteral("保留文件")));
+    QVERIFY(QDir(trash.root).entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty());
 }
 void SyncTests::symlinkReplacementRefused() {
     Fixture f; QVERIFY(put(f.l("folder/file"), "inside")); QVERIFY(put(f.r("folder/file"), "target"));
