@@ -104,6 +104,7 @@ struct SearchDiagnostics {
     QString query;
     QString tag;
     int sequence = 0;
+    qint64 preparationMs = 0;
     int timerTicks = 0;
     int modalObservations = 0;
     int returnSignals = 0;
@@ -167,6 +168,7 @@ struct SearchDiagnostics {
         }
         return {{QStringLiteral("event"), event}, {QStringLiteral("phase"), phase},
                 {QStringLiteral("elapsedMs"), double(elapsed.elapsed())},
+                {QStringLiteral("preparationMs"), double(preparationMs)},
                 {QStringLiteral("timeoutMs"), 2000}, {QStringLiteral("tag"), tag},
                 {QStringLiteral("sequence"), sequence}, {QStringLiteral("query"), query},
                 {QStringLiteral("timerTicks"), timerTicks},
@@ -238,6 +240,18 @@ struct SearchDiagnostics {
     }
 };
 
+void prepareSearchInput(QLineEdit *search)
+{
+    // 窗口实现与激活属于输入前置条件；确认可接收输入后才计量输入和命令的 2 秒上限。
+    QWidget *owner = search->window();
+    owner->activateWindow();
+    if (!QTest::qWaitForWindowExposed(owner) || !QTest::qWaitForWindowActive(owner))
+        qFatal("Command search input host did not become exposed and active");
+    search->setFocus();
+    if (!QTest::qWaitFor([&] { return search->isVisible() && search->isEnabled() && search->hasFocus(); }))
+        qFatal("Command search input did not become ready");
+}
+
 SearchResult submitSearch(QLineEdit *search, const QString &query, QMessageBox::StandardButton answer,
                           bool escape = false, bool reenter = false,
                           const std::function<void()> &beforeAnswer = {},
@@ -246,6 +260,11 @@ SearchResult submitSearch(QLineEdit *search, const QString &query, QMessageBox::
 {
     SearchResult result;
     SearchDiagnostics diagnostics(search, query);
+    diagnostics.enter("prepare-input-host");
+    prepareSearchInput(search);
+    diagnostics.preparationMs = diagnostics.elapsed.elapsed();
+    diagnostics.elapsed.restart();
+    diagnostics.enter("input-host-ready");
     QTimer responder;
     QObject::connect(search, &QLineEdit::returnPressed, &responder, [&] {
         ++diagnostics.returnSignals;
@@ -293,6 +312,8 @@ SearchResult submitSearch(QLineEdit *search, const QString &query, QMessageBox::
         if (box->windowTitle() != QStringLiteral("Command Search"))
             qFatal("Unexpected command-search title: %s", qPrintable(box->windowTitle()));
 #endif
+        // 一次请求只回应一次；先停轮询，避免嵌套事件处理重入，或反复重启 Escape 的按钮动画。
+        responder.stop();
         ++result.dialogs; result.text = box->text(); result.format = box->textFormat();
         diagnostics.enter("modal-validated");
         if (reenter) {
@@ -326,8 +347,8 @@ SearchResult submitSearch(QLineEdit *search, const QString &query, QMessageBox::
         ++diagnostics.responseReturns;
         diagnostics.enter("answer-returned");
     });
-    // 仍从输入前起算原有 2 秒门槛；超时先保存定位证据，再保持原失败语义。
-    QTimer::singleShot(2000, &responder, [&] {
+    // 从输入前起算 2 秒；PreciseTimer 不会像粗粒度计时器那样提前触发。
+    QTimer::singleShot(2000, Qt::PreciseTimer, &responder, [&] {
         diagnostics.log(QStringLiteral("watchdog-expired"));
         diagnostics.saveTimeout();
         qFatal("Command search did not return");
@@ -1035,12 +1056,66 @@ private slots:
         QCOMPARE(executed, calls); QVERIFY(!QApplication::activeModalWidget());
     }
 
+    void commandSearchAnswersAnimatedEscapeOnce()
+    {
+        // 在所有平台复现 Qt 5.15 Cocoa 的 Escape 路径：真实 animateClick 需等待 100ms。
+        // 旧的 1ms 回应轮询会不断重启该动画，导致没有 clicked/finished 信号并触发看门狗。
+        class AnimatedEscape : public QObject {
+        public:
+            int presses = 0;
+            bool animationPending = false;
+            bool eventFilter(QObject *target, QEvent *event) override
+            {
+                if (event->type() != QEvent::KeyPress
+                    || static_cast<QKeyEvent *>(event)->key() != Qt::Key_Escape)
+                    return false;
+                auto *box = qobject_cast<QMessageBox *>(target);
+                auto *button = box ? box->button(QMessageBox::No) : nullptr;
+                if (!button) qFatal("Expected animated Escape cancellation");
+                ++presses;
+                QSignalSpy clicks(box, &QMessageBox::buttonClicked);
+                button->animateClick(100);
+                animationPending = clicks.isEmpty() && button->isDown() && box->isVisible();
+                event->accept();
+                return true;
+            }
+        } animatedEscape;
+        MainWindow window; window.resize(1024, 800); window.show(); window.activateWindow();
+        auto *search = window.findChild<QLineEdit *>(QStringLiteral("commandSearch"));
+        QVERIFY(search);
+        int executed = 0, beforeAnswers = 0, buttonSignals = 0, finishedSignals = 0;
+        Command command;
+        command.id = QStringLiteral("test.animated-escape");
+        command.text = QStringLiteral("Animated Escape Probe");
+        command.handler = [&] { ++executed; };
+        QVERIFY(CommandRegistry::instance().add(command));
+        const SearchResult result = submitSearch(search, command.id, QMessageBox::No, true, true, [&] {
+            ++beforeAnswers;
+            auto *box = qobject_cast<QMessageBox *>(QApplication::activeModalWidget());
+            QVERIFY(box);
+            box->installEventFilter(&animatedEscape);
+            connect(box, &QMessageBox::buttonClicked, &window, [&](QAbstractButton *) { ++buttonSignals; });
+            connect(box, &QDialog::finished, &window, [&](int) { ++finishedSignals; });
+            QCOMPARE(executed, 0);
+        });
+        QCOMPARE(result.dialogs, 1);
+        QCOMPARE(result.format, Qt::PlainText);
+        QCOMPARE(beforeAnswers, 1);
+        QCOMPARE(animatedEscape.presses, 1);
+        QVERIFY(animatedEscape.animationPending);
+        QCOMPARE(buttonSignals, 1);
+        QCOMPARE(finishedSignals, 1);
+        QCOMPARE(executed, 0);
+        QVERIFY(!QApplication::activeModalWidget());
+    }
+
     void commandSearchCancelsStaleQueuedInput()
     {
         QPointer<MainWindow> window = new MainWindow;
         window->show(); window->activateWindow();
         auto *search = window->findChild<QLineEdit *>(QStringLiteral("commandSearch"));
         QVERIFY(search);
+        prepareSearchInput(search);
         auto *submit = search->findChild<QAction *>(QStringLiteral("commandSearchSubmit"));
         QVERIFY(submit);
         QStringList calls;
@@ -1059,7 +1134,7 @@ private slots:
             if (!box->button(QMessageBox::Yes)) qFatal("Expected queued command confirmation");
             box->button(QMessageBox::Yes)->click();
         });
-        QTimer::singleShot(2000, &responder, [] { qFatal("Queued search did not return"); });
+        QTimer::singleShot(2000, Qt::PreciseTimer, &responder, [] { qFatal("Queued search did not return"); });
         responder.start();
         const auto enter = [&] {
             QKeyEvent press(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
@@ -1105,6 +1180,7 @@ private slots:
         window->show(); window->activateWindow();
         auto *search = window->findChild<QLineEdit *>(QStringLiteral("commandSearch"));
         QVERIFY(search);
+        prepareSearchInput(search);
         int executed = 0;
         Command command;
         command.id = QStringLiteral("test.destroy-owner");
