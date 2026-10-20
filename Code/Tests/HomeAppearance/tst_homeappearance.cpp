@@ -138,6 +138,13 @@ void verifyRenderedText(ObservedStyle *style, QWidget *widget, const QRect &surf
     for (const TextPaint &paint : style->paints) {
         if (paint.text != label) continue;
         found = true;
+        if (paint.color != foreground) {
+            qWarning().noquote() << "Text mismatch:" << widget->metaObject()->className()
+                << widget->objectName() << "label=" << label
+                << "actual=" << paint.color.name(QColor::HexArgb)
+                << "expected=" << foreground.name(QColor::HexArgb)
+                << "enabled=" << enabled;
+        }
         QCOMPARE(paint.color.rgba(), foreground.rgba());
         // 验证实际传给栅格引擎的完整文本与绘制区域，不能只看 button->text()。
         QVERIFY2(paint.rect.adjusted(-1, -1, 1, 1).contains(paint.bounds),
@@ -306,8 +313,14 @@ void HomeAppearanceTests::palettePairsStayReadable()
         QTest::keyClick(tabs, Qt::Key_Left);
         QVERIFY(area.isHomeCurrent());
         // 非选中标签的悬停、禁用状态与键盘跳过仍由原有 QTabBar 负责。
-        QTest::mouseMove(tabs, tabs->tabRect(1).center());
-        QCoreApplication::processEvents();
+        const QPoint tabHoverPoint = tabs->tabRect(1).center();
+        QVERIFY(tabs->visibleRegion().contains(tabHoverPoint));
+        QVERIFY(QGuiApplication::screenAt(tabs->mapToGlobal(tabHoverPoint)));
+        QTest::mouseMove(tabs, tabHoverPoint);
+        // Native platforms deliver Enter/Move asynchronously after QCursor moves.
+        // Do not sample a normal-state surface before the requested hover arrives.
+        QTRY_VERIFY(tabs->underMouse());
+        QTRY_COMPARE(tabs->tabAt(tabs->mapFromGlobal(QCursor::pos())), 1);
         verifyRenderedText(style, tabs, tabs->tabRect(1), tabs->tabText(1), tabForeground,
                            tabPalette.color(QPalette::Active, QPalette::Midlight));
         area.setTabEnabled(1, false);

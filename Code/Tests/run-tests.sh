@@ -1284,7 +1284,7 @@ run_suite() {
     printf '%s\n' "${output}" | awk '
         /^FAIL!/ { failure = 1 }
         /^(PASS|SKIP|INFO|Totals:|\*\*\*\*)/ { failure = 0 }
-        failure || /^PASS.*skipped/ || /^QWARN.*Surface mismatch:/ { print }
+        failure || /^PASS.*skipped/ || /^QWARN.*(Surface|Text) mismatch:/ { print }
     '
 
     if [[ -n "${summary}" ]]; then
