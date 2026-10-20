@@ -7,6 +7,7 @@
 #include <QApplication>
 #include <QAbstractButton>
 #include <QDir>
+#include <QCursor>
 #include <QFile>
 #include <QLabel>
 #include <QPainter>
@@ -122,6 +123,15 @@ void verifyRenderedText(ObservedStyle *style, QWidget *widget, const QRect &surf
     style->paints.clear();
     const QPixmap pixmap = widget->grab();
     const QColor actualBackground = pixelAt(pixmap, surface.topLeft() + QPoint(4, 4));
+    if (actualBackground != background) {
+        qWarning().noquote() << "Surface mismatch:" << widget->metaObject()->className()
+            << widget->objectName() << "label=" << label
+            << "actual=" << actualBackground.name(QColor::HexArgb)
+            << "expected=" << background.name(QColor::HexArgb)
+            << "underMouse=" << widget->underMouse()
+            << "activeWindow=" << widget->isActiveWindow()
+            << "cursorLocal=" << widget->mapFromGlobal(QCursor::pos());
+    }
     QCOMPARE(actualBackground.rgba(), background.rgba());
     const QColor visibleForeground = composite(foreground, background);
     bool found = false;

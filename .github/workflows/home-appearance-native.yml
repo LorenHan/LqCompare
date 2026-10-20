@@ -1,0 +1,70 @@
+name: Native home appearance
+
+on:
+  push:
+    branches: [dots]
+    paths:
+      - 'Code/Tests/HomeAppearance/**'
+      - 'Code/Tests/run-tests.sh'
+      - 'Code/Views/Shell/**'
+      - 'Code/Views/Options/**'
+      - '.github/workflows/home-appearance-native.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  native-home:
+    name: Home appearance (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: gcc_64
+            tools: ''
+            platform: xcb
+          - os: macos-15-intel
+            arch: clang_64
+            tools: ''
+            platform: cocoa
+          - os: windows-latest
+            arch: win32_mingw81
+            tools: tools_mingw,qt.tools.win32_mingw810
+            platform: windows
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: jurplel/install-qt-action@v4
+        with:
+          version: '5.15.2'
+          arch: ${{ matrix.arch }}
+          tools: ${{ matrix.tools }}
+          cache: true
+      - name: Prepare Linux display and fonts
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y xvfb xauth libxcb-xinerama0 libxkbcommon-x11-0 fonts-noto-cjk
+      - name: Test actual native home appearance
+        env:
+          QT_QPA_PLATFORM: ${{ matrix.platform }}
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then
+            xvfb-run -a bash Code/Tests/run-tests.sh HomeAppearance
+          else
+            bash Code/Tests/run-tests.sh HomeAppearance
+          fi
+      - name: Preserve complete diagnostic text in job log
+        if: always()
+        run: |
+          if [ -f _test-build/HomeAppearance/results.txt ]; then
+            cat _test-build/HomeAppearance/results.txt
+          fi

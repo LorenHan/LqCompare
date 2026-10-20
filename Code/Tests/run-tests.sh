@@ -1280,7 +1280,12 @@ run_suite() {
     fi
     local summary
     summary="$(printf '%s\n' "${output}" | grep -E '^Totals:' | tail -n 1)"
-    printf '%s\n' "${output}" | grep -E '^(FAIL!|PASS.*skipped)' | head -n 20
+    # Keep assertion values and source locations in the job log even when artifact uploads fail.
+    printf '%s\n' "${output}" | awk '
+        /^FAIL!/ { failure = 1 }
+        /^(PASS|SKIP|INFO|Totals:|\*\*\*\*)/ { failure = 0 }
+        failure || /^PASS.*skipped/ || /^QWARN.*Surface mismatch:/ { print }
+    '
 
     if [[ -n "${summary}" ]]; then
         has_summary=1
