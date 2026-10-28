@@ -123,7 +123,7 @@ void verifyRenderedText(ObservedStyle *style, QWidget *widget, const QRect &surf
     style->paints.clear();
     const QPixmap pixmap = widget->grab();
     const QColor actualBackground = pixelAt(pixmap, surface.topLeft() + QPoint(4, 4));
-    if (actualBackground != background) {
+    if (actualBackground.rgba() != background.rgba()) {
         qWarning().noquote() << "Surface mismatch:" << widget->metaObject()->className()
             << widget->objectName() << "label=" << label
             << "actual=" << actualBackground.name(QColor::HexArgb)
@@ -138,7 +138,7 @@ void verifyRenderedText(ObservedStyle *style, QWidget *widget, const QRect &surf
     for (const TextPaint &paint : style->paints) {
         if (paint.text != label) continue;
         found = true;
-        if (paint.color != foreground) {
+        if (paint.color.rgba() != foreground.rgba()) {
             qWarning().noquote() << "Text mismatch:" << widget->metaObject()->className()
                 << widget->objectName() << "label=" << label
                 << "actual=" << paint.color.name(QColor::HexArgb)
@@ -189,6 +189,7 @@ private slots:
     void palettePairsStayReadable_data();
     void palettePairsStayReadable();
     void nativeLightSurfaceNegativeControl();
+    void classPaletteRestorationRefreshesTabText();
     void closeGlyphAndRoutingFollowThemeAndTabMoves();
 };
 
@@ -340,6 +341,30 @@ void HomeAppearanceTests::palettePairsStayReadable()
         QVERIFY(area.isHomeCurrent());
         QCOMPARE(area.sessionCount(), 0);
     }
+}
+
+// 复现 Qt 5 恢复系统主题的顺序：全局通知先到，原生类调色板随后才恢复。
+void HomeAppearanceTests::classPaletteRestorationRefreshesTabText()
+{
+    ApplicationState restore;
+    auto *style = new ObservedStyle(QStyleFactory::create(restore.styleName));
+    QApplication::setStyle(style);
+    SessionArea area;
+    area.resize(800, 600);
+    area.show();
+    auto *tabs = area.findChild<QTabBar *>();
+    QVERIFY(tabs);
+    QPalette global = QApplication::palette();
+    global.setColor(QPalette::ButtonText, QColor(25, 35, 45));
+    QApplication::setPalette(global);
+    QPalette finalPalette = global;
+    finalPalette.setColor(QPalette::ButtonText, QColor(12, 22, 32, 216));
+    finalPalette.setColor(QPalette::Base, QColor(250, 250, 250));
+    QApplication::setPalette(finalPalette, "QTabBar");
+    QCoreApplication::processEvents();
+    verifyRenderedText(style, tabs, tabs->tabRect(0), tabs->tabText(0),
+                       finalPalette.color(QPalette::Active, QPalette::ButtonText),
+                       finalPalette.color(QPalette::Active, QPalette::Base));
 }
 
 void HomeAppearanceTests::nativeLightSurfaceNegativeControl()

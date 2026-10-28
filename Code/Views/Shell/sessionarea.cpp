@@ -74,7 +74,9 @@ SessionArea::SessionArea(QWidget *parent) : QTabWidget(parent)
                  color(QPalette::ButtonText, QPalette::Disabled)));
     };
     updateAppearance();
-    connect(qApp, &QApplication::paletteChanged, tabBar(), updateAppearance);
+    // Qt 5 恢复系统主题时先通知全局调色板，随后才重建原生控件类调色板。
+    // 延后读取最终值，避免 Mac 标签文字缓存到中间的全局黑色/禁用灰色。
+    connect(qApp, &QApplication::paletteChanged, tabBar(), updateAppearance, Qt::QueuedConnection);
     connect(qApp, &QApplication::fontChanged, tabBar(), updateAppearance);
     m_home = new HomePage(this);
     addTab(m_home, tr("Home"));

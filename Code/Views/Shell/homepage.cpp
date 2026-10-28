@@ -38,7 +38,9 @@ HomePage::HomePage(QWidget *parent) : QWidget(parent)
     updateAppearance();
     // Qt 5 的局部样式表会缓存调色板及字体解析，应用选项改变后重新解析，
     // 不硬编码主题颜色或字号，也不切换全局原生样式。
-    connect(qApp, &QApplication::paletteChanged, this, updateAppearance);
+    // Qt 5 恢复系统主题时先通知全局调色板，随后才重建原生控件类调色板。
+    // 延后读取最终值，避免 Mac 标签文字缓存到中间的全局黑色/禁用灰色。
+    connect(qApp, &QApplication::paletteChanged, this, updateAppearance, Qt::QueuedConnection);
     connect(qApp, &QApplication::fontChanged, this, updateAppearance);
 
     auto *outer = new QVBoxLayout(this);
