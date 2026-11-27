@@ -1223,19 +1223,89 @@ private slots:
         QVERIFY(first);
         auto *pane = first->widget()->findChild<TextPane *>(QStringLiteral("rightTextPane"));
         QVERIFY(pane);
-        bool editorShown = false;
-        QTimer::singleShot(0, [&] {
-            auto *dialog = qobject_cast<QDialog *>(QApplication::activeModalWidget());
-            auto *editor = dialog ? dialog->findChild<QPlainTextEdit *>(QStringLiteral("textBufferEditor")) : nullptr;
+        QString editorSetupError;
+        bool editorApplied = false;
+        QTimer::singleShot(0, &window, [&] {
+            const auto snapshot = [](const char *phase, QDialog *dialog, QWidget *editor) {
+                qInfo() << "Text editor readiness" << phase
+                        << "appState" << QGuiApplication::applicationState()
+                        << "focusWindow" << QGuiApplication::focusWindow()
+                        << "activeWindow" << QApplication::activeWindow()
+                        << "focusWidget" << QApplication::focusWidget()
+                        << "modalWidget" << QApplication::activeModalWidget()
+                        << "dialog" << dialog << "editorFocused" << (editor && editor->hasFocus())
+                        << "native" << (dialog ? dialog->windowHandle() : nullptr)
+                        << "transientParent" << (dialog && dialog->windowHandle() ? dialog->windowHandle()->transientParent() : nullptr)
+                        << "exposed" << (dialog && dialog->windowHandle() && dialog->windowHandle()->isExposed());
+            };
+            QPointer<QDialog> dialog;
+            QPointer<QDialog> ownerModal;
+            auto *modal = qobject_cast<QDialog *>(QApplication::activeModalWidget());
+            for (QObject *ancestor = modal; ancestor; ancestor = ancestor->parent()) {
+                if (ancestor == &window) {
+                    ownerModal = modal;
+                    break;
+                }
+            }
+            for (auto *candidate : window.findChildren<QDialog *>()) {
+                if (candidate->isVisible() && candidate->findChild<QPlainTextEdit *>(QStringLiteral("textBufferEditor"))) {
+                    dialog = candidate;
+                    break;
+                }
+            }
+            if (!dialog) dialog = ownerModal;
+            QPointer<QPlainTextEdit> editor(dialog ? dialog->findChild<QPlainTextEdit *>(QStringLiteral("textBufferEditor")) : nullptr);
             auto *buttons = dialog ? dialog->findChild<QDialogButtonBox *>() : nullptr;
-            if (!editor || !buttons || !buttons->button(QDialogButtonBox::Apply)) qFatal("Expected text editor");
-            editorShown = true; editor->setFocus();
+            QPointer<QPushButton> apply(buttons ? buttons->button(QDialogButtonBox::Apply) : nullptr);
+            const auto failSetup = [&](const QString &message) {
+                editorSetupError = message;
+                snapshot("setup-failed", dialog, editor);
+                if (dialog)
+                    dialog->reject();
+            };
+            snapshot("discovered", dialog, editor);
+            if (!dialog || !editor || !apply) {
+                failSetup(QStringLiteral("Expected the modal text editor and its Apply button"));
+                return;
+            }
+            // 等待 Cocoa 的原生键盘窗口，不把加入 Qt 模态栈等同于可输入。
+            const bool nativeCocoa = QGuiApplication::platformName() == QStringLiteral("cocoa");
+            const auto isReady = [&] {
+                return dialog && editor && apply && dialog->isVisible()
+                    && QApplication::activeModalWidget() == dialog.data()
+                    && (!nativeCocoa || (dialog->windowHandle() && dialog->windowHandle()->isExposed()
+                        && QGuiApplication::focusWindow() == dialog->windowHandle()
+                        && QGuiApplication::applicationState() == Qt::ApplicationActive));
+            };
+            if (!QTest::qWaitFor(isReady, 2000)) {
+                failSetup(QStringLiteral("Text editor did not become the native input window"));
+                return;
+            }
+            editor->setFocus();
+            if (!QTest::qWaitFor([&] { return isReady() && editor->hasFocus(); }, 2000)) {
+                failSetup(QStringLiteral("Text editor did not acquire keyboard focus"));
+                return;
+            }
             QTest::keyClick(editor, Qt::Key_A, Qt::ControlModifier);
             QTest::keyClicks(editor, "edited fixture");
-            buttons->button(QDialogButtonBox::Apply)->click();
+            snapshot("before-apply", dialog, editor);
+            if (!isReady() || !editor->hasFocus()) {
+                failSetup(QStringLiteral("Text editor lost focus before Apply"));
+                return;
+            }
+            editorApplied = true;
+            apply->click();
         });
         auto *edit = first->widget()->findChild<QPushButton *>(QStringLiteral("editRight"));
-        QVERIFY(edit && edit->isEnabled()); edit->click(); QVERIFY(editorShown);
+        QVERIFY(edit && edit->isEnabled());
+        edit->click();
+        qInfo() << "Text editor readiness after-exec"
+                << "appState" << QGuiApplication::applicationState()
+                << "focusWindow" << QGuiApplication::focusWindow() << "owner" << window.windowHandle()
+                << "activeWindow" << QApplication::activeWindow() << "focusWidget" << QApplication::focusWidget()
+                << "modalWidget" << QApplication::activeModalWidget();
+        QVERIFY2(editorSetupError.isEmpty(), qPrintable(editorSetupError));
+        QVERIFY(editorApplied);
         // Cocoa 关闭模态编辑器后可能尚未交还原生焦点；确认前置条件，不改命令响应时限。
         QVERIFY2(QTest::qWaitFor([] { return !QApplication::activeModalWidget(); }, 2000),
                  "Text editor was still modal after Apply");
