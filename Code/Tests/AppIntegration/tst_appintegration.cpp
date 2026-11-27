@@ -1216,6 +1216,9 @@ private slots:
         const QByteArray originalLeft("left original\r\n"), originalRight("right original\r\n");
         writeFile(left, originalLeft); writeFile(right, originalRight);
         MainWindow window; window.resize(1024, 800); window.show(); window.activateWindow();
+        // 进入模态编辑器前，先确认主窗口已取得原生激活，保证关闭后有可恢复的窗口。
+        QVERIFY2(QTest::qWaitForWindowExposed(&window, 2000), "Main window was not exposed before opening the text editor");
+        QVERIFY2(QTest::qWaitForWindowActive(&window, 2000), "Main window was not active before opening the text editor");
         auto *first = qobject_cast<TextCompareSession *>(window.openComparison("text", left, right));
         QVERIFY(first);
         auto *pane = first->widget()->findChild<TextPane *>(QStringLiteral("rightTextPane"));
@@ -1233,6 +1236,11 @@ private slots:
         });
         auto *edit = first->widget()->findChild<QPushButton *>(QStringLiteral("editRight"));
         QVERIFY(edit && edit->isEnabled()); edit->click(); QVERIFY(editorShown);
+        // Cocoa 关闭模态编辑器后可能尚未交还原生焦点；确认前置条件，不改命令响应时限。
+        QVERIFY2(QTest::qWaitFor([] { return !QApplication::activeModalWidget(); }, 2000),
+                 "Text editor was still modal after Apply");
+        window.activateWindow();
+        QVERIFY2(QTest::qWaitForWindowActive(&window, 2000), "Main window was not reactivated after applying the text edit");
         QVERIFY(first->isDirty());
         const QString edited = pane->toPlainText();
         auto *search = window.findChild<QLineEdit *>(QStringLiteral("commandSearch"));
