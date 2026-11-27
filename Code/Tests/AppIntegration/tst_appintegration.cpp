@@ -45,6 +45,7 @@
 #include <QWindow>
 
 #include <cmath>
+#include <cstdio>
 
 using namespace LqCompare;
 
@@ -1111,11 +1112,27 @@ private slots:
 
     void commandSearchCancelsStaleQueuedInput()
     {
+        // 原生 GUI 调用可能阻塞事件循环；留下同步的阶段标记，便于定位最后完成的一步。
+        const auto phase = [](const char *id) {
+            qInfo().nospace() << "queued-search phase=" << id
+                              << " app=" << int(QGuiApplication::applicationState())
+                              << " active=" << static_cast<const void *>(QApplication::activeWindow())
+                              << " focus=" << static_cast<const void *>(QGuiApplication::focusWindow())
+                              << " modal=" << static_cast<const void *>(QApplication::activeModalWidget());
+            std::fflush(nullptr);
+        };
+        phase("01.construct.begin");
         QPointer<MainWindow> window = new MainWindow;
-        window->show(); window->activateWindow();
+        phase("02.show.begin");
+        window->show();
+        phase("03.activate.begin");
+        window->activateWindow();
+        phase("04.activate.end");
         auto *search = window->findChild<QLineEdit *>(QStringLiteral("commandSearch"));
         QVERIFY(search);
+        phase("05.prepare.begin");
         prepareSearchInput(search);
+        phase("06.prepare.end");
         auto *submit = search->findChild<QAction *>(QStringLiteral("commandSearchSubmit"));
         QVERIFY(submit);
         QStringList calls;
@@ -1132,34 +1149,55 @@ private slots:
             if (!box) return;
             ++prompts; lastPrompt = box->text();
             if (!box->button(QMessageBox::Yes)) qFatal("Expected queued command confirmation");
+            phase("21.yes.begin");
             box->button(QMessageBox::Yes)->click();
+            phase("22.yes.end");
         });
         QTimer::singleShot(2000, Qt::PreciseTimer, &responder, [] { qFatal("Queued search did not return"); });
         responder.start();
-        const auto enter = [&] {
+        phase("07.watchdog-armed");
+        const auto drain = [&](const char *begin, const char *end) {
+            phase(begin);
+            QCoreApplication::processEvents();
+            phase(end);
+        };
+        const auto enter = [&](const char *begin, const char *end) {
+            phase(begin);
             QKeyEvent press(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
             QApplication::sendEvent(search, &press);
+            phase(end);
         };
-        search->setText(QStringLiteral("test.queued-first")); enter();
+        search->setText(QStringLiteral("test.queued-first")); enter("08.return-escape.begin", "09.return-escape.end");
         QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+        phase("10.escape.begin");
         QApplication::sendEvent(search, &escape);
-        QCoreApplication::processEvents();
+        phase("11.escape.end");
+        drain("12.escape-drain.begin", "13.escape-drain.end");
         QCOMPARE(prompts, 0); QVERIFY(calls.isEmpty()); QVERIFY(search->text().isEmpty());
-        search->setText(QStringLiteral("test.queued-first")); enter();
+        search->setText(QStringLiteral("test.queued-first")); enter("14.replace-return.begin", "15.replace-return.end");
         search->setText(QStringLiteral("test.queued-second"));
-        QCoreApplication::processEvents();
+        drain("16.replace-drain.begin", "17.replace-drain.end");
         QCOMPARE(prompts, 0); QVERIFY(calls.isEmpty());
         // 未处理事件前混合回车与鼠标入口，只保留新查询的一次请求。
-        search->setText(QStringLiteral("test.queued-first")); enter();
-        search->setText(QStringLiteral("test.queued-second")); enter(); enter(); submit->trigger();
-        QCoreApplication::processEvents();
+        search->setText(QStringLiteral("test.queued-first")); enter("18.first-return.begin", "19.first-return.end");
+        search->setText(QStringLiteral("test.queued-second"));
+        enter("20.second-return.begin", "20.second-return.end");
+        enter("20.duplicate-return.begin", "20.duplicate-return.end");
+        phase("20.submit.begin");
+        submit->trigger();
+        phase("20.submit.end");
+        drain("20.submit-drain.begin", "23.submit-drain.end");
         QCOMPARE(prompts, 1); QCOMPARE(calls, QStringList{QStringLiteral("second")});
         QVERIFY(lastPrompt.contains(QStringLiteral("second"))); QVERIFY(!lastPrompt.contains(QStringLiteral("first")));
-        search->setText(QStringLiteral("test.queued-first")); enter();
-        QCoreApplication::processEvents();
+        search->setText(QStringLiteral("test.queued-first")); enter("24.followup-return.begin", "25.followup-return.end");
+        drain("26.followup-drain.begin", "27.followup-drain.end");
         QCOMPARE(prompts, 2); QCOMPARE(calls, (QStringList{QStringLiteral("second"), QStringLiteral("first")}));
         // 排队期间销毁窗口，带上下文的回调必须自动取消。
-        enter(); delete window.data(); QCoreApplication::processEvents();
+        enter("28.teardown-return.begin", "29.teardown-return.end");
+        phase("30.delete.begin");
+        delete window.data();
+        phase("31.delete.end");
+        drain("32.teardown-drain.begin", "33.teardown-drain.end");
         QCOMPARE(prompts, 2); QCOMPARE(calls.size(), 2); QVERIFY(!QApplication::activeModalWidget());
     }
 
