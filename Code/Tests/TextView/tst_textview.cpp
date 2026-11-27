@@ -244,6 +244,36 @@ private slots:
         QCOMPARE(session.rightDocument().bytes(), QByteArray("second\n"));
         session.undo(); QCOMPARE(session.rightDocument().bytes(), QByteArray("second\r\n"));
     }
+    void failedSearchDoesNotChangeMergeSelection()
+    {
+        TextCompareSession session;
+        QVERIFY(session.open());
+        QVERIFY(session.setText(true, QStringLiteral("Unique L1\nanchor one\nL2\nanchor two\nL3\n")));
+        QVERIFY(session.setText(false, QStringLiteral("R1\nanchor one\nR2\nanchor two\nR3\n")));
+        QScopedPointer<QWidget> widget(session.createWidget());
+        widget->resize(900, 500);
+        widget->show();
+        widget->activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(widget.data()));
+        auto *left = widget->findChild<TextPane *>(QStringLiteral("leftTextPane"));
+        QVERIFY(left);
+        QCOMPARE(session.differenceCount(), 3);
+        session.lastDifference();
+        QVERIFY(session.goToLine(4, true));
+        QTRY_VERIFY(left->hasFocus());
+        const auto before = left->textCursor();
+        QCOMPARE(session.currentDifference(), 2);
+        QVERIFY(!session.findText(QStringLiteral("no such term")));
+        QCOMPARE(left->textCursor().position(), before.position());
+        QCOMPARE(left->textCursor().anchor(), before.anchor());
+        QCOMPARE(session.currentDifference(), 2);
+        QVERIFY(session.statusText().contains(QStringLiteral("not found")));
+        QVERIFY(session.findText(QStringLiteral("unique l1")));
+        QCOMPARE(left->textCursor().selectedText(), QStringLiteral("Unique L1"));
+        QVERIFY(session.statusText().contains(QStringLiteral("wrapped")));
+        QCOMPARE(session.currentDifference(), 0);
+    }
+
     void searchAndLineJumpUseOriginalLineNumbers()
     {
         TextCompareSession session;

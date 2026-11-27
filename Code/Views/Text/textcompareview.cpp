@@ -586,18 +586,24 @@ bool TextCompareView::findText(const QString &text, bool backward, bool caseSens
     QTextDocument::FindFlags flags;
     if (backward) flags |= QTextDocument::FindBackward;
     if (caseSensitive) flags |= QTextDocument::FindCaseSensitively;
-    const QTextCursor previous = pane->textCursor();
-    if (pane->find(text, flags)) { pane->setFocus(); return true; }
-    QTextCursor cursor(pane->document());
-    cursor.movePosition(backward ? QTextCursor::End : QTextCursor::Start);
-    pane->setTextCursor(cursor);
-    if (pane->find(text, flags)) {
+    // 在文档的临时光标上查找，只有命中才移动窗格光标，避免失败时改变待合并的差异。
+    auto *document = pane->document();
+    QTextCursor match = document->find(text, pane->textCursor(), flags);
+    if (!match.isNull()) {
+        pane->setTextCursor(match);
+        pane->setFocus();
+        return true;
+    }
+    QTextCursor boundary(document);
+    boundary.movePosition(backward ? QTextCursor::End : QTextCursor::Start);
+    match = document->find(text, boundary, flags);
+    if (!match.isNull()) {
+        pane->setTextCursor(match);
         pane->setFocus();
         m_session->setStatusText(tr("Search wrapped to the %1 of the %2 file.")
             .arg(backward ? tr("end") : tr("start"), m_activeSide == 0 ? tr("left") : tr("right")));
         return true;
     }
-    pane->setTextCursor(previous);
     m_session->setStatusText(tr("Text not found in the %1 file: %2")
         .arg(m_activeSide == 0 ? tr("left") : tr("right"), text));
     return false;
