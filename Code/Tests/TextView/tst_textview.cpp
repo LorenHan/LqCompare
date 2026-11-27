@@ -169,6 +169,34 @@ private slots:
         QVERIFY(session.saveSideAs(true, output, false, &error));
         QCOMPARE(session.leftPath(), output);
     }
+    void decodeControlsRequireBothBuffersSaved()
+    {
+        QTemporaryDir directory;
+        const auto left = directory.filePath("left.txt"), right = directory.filePath("right.txt");
+        writeFile(left, "left\n"); writeFile(right, "right\n");
+        TextCompareSession session(left, right);
+        QVERIFY(session.open());
+        QScopedPointer<QWidget> widget(session.createWidget());
+        auto *leftDecode = widget->findChild<QComboBox *>("encodingLeft");
+        auto *rightDecode = widget->findChild<QComboBox *>("encodingRight");
+        auto *ending = widget->findChild<QComboBox *>("lineEndingRight");
+        auto *bom = widget->findChild<QComboBox *>("bomSaveRight");
+        auto *save = widget->findChild<QPushButton *>("saveRight");
+        QVERIFY(leftDecode && rightDecode && ending && bom && save);
+        QVERIFY(leftDecode->isEnabled() && rightDecode->isEnabled());
+        QVERIFY(session.setText(false, QStringLiteral("right changed\n")));
+        QVERIFY(!leftDecode->isEnabled());
+        QVERIFY(!rightDecode->isEnabled());
+        QVERIFY(ending->isEnabled() && bom->isEnabled() && save->isEnabled());
+        save->click();
+        QCOMPARE(readFile(right), QByteArray("right changed\n"));
+        QVERIFY(leftDecode->isEnabled() && rightDecode->isEnabled());
+        const int latin = leftDecode->findText(QStringLiteral("ISO-8859-1"));
+        QVERIFY(latin > 0);
+        QVERIFY(QMetaObject::invokeMethod(leftDecode, "activated", Q_ARG(int, latin)));
+        QCOMPARE(session.leftDocument().codecName(), QByteArray("ISO-8859-1"));
+        QCOMPARE(session.rightDocument().bytes(), QByteArray("right changed\n"));
+    }
     void editorAppliesWithoutWritingPadding()
     {
         QTemporaryDir directory;

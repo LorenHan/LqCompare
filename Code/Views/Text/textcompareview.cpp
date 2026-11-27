@@ -466,7 +466,8 @@ void TextCompareView::refreshActions()
         m_edit[side]->setEnabled(writable && document.canEdit());
         m_save[side]->setEnabled(writable && document.isModified());
         m_saveAs[side]->setEnabled(writable && document.canEdit());
-        m_encodings[side]->setEnabled(writable);
+        // 重新解码会重新读取两侧文件；任一侧未保存时均不可用。
+        m_encodings[side]->setEnabled(writable && !m_session->isDirty());
         m_endings[side]->setEnabled(writable && document.canEdit());
         m_bomSaves[side]->setEnabled(writable && document.canEdit());
     }
