@@ -2,6 +2,7 @@
 #define LQCOMPARE_TEXTCOMPAREVIEW_H
 
 #include <QPlainTextEdit>
+#include <QHash>
 #include <QWidget>
 #include <QVector>
 #include "textdiff.h"
@@ -21,7 +22,7 @@ class TextPane : public QPlainTextEdit {
     Q_OBJECT
 public:
     explicit TextPane(QWidget *parent = nullptr);
-    void setLineNumbers(const QVector<int> &numbers);
+    void setLineNumbers(const QVector<int> &numbers, const QHash<int, QString> &clipboardSources);
     ///
     /// \brief 号码槽里当前铺的原文行号（0 起；-1 = 这一行在这一侧不存在）。
     ///
@@ -47,6 +48,7 @@ private:
     void updateGutter();
     QWidget *m_gutter;
     QVector<int> m_numbers;
+    QHash<int, QString> m_clipboardSources;
     int m_gutterWidth = 44;
 };
 

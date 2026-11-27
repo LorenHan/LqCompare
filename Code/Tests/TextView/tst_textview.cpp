@@ -104,6 +104,75 @@ private slots:
             QVERIFY(widget->grab().save(screenshot));
         }
     }
+    void clipboardKeepsOriginalUnicodeSeparators()
+    {
+        QTemporaryDir temp;
+        const QString left = temp.filePath("left.txt"), right = temp.filePath("right.txt");
+        const QString original = QStringLiteral("a\u2028b\u2029c\u21b5\u00b6z");
+        const QString rendered = QStringLiteral("a\u21b5b\u00b6c\u21b5\u00b6z");
+        writeFile(left, (original + QStringLiteral("\n\nomega\n")).toUtf8());
+        writeFile(right, (original + QStringLiteral("\nINSERT\n\nomega\n")).toUtf8());
+        TextCompareSession session(left, right);
+        QVERIFY(session.open());
+        QCOMPARE(session.leftDocument().lines().first().text, original);
+        QScopedPointer<QWidget> widget(session.createWidget());
+        auto *pane = widget->findChild<TextPane *>("leftTextPane");
+        QVERIFY(pane);
+        QCOMPARE(pane->lineNumbers(), QVector<int>({0, -1, 1, 2}));
+        const auto document = pane->document();
+        QCOMPARE(document->firstBlock().text(), rendered);
+
+        QTextCursor cursor(document);
+        cursor.setPosition(1);
+        cursor.setPosition(7, QTextCursor::KeepAnchor);
+        pane->setTextCursor(cursor);
+        pane->copy();
+        const QString withinLine = QApplication::clipboard()->text();
+
+        const auto omega = document->findBlockByNumber(3);
+        cursor.setPosition(omega.position() + 2);
+        cursor.setPosition(3, QTextCursor::KeepAnchor);
+        pane->setTextCursor(cursor);
+        pane->copy();
+        const QString acrossGap = QApplication::clipboard()->text();
+        QCOMPARE(QStringList({withinLine, acrossGap}),
+                 QStringList({original.mid(1, 6), original.mid(3) + QStringLiteral("\n\nom")}));
+
+        // 显示相同的新原文也必须刷新复制数据，不能继续还原上一份文件。
+        writeFile(left, (rendered + QStringLiteral("\n\nomega\n")).toUtf8());
+        QVERIFY(session.reload());
+        cursor = QTextCursor(document);
+        cursor.setPosition(1);
+        cursor.setPosition(7, QTextCursor::KeepAnchor);
+        pane->setTextCursor(cursor);
+        pane->copy();
+        QCOMPARE(QApplication::clipboard()->text(), rendered.mid(1, 6));
+    }
+
+    void clipboardPreservesNonBreakingSpaces()
+    {
+        QTemporaryDir temp;
+        const QString left = temp.filePath("left.txt"), right = temp.filePath("right.txt");
+        const QString line = QStringLiteral("a\u00a0b c");
+        writeFile(left, (line + QStringLiteral("\nomega\n")).toUtf8());
+        writeFile(right, (line + QStringLiteral("\nINSERT\nomega\n")).toUtf8());
+        TextCompareSession session(left, right);
+        QVERIFY(session.open());
+        QScopedPointer<QWidget> widget(session.createWidget());
+        auto *pane = widget->findChild<TextPane *>("leftTextPane");
+        QVERIFY(pane);
+        QCOMPARE(pane->lineNumbers(), QVector<int>({0, -1, 1}));
+        QTextCursor cursor(pane->document());
+        cursor.setPosition(1);
+        cursor.setPosition(4, QTextCursor::KeepAnchor);
+        pane->setTextCursor(cursor);
+        pane->copy();
+        QCOMPARE(QApplication::clipboard()->text(), line.mid(1, 3));
+        pane->selectAll();
+        pane->copy();
+        QCOMPARE(QApplication::clipboard()->text(), line + QStringLiteral("\nomega"));
+    }
+
     void clipboardSkipsAlignmentGapsButKeepsRealBlankLines()
     {
         QTemporaryDir temp;

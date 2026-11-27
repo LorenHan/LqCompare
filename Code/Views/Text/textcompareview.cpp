@@ -119,7 +119,12 @@ TextPane::TextPane(QWidget *parent) : QPlainTextEdit(parent), m_gutter(new Gutte
     updateGutter();
 }
 
-void TextPane::setLineNumbers(const QVector<int> &numbers) { m_numbers = numbers; updateGutter(); }
+void TextPane::setLineNumbers(const QVector<int> &numbers, const QHash<int, QString> &clipboardSources)
+{
+    m_numbers = numbers;
+    m_clipboardSources = clipboardSources;
+    updateGutter();
+}
 void TextPane::updateGutter()
 {
     int largest = 1;
@@ -140,17 +145,20 @@ QMimeData *TextPane::createMimeDataFromSelection() const
 
     const int start = cursor.selectionStart(), end = cursor.selectionEnd();
     QTextBlock block = document()->findBlock(start);
-    auto gap = block;
-    while (gap.isValid() && gap.position() <= end && m_numbers.at(gap.blockNumber()) >= 0)
-        gap = gap.next();
-    if (!gap.isValid() || gap.position() > end)
+    auto special = block;
+    while (special.isValid() && special.position() <= end
+           && m_numbers.at(special.blockNumber()) >= 0 && !m_clipboardSources.contains(special.blockNumber()))
+        special = special.next();
+    if (!special.isValid() || special.position() > end)
         return QPlainTextEdit::createMimeDataFromSelection();
 
     QStringList lines;
     for (; block.isValid() && block.position() <= end; block = block.next()) {
         if (m_numbers.at(block.blockNumber()) < 0) continue;
         // 对齐占位没有原文行号；真实空行仍占选区中的一行。
-        const QString line = block.text();
+        // 显示替代符与原字符同为一个 UTF-16 单元，按原文切片，不反向猜替代符。
+        const auto original = m_clipboardSources.constFind(block.blockNumber());
+        const QString line = original == m_clipboardSources.cend() ? block.text() : original.value();
         const int from = qBound(0, start - block.position(), line.size());
         const int to = qBound(0, end - block.position(), line.size());
         lines.append(line.mid(from, to - from));
@@ -453,16 +461,26 @@ void TextCompareView::refresh()
         m_bomSaves[side]->setCurrentIndex(bomSavePolicyIndexOf(m_session->bomSavePolicy(side == 0)));
         QStringList content;
         QVector<int> numbers;
+        QHash<int, QString> clipboardSources;
         for (const auto &row : m_session->comparison().rows) {
             const int line = side == 0 ? row.leftLine : row.rightLine;
             numbers.append(line);
-            content.append(line >= 0 ? displayLine(document.lines()[line].text) : QString());
+            if (line < 0) {
+                content.append(QString());
+                continue;
+            }
+            const auto &sourceLine = document.lines()[line].text;
+            const QString display = displayLine(sourceLine);
+            // Qt 默认纯文本复制会把不间断空格替换成普通空格。
+            if (display != sourceLine || sourceLine.contains(QChar(0x00a0)))
+                clipboardSources.insert(numbers.size() - 1, sourceLine);
+            content.append(display);
         }
         const int position = m_panes[side]->verticalScrollBar()->value();
         const int horizontal = m_panes[side]->horizontalScrollBar()->value();
         const QSignalBlocker paneBlocker(m_panes[side]);
         m_panes[side]->setPlainText(content.join(QLatin1Char('\n')));
-        m_panes[side]->setLineNumbers(numbers);
+        m_panes[side]->setLineNumbers(numbers, clipboardSources);
         m_panes[side]->verticalScrollBar()->setValue(position);
         m_panes[side]->horizontalScrollBar()->setValue(horizontal);
         QString metadata = tr("%1 lines • %2%3 • %4 • %5")
