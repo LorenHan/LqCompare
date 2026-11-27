@@ -239,6 +239,19 @@ bool Document::decode(const QByteArray &bytes, Document *result, QString *error,
         if (state.remainingChars > 0) decoded += QChar::ReplacementCharacter;
         next.m_decodeErrors = state.invalidChars + (state.remainingChars > 0 ? 1 : 0);
     }
+    // Qt 5 的 UTF-16 解码器可能原样留下孤立代理项，且不计入解码错误。
+    if (next.m_codec.startsWith("UTF-16")) {
+        for (int i = 0; i < decoded.size(); ++i) {
+            const QChar unit = decoded.at(i);
+            if (unit.isHighSurrogate() && i + 1 < decoded.size()
+                && decoded.at(i + 1).isLowSurrogate()) {
+                ++i;
+            } else if (unit.isHighSurrogate() || unit.isLowSurrogate()) {
+                decoded[i] = QChar::ReplacementCharacter;
+                ++next.m_decodeErrors;
+            }
+        }
+    }
     next.m_binary = decoded.contains(QChar(0));
     // Qt editors treat U+2029 as a paragraph break and cannot distinguish it
     // from a file newline after editing. Keep these uncommon files read-only.

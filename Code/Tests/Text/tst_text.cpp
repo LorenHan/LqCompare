@@ -143,6 +143,32 @@ private slots:
         incomplete.bytes(&error);
         QVERIFY(!error.isEmpty());
     }
+    void utf16UnmatchedSurrogatesAreReadOnly_data()
+    {
+        QTest::addColumn<QByteArray>("input");
+        QTest::addColumn<QByteArray>("codec");
+        QTest::newRow("le-bom") << QByteArray::fromHex("fffe610000d8620000dc3dd800de") << QByteArray();
+        QTest::newRow("be-bom") << QByteArray::fromHex("feff0061d8000062dc00d83dde00") << QByteArray();
+        QTest::newRow("be-explicit") << QByteArray::fromHex("0061d8000062dc00d83dde00") << QByteArray("UTF-16BE");
+    }
+    void utf16UnmatchedSurrogatesAreReadOnly()
+    {
+        QFETCH(QByteArray, input);
+        QFETCH(QByteArray, codec);
+        Document document;
+        QVERIFY(Document::decode(input, &document, nullptr, codec));
+        QCOMPARE(document.decodingErrors(), 2);
+        const auto expected = QStringLiteral("a") + QChar(QChar::ReplacementCharacter)
+            + QStringLiteral("b") + QChar(QChar::ReplacementCharacter) + QString::fromUtf8(QByteArray::fromHex("f09f9880"));
+        QCOMPARE(document.normalizedText(), expected);
+        QVERIFY(!document.canEdit());
+        QVERIFY(!document.setNormalizedText(QStringLiteral("edited")));
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto path = directory.filePath(QStringLiteral("invalid-utf16.txt"));
+        QVERIFY(!document.saveAs(path, false));
+        QVERIFY(!QFile::exists(path));
+    }
     void utf32RejectsMalformedScalarsAndTruncatedUnits()
     {
         const QList<QByteArray> damaged = {
