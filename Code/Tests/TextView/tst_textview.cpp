@@ -169,6 +169,33 @@ private slots:
         QVERIFY(session.saveSideAs(true, output, false, &error));
         QCOMPARE(session.leftPath(), output);
     }
+    void rejectedDecoderReloadKeepsPreviouslyWorkingEncoding()
+    {
+        QTemporaryDir directory;
+        const auto initial = directory.filePath("initial.txt");
+        const auto replacement = directory.filePath("replacement.txt");
+        const auto right = directory.filePath("right.txt");
+        writeFile(initial, QByteArray::fromHex("e90a"));
+        writeFile(replacement, QByteArray::fromHex("e90a"));
+        writeFile(right, "right");
+        TextCompareSession session(initial, right);
+        const auto key = QStringLiteral("text.leftEncoding");
+        session.sessionSettings()->setValue(key, QByteArray("ISO-8859-1"));
+        QVERIFY(session.open());
+        QCOMPARE(session.leftDocument().codecName(), QByteArray("ISO-8859-1"));
+        session.sessionSettings()->setValue(key, QByteArray("not-an-encoding"));
+        QString error;
+        QVERIFY(!session.reload(&error));
+        QVERIFY(error.contains(QStringLiteral("Unsupported text encoding")));
+        QCOMPARE(session.leftPath(), initial);
+        QCOMPARE(session.leftDocument().codecName(), QByteArray("ISO-8859-1"));
+        QVERIFY2(session.setPaths(replacement, right, &error), qPrintable(error));
+        QCOMPARE(session.leftPath(), replacement);
+        QCOMPARE(session.leftDocument().codecName(), QByteArray("ISO-8859-1"));
+        session.sessionSettings()->setValue(key, QByteArray("windows-1252"));
+        QVERIFY2(session.reload(&error), qPrintable(error));
+        QCOMPARE(session.leftDocument().codecName().toLower(), QByteArray("windows-1252"));
+    }
     void decodeControlsRequireBothBuffersSaved()
     {
         QTemporaryDir directory;

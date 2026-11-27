@@ -96,11 +96,17 @@ bool TextCompareSession::loadPair(const QString &left, const QString &right, QSt
 QWidget *TextCompareSession::createView(QWidget *parent) { return new TextCompareView(this, parent); }
 bool TextCompareSession::doOpen(QString *error)
 {
+    const auto previousLeftCodec = m_leftCodec;
+    const auto previousRightCodec = m_rightCodec;
     if (!m_leftReadOnly || state() != State::Open)
         m_leftCodec = sessionSettings()->value(QStringLiteral("text.leftEncoding")).toByteArray();
     if (!m_rightReadOnly || state() != State::Open)
         m_rightCodec = sessionSettings()->value(QStringLiteral("text.rightEncoding")).toByteArray();
-    return loadPair(m_leftPath, m_rightPath, error);
+    if (loadPair(m_leftPath, m_rightPath, error)) return true;
+    // 读盘或解码失败时，和当前文档一起保留最后一次成功使用的编码。
+    m_leftCodec = previousLeftCodec;
+    m_rightCodec = previousRightCodec;
+    return false;
 }
 bool TextCompareSession::doReload(QString *error) { return doOpen(error); }
 
