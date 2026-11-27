@@ -52,6 +52,18 @@ QString cleanRoot(const QString &path)
     return path.isEmpty() ? QString() : QDir::cleanPath(QFileInfo(path).absoluteFilePath());
 }
 
+bool matchesBaselineRoot(const QString &bound, const QString &selected, Qt::CaseSensitivity sensitivity)
+{
+    const auto boundRoot = cleanRoot(bound);
+    if (boundRoot.compare(selected, sensitivity) == 0)
+        return true;
+    // 只解析显式选中的根目录，不改变扫描时对子目录符号链接的规则。
+    const auto boundCanonical = QFileInfo(boundRoot).canonicalFilePath();
+    const auto selectedCanonical = QFileInfo(selected).canonicalFilePath();
+    return !boundCanonical.isEmpty() && !selectedCanonical.isEmpty()
+        && boundCanonical.compare(selectedCanonical, sensitivity) == 0;
+}
+
 bool isUnder(const QString &child, const QString &parent)
 {
     const QString prefix = parent.endsWith(QLatin1Char('/')) ? parent : parent + QLatin1Char('/');
@@ -73,8 +85,14 @@ public:
         result.scanMaskDeclaration = options.scanMaskDeclaration;
         result.timestampsCompared = options.compareTimestamps;
         result.timeToleranceMs = options.timeToleranceMs;
-        // 有效基线才置位：界面与报表靠这一位解释「为什么这一条不是两侧均改」。
-        result.baselineApplied = baseline != nullptr && validateBaselineView(*baseline).isEmpty();
+        // 同名相对路径不能让另一对目录复用祖先记录，两侧顺序也必须一致。
+        if (baseline && validateBaselineView(*baseline).isEmpty()) {
+            result.baselineApplied =
+                matchesBaselineRoot(baseline->leftRoot, result.leftRoot, fs.caseSensitivity())
+                && matchesBaselineRoot(baseline->rightRoot, result.rightRoot, fs.caseSensitivity());
+            if (!result.baselineApplied)
+                result.warnings << QObject::tr("比较基线与当前目录对不匹配，已按无基线比较。");
+        }
         const auto parsed = Filter::MaskFilter::parse(options.scanMaskDeclaration);
         if (!parsed.ok()) {
             result.error = QObject::tr("扫描掩码无效：\n%1").arg(parsed.describeErrors());
@@ -449,7 +467,7 @@ private:
             // 而它又只作用在叶子上（目录的结论由子条目汇总，见第 5 条）。
             entry.timeRelation = options.compareTimestamps
                 ? timeRelationFor(entry, options.timeToleranceMs) : TimeRelation::Unknown;
-            if (baseline && !entry.isDirectory())
+            if (result.baselineApplied && !entry.isDirectory())
                 applyBaselineStatus(entry, *baseline);
             const int index = result.entries.size();
             result.entries.append(entry);
