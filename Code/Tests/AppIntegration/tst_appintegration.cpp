@@ -266,6 +266,69 @@ SearchResult submitSearch(QLineEdit *search, const QString &query, QMessageBox::
     diagnostics.preparationMs = diagnostics.elapsed.elapsed();
     diagnostics.elapsed.restart();
     diagnostics.enter("input-host-ready");
+    // 单独观察 Cocoa 的未命中用例；不响应事件，不改变原定时器或键鼠输入。
+    class MissingDialogLifecycle final : public QObject {
+    public:
+        MissingDialogLifecycle(QWidget *owner, const QString &query, const QElapsedTimer &clock)
+            : m_owner(owner), m_text(QStringLiteral("No command matches \"%1\".").arg(query.trimmed())),
+              m_clock(clock) {}
+    protected:
+        bool eventFilter(QObject *target, QEvent *event) override
+        {
+            if (!m_owner)
+                return false;
+            if (event->type() == QEvent::Show) {
+                auto *box = qobject_cast<QMessageBox *>(target);
+                if (!m_show && matches(box)) {
+                    m_show = true;
+                    record("widget-show", box, box->windowHandle());
+                }
+                return false;
+            }
+            bool *seen = nullptr;
+            const char *phase = nullptr;
+            switch (event->type()) {
+            case QEvent::Expose: seen = &m_expose; phase = "native-expose"; break;
+            case QEvent::WindowActivate: seen = &m_activate; phase = "native-activate"; break;
+            case QEvent::FocusIn: seen = &m_focus; phase = "native-focus-in"; break;
+            default: return false;
+            }
+            auto *native = qobject_cast<QWindow *>(target);
+            if (!native || *seen)
+                return false;
+            // 只比较已存在的句柄；不要调用 winId() 强制创建原生窗口。
+            for (auto *box : m_owner->findChildren<QMessageBox *>(QString(), Qt::FindDirectChildrenOnly)) {
+                if (matches(box) && box->windowHandle() == native) {
+                    if (event->type() == QEvent::Expose && !native->isExposed())
+                        return false;
+                    *seen = true;
+                    record(phase, box, native);
+                    break;
+                }
+            }
+            return false;
+        }
+    private:
+        bool matches(QMessageBox *box) const
+        {
+            return box && box->parentWidget() == m_owner.data()
+                && box->standardButtons() == QMessageBox::Ok && box->text() == m_text;
+        }
+        void record(const char *phase, QMessageBox *box, QWindow *native) const
+        {
+            qInfo().nospace() << "missing-dialog phase=" << phase << " ms=" << m_clock.elapsed()
+                              << " modal=" << (QApplication::activeModalWidget() == box)
+                              << " exposed=" << (native && native->isExposed())
+                              << " nativeFocus=" << (native && QGuiApplication::focusWindow() == native);
+        }
+        QPointer<QWidget> m_owner;
+        QString m_text;
+        const QElapsedTimer &m_clock;
+        bool m_show = false, m_expose = false, m_activate = false, m_focus = false;
+    };
+    MissingDialogLifecycle dialogLifecycle(search->window(), query, diagnostics.elapsed);
+    if (QGuiApplication::platformName() == QStringLiteral("cocoa") && diagnostics.tag == QStringLiteral("missing"))
+        qApp->installEventFilter(&dialogLifecycle);
     QTimer responder;
     QObject::connect(search, &QLineEdit::returnPressed, &responder, [&] {
         ++diagnostics.returnSignals;
