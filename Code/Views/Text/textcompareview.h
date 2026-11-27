@@ -42,6 +42,7 @@ signals:
 protected:
     void resizeEvent(QResizeEvent *event) override;
     void focusInEvent(QFocusEvent *event) override;
+    QMimeData *createMimeDataFromSelection() const override;
 private:
     void updateGutter();
     QWidget *m_gutter;

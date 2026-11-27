@@ -1,5 +1,6 @@
 #include <QtTest>
 #include <QFile>
+#include <QClipboard>
 #include <QTemporaryDir>
 #include <QScopedPointer>
 #include <QScrollBar>
@@ -103,6 +104,37 @@ private slots:
             QVERIFY(widget->grab().save(screenshot));
         }
     }
+    void clipboardSkipsAlignmentGapsButKeepsRealBlankLines()
+    {
+        QTemporaryDir temp;
+        const QString left = temp.filePath("left.txt"), right = temp.filePath("right.txt");
+        writeFile(left, "alpha\n\ncommon\nomega\n");
+        writeFile(right, "PREFIX\nalpha\n\ncommon\nINSERT\nomega\nSUFFIX\n");
+        TextCompareSession session(left, right);
+        QVERIFY(session.open());
+        QScopedPointer<QWidget> widget(session.createWidget());
+        auto *pane = widget->findChild<TextPane *>("leftTextPane");
+        QVERIFY(pane);
+        QCOMPARE(pane->lineNumbers(), QVector<int>({-1, 0, 1, 2, -1, 3, -1}));
+        pane->selectAll();
+        pane->copy();
+        QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("alpha\n\ncommon\nomega"));
+        const auto document = pane->document();
+        const auto common = document->findBlockByNumber(3);
+        const auto omega = document->findBlockByNumber(5);
+        QTextCursor reversed(document);
+        reversed.setPosition(omega.position() + 2);
+        reversed.setPosition(common.position() + 2, QTextCursor::KeepAnchor);
+        pane->setTextCursor(reversed);
+        pane->copy();
+        QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("mmon\nom"));
+        reversed.setPosition(omega.position());
+        reversed.setPosition(common.position() + 2, QTextCursor::KeepAnchor);
+        pane->setTextCursor(reversed);
+        pane->copy();
+        QCOMPARE(QApplication::clipboard()->text(), QStringLiteral("mmon\n"));
+    }
+
     void copyThenSaveIsExplicit()
     {
         QTemporaryDir directory;

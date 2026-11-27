@@ -13,6 +13,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
+#include <QMimeData>
 #include <QPainter>
 #include <QPushButton>
 #include <QScrollBar>
@@ -131,6 +132,35 @@ void TextPane::updateGutter()
 }
 void TextPane::resizeEvent(QResizeEvent *event) { QPlainTextEdit::resizeEvent(event); updateGutter(); }
 void TextPane::focusInEvent(QFocusEvent *event) { QPlainTextEdit::focusInEvent(event); emit activated(); }
+QMimeData *TextPane::createMimeDataFromSelection() const
+{
+    const QTextCursor cursor = textCursor();
+    if (!cursor.hasSelection() || m_numbers.size() != document()->blockCount())
+        return QPlainTextEdit::createMimeDataFromSelection();
+
+    const int start = cursor.selectionStart(), end = cursor.selectionEnd();
+    QTextBlock block = document()->findBlock(start);
+    auto gap = block;
+    while (gap.isValid() && gap.position() <= end && m_numbers.at(gap.blockNumber()) >= 0)
+        gap = gap.next();
+    if (!gap.isValid() || gap.position() > end)
+        return QPlainTextEdit::createMimeDataFromSelection();
+
+    QStringList lines;
+    for (; block.isValid() && block.position() <= end; block = block.next()) {
+        if (m_numbers.at(block.blockNumber()) < 0) continue;
+        // 对齐占位没有原文行号；真实空行仍占选区中的一行。
+        const QString line = block.text();
+        const int from = qBound(0, start - block.position(), line.size());
+        const int to = qBound(0, end - block.position(), line.size());
+        lines.append(line.mid(from, to - from));
+    }
+
+    auto *data = new QMimeData;
+    data->setText(lines.join(QLatin1Char('\n')));
+    return data;
+}
+
 void TextPane::paintGutter(QPaintEvent *event)
 {
     QPainter painter(m_gutter);
