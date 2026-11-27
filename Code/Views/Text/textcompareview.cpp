@@ -637,12 +637,22 @@ void TextCompareView::promptFind()
 
 void TextCompareView::promptGoToLine()
 {
-    const int count = (m_activeSide == 0 ? m_session->leftDocument() : m_session->rightDocument()).lines().size();
+    const int side = m_activeSide;
+    const bool left = side == 0;
+    const int count = (left ? m_session->leftDocument() : m_session->rightDocument()).lines().size();
     if (!count) { m_session->setStatusText(tr("This file is empty.")); return; }
+
+    // 对齐视图的空位没有原文件行号；优先用它后面最近的正文行，末尾空位用最后一行。
+    const auto &rows = m_session->comparison().rows;
+    int currentLine = count;
+    for (int row = qMax(0, m_panes[side]->textCursor().blockNumber()); row < rows.size(); ++row) {
+        const int sourceLine = left ? rows[row].leftLine : rows[row].rightLine;
+        if (sourceLine >= 0) { currentLine = sourceLine + 1; break; }
+    }
     bool accepted = false;
     const int line = QInputDialog::getInt(this, tr("Go to line"),
-        m_activeSide == 0 ? tr("Left line number:") : tr("Right line number:"), 1, 1, count, 1, &accepted);
-    if (accepted) goToLine(line, m_activeSide == 0);
+        left ? tr("Left line number:") : tr("Right line number:"), currentLine, 1, count, 1, &accepted);
+    if (accepted) goToLine(line, left);
 }
 
 }

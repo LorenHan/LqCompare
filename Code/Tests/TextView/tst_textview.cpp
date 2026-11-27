@@ -5,6 +5,8 @@
 #include <QScrollBar>
 #include <QCheckBox>
 #include <QDialog>
+#include <QInputDialog>
+#include <QSpinBox>
 #include <QDialogButtonBox>
 #include <QPushButton>
 #include <QTimer>
@@ -347,6 +349,56 @@ private slots:
         QVERIFY(!session.goToLine(20, true));
         QVERIFY(!session.goToLine(0, true));
     }
+    void goToLineDialogStartsAtTheActiveFilesSourceLine()
+    {
+        TextCompareSession session;
+        QVERIFY(session.open());
+        QVERIFY(session.setText(true, "A\nB\nC\nD\n"));
+        QVERIFY(session.setText(false, "A\nINSERT\nB\nC\nD\n"));
+        QScopedPointer<QWidget> widget(session.createWidget());
+        widget->show();
+        auto *left = widget->findChild<TextPane *>("leftTextPane");
+        auto *right = widget->findChild<TextPane *>("rightTextPane");
+        QVERIFY(left);
+        QVERIFY(right);
+        widget->activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(widget.data()));
+        auto prompt = [&](bool accept) {
+            int value = -1;
+            QTimer::singleShot(0, widget.data(), [&] {
+                auto *dialog = qobject_cast<QInputDialog *>(QApplication::activeModalWidget());
+                if (!dialog) return;
+                if (auto *spin = dialog->findChild<QSpinBox *>()) value = spin->value();
+                if (accept) dialog->accept();
+                else dialog->reject();
+            });
+            session.goToLine();
+            return value;
+        };
+        QVERIFY(session.goToLine(4, true));
+        QCOMPARE(left->textCursor().blockNumber(), 4);
+        QCOMPARE(prompt(true), 4);
+        QCOMPARE(left->textCursor().blockNumber(), 4);
+
+        widget->activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(widget.data()));
+        QVERIFY(session.goToLine(3, false));
+        QTRY_VERIFY(right->hasFocus());
+        QCOMPARE(right->textCursor().blockNumber(), 2);
+        const auto previousDifference = session.currentDifference();
+        QCOMPARE(prompt(false), 3);
+        QCOMPARE(right->textCursor().blockNumber(), 2);
+        QCOMPARE(session.currentDifference(), previousDifference);
+
+        widget->activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(widget.data()));
+        left->setFocus();
+        QTRY_VERIFY(left->hasFocus());
+        left->setTextCursor(QTextCursor(left->document()->findBlockByNumber(1)));
+        QCOMPARE(prompt(false), 2);
+        QCOMPARE(left->textCursor().blockNumber(), 1);
+    }
+
     void restoredRuleSettingsRecompute()
     {
         TextCompareSession session;
