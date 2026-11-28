@@ -1103,6 +1103,33 @@ private slots:
         QVERIFY(!tree->currentIndex().isValid());
     }
 
+    void refreshingFolderResultRestoresMultipleRowsInOneBatch()
+    {
+        Pair pair;
+        for (const auto &name : {QStringLiteral("a"), QStringLiteral("b"), QStringLiteral("c")}) {
+            QVERIFY(writeFile(pair.left + QLatin1Char('/') + name, "left"));
+            QVERIFY(writeFile(pair.right + QLatin1Char('/') + name, "right"));
+        }
+        FolderCompareView view;
+        const auto result = Folder::compare(pair.left, pair.right);
+        view.setResult(result);
+        auto *left = view.leftTree()->selectionModel();
+        auto *right = view.rightTree()->selectionModel();
+        for (const auto &name : {QStringLiteral("a"), QStringLiteral("c")}) {
+            const auto index = indexNamed(view.leftTree()->model(), name);
+            QVERIFY(index.isValid());
+            left->select(index, QItemSelectionModel::Select | QItemSelectionModel::Rows);
+            right->select(index, QItemSelectionModel::Select | QItemSelectionModel::Rows);
+        }
+        QSignalSpy leftChanges(left, &QItemSelectionModel::selectionChanged);
+        QSignalSpy rightChanges(right, &QItemSelectionModel::selectionChanged);
+        view.setResult(result);
+        QCOMPARE(left->selectedRows().size(), 2);
+        QCOMPARE(right->selectedRows().size(), 2);
+        QCOMPARE(leftChanges.count(), 1);
+        QCOMPARE(rightChanges.count(), 1);
+    }
+
     void sessionViewFilteringRefreshAndActivation()
     {
         Pair pair;

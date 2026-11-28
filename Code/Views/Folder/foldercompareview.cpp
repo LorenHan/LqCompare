@@ -950,23 +950,29 @@ void FolderCompareView::setResult(const Folder::Result &result)
     });
     const int scroll = m_leftTree->verticalScrollBar()->value();
     m_model->setResult(result);
+    QItemSelection restoredLeft, restoredRight;
     visitIndexes(m_filterModel, {}, [this, &expanded, &leftSelected, &rightSelected,
-                                    &leftCurrent, &rightCurrent](const QModelIndex &index) {
+                                    &leftCurrent, &rightCurrent, &restoredLeft, &restoredRight](const QModelIndex &index) {
         const QString path = index.data(FolderTreeModel::PathRole).toString();
         if (expanded.contains(path)) {
             m_leftTree->expand(index);
             m_rightTree->expand(index);
         }
         if (leftSelected.contains(path))
-            m_leftTree->selectionModel()->select(index, QItemSelectionModel::Select | QItemSelectionModel::Rows);
+            restoredLeft.select(index, index);
         if (rightSelected.contains(path))
-            m_rightTree->selectionModel()->select(index, QItemSelectionModel::Select | QItemSelectionModel::Rows);
+            restoredRight.select(index, index);
         if (!leftCurrent.isEmpty() && path == leftCurrent)
             m_leftTree->selectionModel()->setCurrentIndex(index, QItemSelectionModel::NoUpdate);
         if (!rightCurrent.isEmpty() && path == rightCurrent)
             m_rightTree->selectionModel()->setCurrentIndex(index.siblingAtColumn(FolderTreeModel::RightName),
                                                          QItemSelectionModel::NoUpdate);
     });
+    // 每侧一次性恢复选区，避免每选一行都重新统计整棵目录树。
+    if (!restoredLeft.isEmpty())
+        m_leftTree->selectionModel()->select(restoredLeft, QItemSelectionModel::Select | QItemSelectionModel::Rows);
+    if (!restoredRight.isEmpty())
+        m_rightTree->selectionModel()->select(restoredRight, QItemSelectionModel::Select | QItemSelectionModel::Rows);
     m_leftTree->verticalScrollBar()->setValue(scroll);
     updateCount();
 }
