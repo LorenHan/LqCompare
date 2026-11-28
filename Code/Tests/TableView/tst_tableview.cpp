@@ -498,6 +498,35 @@ private slots:
         QVERIFY(widget->findChild<QLabel *>("tableWarnings")->text().contains("different parsing formats"));
     }
 
+    void newTablePairStartsAtItsFirstDifference()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto oldLeft = directory.filePath("old-left.csv");
+        const auto oldRight = directory.filePath("old-right.csv");
+        const auto newLeft = directory.filePath("new-left.csv");
+        const auto newRight = directory.filePath("new-right.csv");
+        writeFile(oldLeft, "id,value\na,1\nb,2\nc,3\n");
+        writeFile(oldRight, "id,value\na,4\nb,5\nc,6\n");
+        writeFile(newLeft, "id,value\nx,10\ny,20\nz,30\n");
+        TableCompareSession session(oldLeft, oldRight);
+        QVERIFY(session.open());
+        auto options = session.comparisonOptions();
+        options.alignment = Table::RowAlignment::Position;
+        QVERIFY(session.setComparisonOptions(options));
+        session.lastDifference();
+        QCOMPARE(session.currentDifference(), 2);
+        QVERIFY(session.reload());
+        QCOMPARE(session.currentDifference(), 2);
+        QVERIFY(!session.setPaths(newLeft, newRight));
+        QCOMPARE(session.currentDifference(), 2);
+
+        writeFile(newRight, "id,value\nx,40\ny,50\nz,60\n");
+        QVERIFY(session.setPaths(newLeft, newRight));
+        QCOMPARE(session.comparison().differences.size(), 3);
+        QCOMPARE(session.currentDifference(), 0);
+    }
+
     void differenceNavigationSelectsAlignedRows()
     {
         QTemporaryDir directory;

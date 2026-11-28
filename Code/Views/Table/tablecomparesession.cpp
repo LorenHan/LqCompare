@@ -129,6 +129,9 @@ bool TableCompareSession::loadPair(const QString &left, const QString &right,
     // Commit both sources together. Mapping errors remain visible and repairable
     // using the column dialog, without losing the successfully parsed sources.
     auto result = Table::compare(a, b, m_options);
+    // 新文件对从第一处差异开始；重读原文件对继续使用原来的导航位置。
+    if (a.path != m_left.path || b.path != m_right.path)
+        m_currentDifference = -1;
     m_left = a;
     m_right = b;
     m_leftPath = a.path;
