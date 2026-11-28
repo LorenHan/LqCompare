@@ -315,13 +315,9 @@ TableCompareView::TableCompareView(TableCompareSession *session, QWidget *parent
     support->setWordWrap(true);
     layout->addWidget(support);
     connect(session, &TableCompareSession::comparisonChanged, this, &TableCompareView::refresh);
-    connect(session, &TableCompareSession::pathsChanged, this, [this] {
-        m_paths[0]->setText(m_session->leftPath());
-        m_paths[1]->setText(m_session->rightPath());
-    });
+    connect(session, &TableCompareSession::pathsChanged, this, [this] { syncAppliedPaths(); });
     connect(session, &TableCompareSession::currentDifferenceChanged, this, &TableCompareView::selectDifference);
-    m_paths[0]->setText(session->leftPath());
-    m_paths[1]->setText(session->rightPath());
+    syncAppliedPaths();
     refresh();
 }
 
@@ -385,9 +381,26 @@ void TableCompareView::loadPaths()
 {
     QString error;
     if (!m_session->setPaths(m_paths[0]->text(), m_paths[1]->text(), &error)
-        || (m_session->state() != CompareSession::State::Open && !m_session->open(&error))) showError(error);
-    else showError({});
+        || (m_session->state() != CompareSession::State::Open && !m_session->open(&error))) {
+        showError(error);
+        return;
+    }
+    syncAppliedPaths(true);
+    showError({});
 }
+
+void TableCompareView::syncAppliedPaths(bool explicitSubmit)
+{
+    const QString applied[] = {m_session->leftPath(), m_session->rightPath()};
+    for (int side = 0; side < 2; ++side) {
+        // 重新解析同一个文件不覆盖草稿；明确提交后显示实际加载的路径。
+        if ((explicitSubmit || m_appliedPaths[side] != applied[side])
+            && m_paths[side]->text() != applied[side])
+            m_paths[side]->setText(applied[side]);
+        m_appliedPaths[side] = applied[side];
+    }
+}
+
 void TableCompareView::applyFormats()
 {
     Table::ParseOptions options[2];

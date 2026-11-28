@@ -92,6 +92,55 @@ private slots:
         QCOMPARE(session.currentDifference(), -1);
     }
 
+    void draftPathSurvivesFormatsReloadAndFailedSubmit()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto left = directory.filePath("left.csv");
+        const auto original = directory.filePath("original.csv");
+        const auto replacement = directory.filePath("replacement.csv");
+        writeFile(left, "id,label\n1,left\n");
+        writeFile(original, "id,label\n1,original\n");
+        writeFile(replacement, "id,label\n1,replacement\n");
+        TableCompareSession session(left, original);
+        QVERIFY(session.open());
+        QScopedPointer<QWidget> widget(session.createWidget());
+        auto *path = widget->findChild<QLineEdit *>("rightTablePath");
+        auto *error = widget->findChild<QLabel *>("tableError");
+        auto *apply = button(widget.data(), "Apply formats");
+        auto *reload = button(widget.data(), "Reload");
+        auto *compare = button(widget.data(), "Compare paths");
+        QVERIFY(path && error && apply && reload && compare);
+        QCOMPARE(path->text(), original);
+        const auto previous = session.rightDocument().rows;
+        QVERIFY(!previous.isEmpty());
+        path->setText(replacement);
+        apply->click();
+        QCOMPARE(session.rightPath(), original);
+        QCOMPARE(session.rightDocument().rows, previous);
+        QCOMPARE(path->text(), replacement);
+        reload->click();
+        QCOMPARE(session.rightPath(), original);
+        QCOMPARE(session.rightDocument().rows, previous);
+        QCOMPARE(path->text(), replacement);
+        compare->click();
+        QCOMPARE(path->text(), replacement);
+        QCOMPARE(session.rightPath(), replacement);
+        QVERIFY(session.rightDocument().rows != previous);
+        const auto accepted = session.rightDocument().rows;
+        path->setText(directory.path() + "/./replacement.csv");
+        compare->click();
+        QCOMPARE(session.rightPath(), replacement);
+        QCOMPARE(path->text(), replacement);
+        const auto missing = directory.filePath("missing.csv");
+        path->setText(missing);
+        compare->click();
+        QCOMPARE(path->text(), missing);
+        QCOMPARE(session.rightPath(), replacement);
+        QCOMPARE(session.rightDocument().rows, accepted);
+        QVERIFY(error->text().contains("previous comparison"));
+    }
+
     void mappedGridsHighlightsAndFilters()
     {
         QTemporaryDir directory;

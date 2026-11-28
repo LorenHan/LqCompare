@@ -41,6 +41,7 @@ private:
     void refresh();
     void choosePath(bool left);
     void loadPaths();
+    void syncAppliedPaths(bool explicitSubmit = false);
     void applyFormats();
     void editColumns();
     void showCell(bool left, const QModelIndex &index);
@@ -48,6 +49,7 @@ private:
     void showError(const QString &error);
     TableCompareSession *m_session;
     QLineEdit *m_paths[2];
+    QString m_appliedPaths[2];
     QComboBox *m_delimiters[2];
     QComboBox *m_encodings[2];
     QCheckBox *m_headers[2];
