@@ -637,7 +637,38 @@ bool TextCompareView::findText(const QString &text, bool backward, bool caseSens
     if (caseSensitive) flags |= QTextDocument::FindCaseSensitively;
     // 在文档的临时光标上查找，只有命中才移动窗格光标，避免失败时改变待合并的差异。
     auto *document = pane->document();
-    QTextCursor match = document->find(text, pane->textCursor(), flags);
+    const bool containsDisplayMarker = text.contains(QChar(0x2028)) || text.contains(QChar(0x2029))
+        || text.contains(QChar(0x21b5)) || text.contains(QChar(0x00b6));
+    const auto find = [&](const QTextCursor &from) -> QTextCursor {
+        if (!containsDisplayMarker)
+            return document->find(text, from, flags);
+        // 显示替代符和原文不同，但两者的 UTF-16 偏移相同。
+        const bool left = m_activeSide == 0;
+        const auto &original = (left ? m_session->leftDocument() : m_session->rightDocument()).lines();
+        const auto &rows = m_session->comparison().rows;
+        const auto sensitivity = caseSensitive ? Qt::CaseSensitive : Qt::CaseInsensitive;
+        const int origin = backward ? from.selectionStart() : from.selectionEnd();
+        for (auto block = document->findBlock(origin); block.isValid();
+             block = backward ? block.previous() : block.next()) {
+            const int row = block.blockNumber();
+            if (row < 0 || row >= rows.size()) continue;
+            const int source = left ? rows.at(row).leftLine : rows.at(row).rightLine;
+            if (source < 0 || source >= original.size()) continue;
+            const auto &line = original.at(source).text;
+            const int column = qBound(0, origin - block.position(), int(line.size()));
+            const int lastStart = column - text.size();
+            const int found = backward
+                ? (lastStart < 0 ? -1 : line.lastIndexOf(text, lastStart, sensitivity))
+                : line.indexOf(text, column, sensitivity);
+            if (found < 0) continue;
+            QTextCursor result(block);
+            result.setPosition(block.position() + found);
+            result.setPosition(block.position() + found + text.size(), QTextCursor::KeepAnchor);
+            return result;
+        }
+        return {};
+    };
+    QTextCursor match = find(pane->textCursor());
     if (!match.isNull()) {
         pane->setTextCursor(match);
         pane->setFocus();
@@ -645,7 +676,7 @@ bool TextCompareView::findText(const QString &text, bool backward, bool caseSens
     }
     QTextCursor boundary(document);
     boundary.movePosition(backward ? QTextCursor::End : QTextCursor::Start);
-    match = document->find(text, boundary, flags);
+    match = find(boundary);
     if (!match.isNull()) {
         pane->setTextCursor(match);
         pane->setFocus();

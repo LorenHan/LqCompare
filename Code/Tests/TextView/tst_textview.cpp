@@ -432,6 +432,48 @@ private slots:
         QCOMPARE(session.currentDifference(), 0);
     }
 
+    void findsUnicodeSourceInsteadOfDisplaySubstitutes()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto path = directory.filePath("left.txt");
+        const auto other = directory.filePath("right.txt");
+        const auto source = QStringLiteral("A\u2028B\u2029C");
+        const auto marker = QStringLiteral("a\u21b5b\u00b6c");
+        writeFile(path, (QStringLiteral("top\n") + source + QStringLiteral("\nanchor\n")
+                         + marker + QStringLiteral("\nend\n")).toUtf8());
+        writeFile(other, (QStringLiteral("top\n") + marker + QStringLiteral("\nanchor\n")
+                          + source + QStringLiteral("\nend\n")).toUtf8());
+        TextCompareSession session(path, other);
+        QVERIFY(session.open());
+        QScopedPointer<QWidget> widget(session.createWidget());
+        widget->show();
+        QVERIFY(QTest::qWaitForWindowExposed(widget.data()));
+        const auto *pane = widget->findChild<TextPane *>(QStringLiteral("leftTextPane"));
+        QVERIFY(pane);
+        QVERIFY(session.goToLine(1, true));
+        QTRY_VERIFY(pane->hasFocus());
+        QVERIFY(session.findText(marker));
+        QCOMPARE(pane->lineNumbers().at(pane->textCursor().blockNumber()), 3);
+        const auto before = pane->textCursor();
+        QVERIFY(!session.findText(source.toLower(), true, true));
+        QCOMPARE(pane->textCursor().position(), before.position());
+        QCOMPARE(pane->textCursor().anchor(), before.anchor());
+        QVERIFY(session.findText(source.toLower(), true));
+        QCOMPARE(pane->lineNumbers().at(pane->textCursor().blockNumber()), 1);
+        QVERIFY(session.findText(marker, true));
+        QCOMPARE(pane->lineNumbers().at(pane->textCursor().blockNumber()), 3);
+        QVERIFY(session.statusText().contains(QStringLiteral("wrapped")));
+        const auto *rightPane = widget->findChild<TextPane *>(QStringLiteral("rightTextPane"));
+        QVERIFY(rightPane);
+        QVERIFY(session.goToLine(1, false));
+        QTRY_VERIFY(rightPane->hasFocus());
+        QVERIFY(session.findText(marker));
+        QCOMPARE(rightPane->lineNumbers().at(rightPane->textCursor().blockNumber()), 1);
+        QVERIFY(session.findText(source));
+        QCOMPARE(rightPane->lineNumbers().at(rightPane->textCursor().blockNumber()), 3);
+    }
+
     void searchAndLineJumpUseOriginalLineNumbers()
     {
         TextCompareSession session;
