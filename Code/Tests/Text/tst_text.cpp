@@ -463,6 +463,17 @@ private slots:
         QCOMPARE(reopened.normalizedText(), draft);
         QCOMPARE(reopened.lines().last().eol, Eol::None);
     }
+    void fullLineRewriteKeepsOriginalSeparator()
+    {
+        auto doc = decoded("first\nAAAA\r\nmiddle\nBBBB\rtail\nlast");
+        // 两处各改一行但不改换行，同时插入新行，避免简单按全局行号继承。
+        QVERIFY(doc.setNormalizedText(QStringLiteral("inserted\nfirst\nZZZZ\nmiddle\nXXXX\ntail\nlast")));
+        QCOMPARE(doc.bytes(), QByteArray("inserted\nfirst\nZZZZ\r\nmiddle\nXXXX\rtail\nlast"));
+        // 用户删掉末尾换行时，不应从被改写的源行恢复它。
+        auto final = decoded("first\nAAAA\r\n");
+        QVERIFY(final.setNormalizedText(QStringLiteral("first\nZZZZ")));
+        QCOMPARE(final.bytes(), QByteArray("first\nZZZZ"));
+    }
     void guardedAtomicSave()
     {
         QTemporaryDir directory;

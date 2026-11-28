@@ -430,12 +430,25 @@ bool Document::setNormalizedText(const QString &text, QString *error)
     const Result alignment = compare(m_lines, next, options);
     const Eol fallback = preferredEol();
     for (Line &line : next) if (line.eol != Eol::None) line.eol = fallback;
+    const auto preserveEnding = [&](int oldLine, int newLine) {
+        if (next[newLine].eol != Eol::None && m_lines[oldLine].eol != Eol::None)
+            next[newLine].eol = m_lines[oldLine].eol;
+    };
+    int previousLeft = -1;
+    int previousRight = -1;
+    const auto preserveSingleRewrite = [&](int left, int right) {
+        // 完全改写的一行可能被拆成删除和插入。锚点间仅有一对未对齐行时继承原换行。
+        if (left - previousLeft == 2 && right - previousRight == 2)
+            preserveEnding(previousLeft + 1, previousRight + 1);
+    };
     for (const Row &row : alignment.rows) {
         if (row.leftLine < 0 || row.rightLine < 0) continue;
-        // Preserve per-line endings for existing lines, even after insertions.
-        if (next[row.rightLine].eol != Eol::None && m_lines[row.leftLine].eol != Eol::None)
-            next[row.rightLine].eol = m_lines[row.leftLine].eol;
+        preserveSingleRewrite(row.leftLine, row.rightLine);
+        preserveEnding(row.leftLine, row.rightLine);
+        previousLeft = row.leftLine;
+        previousRight = row.rightLine;
     }
+    preserveSingleRewrite(m_lines.size(), next.size());
     m_lines = next;
     if (error) error->clear();
     return true;
