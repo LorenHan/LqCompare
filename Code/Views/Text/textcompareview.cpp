@@ -462,6 +462,7 @@ void TextCompareView::refresh()
         QStringList content;
         QVector<int> numbers;
         QHash<int, QString> clipboardSources;
+        bool hasNonbreakingSpace = false;
         for (const auto &row : m_session->comparison().rows) {
             const int line = side == 0 ? row.leftLine : row.rightLine;
             numbers.append(line);
@@ -472,12 +473,15 @@ void TextCompareView::refresh()
             const auto &sourceLine = document.lines()[line].text;
             const QString display = displayLine(sourceLine);
             // Qt 默认纯文本复制会把不间断空格替换成普通空格。
-            if (display != sourceLine || sourceLine.contains(QChar(0x00a0)))
+            const bool containsNonbreakingSpace = sourceLine.contains(QChar(0x00a0));
+            hasNonbreakingSpace |= containsNonbreakingSpace;
+            if (display != sourceLine || containsNonbreakingSpace)
                 clipboardSources.insert(numbers.size() - 1, sourceLine);
             content.append(display);
         }
         const int position = m_panes[side]->verticalScrollBar()->value();
         const int horizontal = m_panes[side]->horizontalScrollBar()->value();
+        m_hasNonbreakingSpace[side] = hasNonbreakingSpace;
         const QSignalBlocker paneBlocker(m_panes[side]);
         m_panes[side]->setPlainText(content.join(QLatin1Char('\n')));
         m_panes[side]->setLineNumbers(numbers, clipboardSources);
@@ -639,8 +643,11 @@ bool TextCompareView::findText(const QString &text, bool backward, bool caseSens
     auto *document = pane->document();
     const bool containsDisplayMarker = text.contains(QChar(0x2028)) || text.contains(QChar(0x2029))
         || text.contains(QChar(0x21b5)) || text.contains(QChar(0x00b6));
+    // Qt 查找会把文档中的不间断空格当作普通空格，必要时直接查原文。
+    const bool spaceCanBeConfused = text.contains(QChar(0x00a0))
+        || (m_hasNonbreakingSpace[m_activeSide] && text.contains(QLatin1Char(' ')));
     const auto find = [&](const QTextCursor &from) -> QTextCursor {
-        if (!containsDisplayMarker)
+        if (!containsDisplayMarker && !spaceCanBeConfused)
             return document->find(text, from, flags);
         // 显示替代符和原文不同，但两者的 UTF-16 偏移相同。
         const bool left = m_activeSide == 0;

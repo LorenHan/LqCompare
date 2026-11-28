@@ -111,6 +111,7 @@ private:
     bool m_scrolling = false;
     bool m_selectingText = false;
     int m_activeSide = 0;
+    bool m_hasNonbreakingSpace[2] = {};
     QString m_searchText;
     QVector<QShortcut *> m_shortcuts;
 };

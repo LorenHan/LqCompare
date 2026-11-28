@@ -432,6 +432,46 @@ private slots:
         QCOMPARE(session.currentDifference(), 0);
     }
 
+    void findDistinguishesNormalAndNonbreakingSpace()
+    {
+        QTemporaryDir temp;
+        const QString left = temp.filePath("left.txt"), right = temp.filePath("right.txt");
+        const QString noBreak = QStringLiteral("A\u00a0B"), regular = QStringLiteral("A B");
+        const QString start = QStringLiteral("above\n"), middle = QStringLiteral("\nanchor\n");
+        const QString end = QStringLiteral("\nbelow\n");
+        writeFile(left, (start + noBreak + middle + regular + end).toUtf8());
+        writeFile(right, (start + regular + middle + noBreak + end).toUtf8());
+        TextCompareSession session(left, right);
+        QVERIFY(session.open());
+        QScopedPointer<QWidget> widget(session.createWidget());
+        widget->show();
+        QVERIFY(QTest::qWaitForWindowExposed(widget.data()));
+        for (const bool onLeft : {true, false}) {
+            auto *pane = widget->findChild<TextPane *>(onLeft ? "leftTextPane" : "rightTextPane");
+            QVERIFY(pane);
+            QVERIFY(session.goToLine(1, onLeft));
+            QTRY_VERIFY(pane->hasFocus());
+            const auto findRow = [&](const QString &value, int fromLine, bool backward) {
+                if (!session.goToLine(fromLine, onLeft) || !session.findText(value, backward, true))
+                    return -1;
+                return pane->lineNumbers().at(pane->textCursor().blockNumber());
+            };
+            const int noBreakRow = onLeft ? 1 : 3;
+            const int regularRow = onLeft ? 3 : 1;
+            QCOMPARE(QList<int>({findRow(regular, 1, false), findRow(noBreak, 1, false),
+                                 findRow(noBreak, 5, true), findRow(regular, 1, true)}),
+                     QList<int>({regularRow, noBreakRow, noBreakRow, regularRow}));
+            QVERIFY(session.statusText().contains(QStringLiteral("wrapped")));
+            session.lastDifference();
+            const int previousDifference = session.currentDifference();
+            const auto cursor = pane->textCursor();
+            QVERIFY(!session.findText(QStringLiteral("A\u00a0X")));
+            QCOMPARE(pane->textCursor().position(), cursor.position());
+            QCOMPARE(pane->textCursor().anchor(), cursor.anchor());
+            QCOMPARE(session.currentDifference(), previousDifference);
+        }
+    }
+
     void findsUnicodeSourceInsteadOfDisplaySubstitutes()
     {
         QTemporaryDir directory;
