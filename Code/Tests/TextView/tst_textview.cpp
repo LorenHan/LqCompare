@@ -600,6 +600,66 @@ private slots:
         QCOMPARE(session.currentDifference(), 0);
     }
 
+    void ruleRefreshKeepsNavigationAtRetainedCaret()
+    {
+        TextCompareSession session;
+        QVERIFY(session.open());
+        QVERIFY(session.setText(true, QStringLiteral("L1\nanchor one\nL2\nanchor two\nL3\n")));
+        QVERIFY(session.setText(false, QStringLiteral("R1\nanchor one\nR2\nanchor two\nR3\n")));
+        QScopedPointer<QWidget> widget(session.createWidget());
+        auto *left = widget->findChild<TextPane *>(QStringLiteral("leftTextPane"));
+        auto *right = widget->findChild<TextPane *>(QStringLiteral("rightTextPane"));
+        QVERIFY(left);
+        QVERIFY(right);
+        QCOMPARE(session.differenceCount(), 3);
+        auto toggleCase = [&] {
+            auto options = session.comparisonOptions();
+            options.ignoreCase = !options.ignoreCase;
+            session.setComparisonOptions(options);
+        };
+        session.firstDifference();
+        QVERIFY(session.goToLine(4, true));
+        toggleCase();
+        QCOMPARE(left->textCursor().blockNumber(), 3);
+        QCOMPARE(session.currentDifference(), 0);
+        session.nextDifference();
+        QCOMPARE(session.currentDifference(), 2);
+
+        QVERIFY(session.goToLine(2, false));
+        toggleCase();
+        QCOMPARE(right->textCursor().blockNumber(), 1);
+        QCOMPARE(session.currentDifference(), 2);
+        session.previousDifference();
+        QCOMPARE(session.currentDifference(), 0);
+
+        // 文本被实际替换后，旧光标不能继续决定下一处差异。
+        QVERIFY(session.goToLine(4, true));
+        QVERIFY(session.setText(true, QStringLiteral("new L1\nanchor one\nL2\nanchor two\nL3\n")));
+        session.nextDifference();
+        QCOMPARE(session.currentDifference(), 1);
+    }
+
+    void ruleRefreshDiscardsCaretThatBecomesDifference()
+    {
+        TextCompareSession session;
+        QVERIFY(session.open());
+        QVERIFY(session.setText(true, QStringLiteral("L1\nanchor one\nL2\nanchor two\nL3\n")));
+        QVERIFY(session.setText(false, QStringLiteral("R1\nanchor one\nR2\nAnchor two\nR3\n")));
+        QScopedPointer<QWidget> widget(session.createWidget());
+        auto options = session.comparisonOptions();
+        options.ignoreCase = true;
+        session.setComparisonOptions(options);
+        QCOMPARE(session.differenceCount(), 3);
+        session.firstDifference();
+        QVERIFY(session.goToLine(4, true));
+
+        options.ignoreCase = false;
+        session.setComparisonOptions(options);
+        // 原锚点与前后差异合并，下一处应仍从当前差异开始算。
+        session.nextDifference();
+        QCOMPARE(session.currentDifference(), 1);
+    }
+
     void searchAndLineJumpUseOriginalLineNumbers()
     {
         TextCompareSession session;

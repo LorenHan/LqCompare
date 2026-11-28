@@ -138,16 +138,28 @@ void TextCompareSession::setComparisonOptions(const Text::CompareOptions &option
                                                ? policyIdentifier
                                                : Text::bomPolicyIdentifier(Text::defaultBomPolicy())));
     m_options = options;
-    recompute();
+    recompute(true);
 }
 
-void TextCompareSession::recompute()
+void TextCompareSession::recompute(bool ruleRefresh)
 {
-    m_navigationAnchor = -1;
-    m_result = Text::compare(m_left.lines(), m_right.lines(), m_options);
+    auto result = Text::compare(m_left.lines(), m_right.lines(), m_options);
+    // 只有纯规则刷新、两侧行映射都没有变化时，窗格才仍保有原来的光标。
+    const bool retainedAlignment = ruleRefresh && m_navigationAnchor >= 0
+        && m_result.rows.size() == result.rows.size()
+        && m_navigationAnchor < result.rows.size()
+        && std::equal(m_result.rows.cbegin(), m_result.rows.cend(), result.rows.cbegin(),
+                      [](const Text::Row &before, const Text::Row &after) {
+            return before.leftLine == after.leftLine && before.rightLine == after.rightLine;
+        });
+    if (!retainedAlignment) m_navigationAnchor = -1;
+    m_result = std::move(result);
     // 把引擎的块列表归并成「一处改动」：判据与理由见 `Text::differenceRuns()`。
     // 归并逻辑只此一份——命令行摘要数「差异数」时走的也是它。
     m_differenceRuns = Text::differenceRuns(m_result);
+    // 如果原光标所在行现在属于差异，不让旧锚点覆盖当前的合并目标。
+    if (m_navigationAnchor >= 0 && differenceIndexOfBlock(m_result.rows.at(m_navigationAnchor).block) >= 0)
+        m_navigationAnchor = -1;
     m_currentDifference = m_differenceRuns.isEmpty() ? -1
         : qBound(0, m_currentDifference, m_differenceRuns.size() - 1);
     setDirty(m_left.isModified() || m_right.isModified());
