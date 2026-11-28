@@ -441,6 +441,37 @@ private slots:
         QCOMPARE(session.rightDocument().rows, oldRight);
     }
 
+    void restoredLiteralDelimiterDoesNotBecomePreset()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto leftPath = directory.filePath("left.txt");
+        const auto rightPath = directory.filePath("right.txt");
+        writeFile(leftPath, "idAuto delimitervalue\naAuto delimiterleft\n");
+        writeFile(rightPath, "idAuto delimitervalue\naAuto delimiterright\n");
+        TableCompareSession session(leftPath, rightPath);
+        Table::ParseOptions literal;
+        literal.delimiter = QStringLiteral("Auto delimiter");
+        QVERIFY(session.setParseOptions(literal, literal));
+        QVERIFY(session.open());
+        QCOMPARE(session.leftDocument().columnCount(), 2);
+        QScopedPointer<QWidget> widget(session.createWidget());
+        auto *left = widget->findChild<QComboBox *>("leftTableDelimiter");
+        auto *right = widget->findChild<QComboBox *>("rightTableDelimiter");
+        auto *apply = button(widget.data(), "Apply formats");
+        QVERIFY(left && right && apply);
+        QCOMPARE(left->currentText(), literal.delimiter);
+        QCOMPARE(right->currentText(), literal.delimiter);
+        apply->click();
+        QCOMPARE(session.parseOptions(true).delimiter, literal.delimiter);
+        QCOMPARE(session.parseOptions(false).delimiter, literal.delimiter);
+        QCOMPARE(session.leftDocument().columnCount(), 2);
+        left->setCurrentIndex(0);
+        apply->click();
+        QVERIFY(session.parseOptions(true).delimiter.isEmpty());
+        QCOMPARE(session.parseOptions(false).delimiter, literal.delimiter);
+    }
+
     void formatControlsApplyIndependentDelimiters()
     {
         QTemporaryDir directory;

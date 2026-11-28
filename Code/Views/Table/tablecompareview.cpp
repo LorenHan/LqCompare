@@ -120,7 +120,13 @@ QString delimiterValue(QComboBox *combo)
 void setDelimiter(QComboBox *combo, const QString &value)
 {
     const int index = combo->findData(value);
-    if (index >= 0) combo->setCurrentIndex(index); else combo->setEditText(value);
+    if (index >= 0) {
+        combo->setCurrentIndex(index);
+    } else {
+        // 字面值即使与某个预设的显示名称相同，也不应该读取预设的数据。
+        combo->setCurrentIndex(-1);
+        combo->setEditText(value);
+    }
 }
 }
 
