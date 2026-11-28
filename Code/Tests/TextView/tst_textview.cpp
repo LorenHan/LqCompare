@@ -660,6 +660,93 @@ private slots:
         QCOMPARE(session.currentDifference(), 1);
     }
 
+    void focusOnlyPaneSwitchUsesItsOwnNavigationCaret_data()
+    {
+        QTest::addColumn<int>("key");
+        QTest::addColumn<int>("expected");
+        QTest::newRow("next-f8") << int(Qt::Key_F8) << 2;
+        QTest::newRow("previous-f7") << int(Qt::Key_F7) << 1;
+        QTest::newRow("next-toolbar") << 0 << 2;
+    }
+
+    void focusOnlyPaneSwitchUsesItsOwnNavigationCaret()
+    {
+        QFETCH(int, key);
+        QFETCH(int, expected);
+        TextCompareSession session;
+        QVERIFY(session.open());
+        QVERIFY(session.setText(true, QStringLiteral("L1\nanchor one\nL2\nanchor two\nL3\n")));
+        QVERIFY(session.setText(false, QStringLiteral("R1\nanchor one\nR2\nanchor two\nR3\n")));
+        QScopedPointer<QWidget> widget(session.createWidget());
+        widget->resize(1100, 550);
+        widget->show();
+        widget->activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(widget.data()));
+        auto *left = widget->findChild<TextPane *>(QStringLiteral("leftTextPane"));
+        auto *right = widget->findChild<TextPane *>(QStringLiteral("rightTextPane"));
+        auto *next = widget->findChild<QPushButton *>(QStringLiteral("nextDifference"));
+        QVERIFY(left);
+        QVERIFY(right);
+        QVERIFY(next);
+        QCOMPARE(session.differenceCount(), 3);
+        session.firstDifference();
+        QVERIFY(session.goToLine(4, true));
+        QVERIFY(session.goToLine(2, false));
+        QTRY_VERIFY(right->hasFocus());
+        const int leftPosition = left->textCursor().position();
+        const int rightPosition = right->textCursor().position();
+        left->setFocus(Qt::TabFocusReason);
+        QTRY_VERIFY(left->hasFocus());
+        QCOMPARE(left->textCursor().position(), leftPosition);
+        QCOMPARE(right->textCursor().position(), rightPosition);
+        QCOMPARE(session.currentDifference(), 0);
+        if (key)
+            QTest::keyClick(left, Qt::Key(key));
+        else
+            QTest::mouseClick(next, Qt::LeftButton);
+        QTRY_COMPARE(session.currentDifference(), expected);
+
+        if (expected == 2) {
+            session.nextDifference();
+            QCOMPARE(session.currentDifference(), 2);
+            QVERIFY(session.statusText().contains(QStringLiteral("last")));
+        } else {
+            session.previousDifference();
+            QCOMPARE(session.currentDifference(), 0);
+            session.previousDifference();
+            QCOMPARE(session.currentDifference(), 0);
+            QVERIFY(session.statusText().contains(QStringLiteral("first")));
+        }
+    }
+
+    void focusAtDifferentRunDoesNotChangeTheMergeTarget()
+    {
+        TextCompareSession session;
+        QVERIFY(session.open());
+        QVERIFY(session.setText(true, QStringLiteral("L1\nsame one\nL2\nsame two\nL3\n")));
+        QVERIFY(session.setText(false, QStringLiteral("R1\nsame one\nR2\nsame two\nR3\n")));
+        QScopedPointer<QWidget> widget(session.createWidget());
+        widget->show();
+        widget->activateWindow();
+        QVERIFY(QTest::qWaitForWindowActive(widget.data()));
+        auto *right = widget->findChild<TextPane *>(QStringLiteral("rightTextPane"));
+        QVERIFY(right);
+        QCOMPARE(session.differenceCount(), 3);
+        session.firstDifference();
+        QVERIFY(session.goToLine(5, false));
+        QCOMPARE(session.currentDifference(), 2);
+        QVERIFY(session.goToLine(2, true));
+        QVERIFY(session.goToLine(1, true));
+        QCOMPARE(session.currentDifference(), 0);
+
+        right->setFocus(Qt::TabFocusReason);
+        QTRY_VERIFY(right->hasFocus());
+        QCOMPARE(right->textCursor().blockNumber(), 4);
+        QCOMPARE(session.currentDifference(), 0); // 只获取焦点，不改待合并的差异。
+        session.previousDifference();
+        QCOMPARE(session.currentDifference(), 1);
+    }
+
     void searchAndLineJumpUseOriginalLineNumbers()
     {
         TextCompareSession session;

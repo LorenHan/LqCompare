@@ -305,22 +305,27 @@ TextCompareView::TextCompareView(TextCompareSession *session, QWidget *parent)
     layout->addWidget(m_summary);
 
     for (int side = 0; side < 2; ++side) {
-        connect(m_panes[side], &TextPane::activated, this, [this, side] { m_activeSide = side; });
+        const auto updateNavigationAnchor = [this, side] {
+            const int row = m_panes[side]->textCursor().blockNumber();
+            m_session->setNavigationAnchor(row >= 0 && row < m_session->comparison().rows.size() ? row : -1);
+            return row;
+        };
+        connect(m_panes[side], &TextPane::activated, this, [this, side, updateNavigationAnchor] {
+            m_activeSide = side;
+            // 仅切换窗格也要从该窗格的光标走，但不改变当前可合并的差异。
+            updateNavigationAnchor();
+        });
         connect(m_panes[side]->verticalScrollBar(), &QScrollBar::valueChanged, this, [this, side](int value) {
             if (m_scrolling) return;
             m_scrolling = true;
             m_panes[1 - side]->verticalScrollBar()->setValue(value);
             m_scrolling = false;
         });
-        connect(m_panes[side], &QPlainTextEdit::cursorPositionChanged, this, [this, side] {
-            const int row = m_panes[side]->textCursor().blockNumber();
+        connect(m_panes[side], &QPlainTextEdit::cursorPositionChanged, this, [this, updateNavigationAnchor] {
+            const int row = updateNavigationAnchor();
             const auto &result = m_session->comparison();
-            if (row < 0 || row >= result.rows.size()) {
-                m_session->setNavigationAnchor(-1);
-                return;
-            }
+            if (row < 0 || row >= result.rows.size()) return;
             const int difference = m_session->differenceIndexOfBlock(result.rows[row].block);
-            m_session->setNavigationAnchor(difference < 0 ? row : -1);
             if (difference >= 0 && difference != m_session->currentDifference()) {
                 m_selectingText = true;
                 m_session->selectDifference(difference);

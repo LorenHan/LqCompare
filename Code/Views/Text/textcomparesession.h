@@ -124,7 +124,7 @@ protected:
 private:
     bool loadPair(const QString &left, const QString &right, QString *error);
     void recompute(bool ruleRefresh = false);
-    int firstDifferenceAfterAnchor() const;
+    int adjacentDifferenceAtAnchor(bool backward) const;
     void updateStatus();
     void updateTitle();
     struct BufferState {

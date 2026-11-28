@@ -401,26 +401,30 @@ void TextCompareSession::selectDifference(int index)
     updateStatus();
     emit currentDifferenceChanged(index);
 }
-int TextCompareSession::firstDifferenceAfterAnchor() const
+int TextCompareSession::adjacentDifferenceAtAnchor(bool backward) const
 {
-    // 锚点在非差异行，用后方第一处改动定位；前一处就是该位置的前一个。
     const auto begin = m_differenceRuns.cbegin();
     const auto end = m_differenceRuns.cend();
-    const auto it = std::lower_bound(begin, end, m_navigationAnchor,
-        [this](const Text::DifferenceRun &run, int row) {
-            return m_result.blocks.at(run.firstBlock).firstRow < row;
+    const auto it = std::upper_bound(begin, end, m_navigationAnchor,
+        [this](int row, const Text::DifferenceRun &run) {
+            return row < m_result.blocks.at(run.firstBlock).firstRow;
         });
-    return int(it - begin);
+    const int next = int(it - begin);
+    if (!backward || next == 0)
+        return backward ? -1 : next;
+    const auto &lastBlock = m_result.blocks.at((it - 1)->lastBlock);
+    // 光标若位于差异段内，“上一处”须跨过整段，而不是回到该段的开头。
+    return m_navigationAnchor < lastBlock.firstRow + lastBlock.rowCount ? next - 2 : next - 1;
 }
 
 void TextCompareSession::previousDifference()
 {
-    selectDifference(m_navigationAnchor < 0 ? m_currentDifference - 1 : firstDifferenceAfterAnchor() - 1);
+    selectDifference(m_navigationAnchor < 0 ? m_currentDifference - 1 : adjacentDifferenceAtAnchor(true));
 }
 
 void TextCompareSession::nextDifference()
 {
-    selectDifference(m_navigationAnchor < 0 ? m_currentDifference + 1 : firstDifferenceAfterAnchor());
+    selectDifference(m_navigationAnchor < 0 ? m_currentDifference + 1 : adjacentDifferenceAtAnchor(false));
 }
 void TextCompareSession::firstDifference() { selectDifference(0); }
 void TextCompareSession::lastDifference() { selectDifference(m_differenceRuns.size() - 1); }
