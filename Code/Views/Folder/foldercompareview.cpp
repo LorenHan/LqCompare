@@ -145,6 +145,10 @@ public:
     }
     int totalCount() const { return m_result.entries.size(); }
     int excludedCount() const { return m_result.excludedCount; }
+    bool matchesRoots(const Folder::Result &result) const
+    {
+        return m_result.leftRoot == result.leftRoot && m_result.rightRoot == result.rightRoot;
+    }
     // 本次比较有没有用上有效基线（DIR-011 第 3 条）。「为什么是这个状态」
     // 要如实回答这一条，不能靠猜。
     bool baselineApplied() const { return m_result.baselineApplied; }
@@ -919,6 +923,19 @@ void FolderCompareView::setPaths(const QString &leftPath, const QString &rightPa
 
 void FolderCompareView::setResult(const Folder::Result &result)
 {
+    if (!m_hasResult || !m_model->matchesRoots(result)) {
+        // 相同相对路径可能属于另一对目录，不能继承旧的文件操作选择。
+        m_model->setResult(result);
+        if (result.entries.size() < 10000) {
+            m_leftTree->expandToDepth(0);
+            m_rightTree->expandToDepth(0);
+        }
+        m_hasResult = true;
+        m_leftTree->verticalScrollBar()->setValue(0);
+        m_rightTree->verticalScrollBar()->setValue(0);
+        updateCount();
+        return;
+    }
     QSet<QString> expanded, leftSelected, rightSelected;
     const QString leftCurrent = m_leftTree->currentIndex().data(FolderTreeModel::PathRole).toString();
     const QString rightCurrent = m_rightTree->currentIndex().data(FolderTreeModel::PathRole).toString();
@@ -950,11 +967,6 @@ void FolderCompareView::setResult(const Folder::Result &result)
             m_rightTree->selectionModel()->setCurrentIndex(index.siblingAtColumn(FolderTreeModel::RightName),
                                                          QItemSelectionModel::NoUpdate);
     });
-    if (!m_hasResult && result.entries.size() < 10000) {
-        m_leftTree->expandToDepth(0);
-        m_rightTree->expandToDepth(0);
-    }
-    m_hasResult = true;
     m_leftTree->verticalScrollBar()->setValue(scroll);
     updateCount();
 }

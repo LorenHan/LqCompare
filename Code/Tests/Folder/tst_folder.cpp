@@ -21,6 +21,7 @@
 #include <QHeaderView>
 #include <QIcon>
 #include <QImage>
+#include <QItemSelectionModel>
 #include <QLineEdit>
 #include <QMenu>
 #include <QMessageBox>
@@ -1075,6 +1076,31 @@ private slots:
         result = Folder::compare(pair.left, pair.left + "/child");
         QCOMPARE(result.warnings.size(), 1);
         QVERIFY(result.entries.size() < 5);
+    }
+
+    void changingFolderRootsDoesNotCarrySelectionToOtherFiles()
+    {
+        Pair first, second;
+        for (const auto *pair : {&first, &second}) {
+            QVERIFY(writeFile(pair->left + "/common.txt", "left"));
+            QVERIFY(writeFile(pair->right + "/common.txt", "right"));
+        }
+        FolderCompareView view;
+        view.setResult(Folder::compare(first.left, first.right));
+        auto *tree = view.leftTree();
+        const auto selected = indexNamed(tree->model(), "common.txt");
+        QVERIFY(selected.isValid());
+        tree->setCurrentIndex(selected);
+        QVERIFY(tree->selectionModel()->hasSelection());
+
+        view.setResult(Folder::compare(first.left, first.right));
+        QVERIFY(tree->selectionModel()->hasSelection());
+        QCOMPARE(tree->currentIndex().data().toString(), QStringLiteral("common.txt"));
+
+        view.setResult(Folder::compare(second.left, second.right));
+        QVERIFY(indexNamed(tree->model(), "common.txt").isValid());
+        QVERIFY(!tree->selectionModel()->hasSelection());
+        QVERIFY(!tree->currentIndex().isValid());
     }
 
     void sessionViewFilteringRefreshAndActivation()
