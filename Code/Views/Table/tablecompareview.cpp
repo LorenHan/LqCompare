@@ -14,6 +14,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QLocale>
+#include <QMimeData>
 #include <QPainter>
 #include <QPushButton>
 #include <QScrollBar>
@@ -26,11 +27,50 @@
 #include <QTextEdit>
 #include <QVBoxLayout>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
 namespace LqCompare {
 namespace {
+class CellDetailTextEdit : public QTextEdit {
+public:
+    CellDetailTextEdit(QString source, QWidget *parent)
+        : QTextEdit(parent), m_source(std::move(source))
+    {
+        setReadOnly(true);
+        setPlainText(m_source);
+        // Qt 将 CRLF 显示为一个位置；其余字符仍按 UTF-16 计数。
+        for (int i = 0; i + 1 < m_source.size(); ++i) {
+            if (m_source.at(i) == QLatin1Char('\r') && m_source.at(i + 1) == QLatin1Char('\n')) {
+                m_collapsedRows.append(i - m_collapsedRows.size());
+                ++i;
+            }
+        }
+    }
+
+protected:
+    QMimeData *createMimeDataFromSelection() const override
+    {
+        if (document()->characterCount() - 1 != m_source.size() - m_collapsedRows.size())
+            return QTextEdit::createMimeDataFromSelection();
+        const auto cursor = textCursor();
+        const auto sourceBoundary = [this](int offset) {
+            return offset + int(std::lower_bound(m_collapsedRows.cbegin(), m_collapsedRows.cend(), offset)
+                - m_collapsedRows.cbegin());
+        };
+        const int begin = sourceBoundary(cursor.selectionStart());
+        auto *mime = new QMimeData;
+        // 直接复制源字符串，不让文档片段改写换行或不间断空格。
+        mime->setText(m_source.mid(begin, sourceBoundary(cursor.selectionEnd()) - begin));
+        return mime;
+    }
+
+private:
+    const QString m_source;
+    QVector<int> m_collapsedRows;
+};
+
 class TableCellDelegate : public QStyledItemDelegate {
 public:
     explicit TableCellDelegate(QObject *parent) : QStyledItemDelegate(parent) {}
@@ -446,9 +486,7 @@ void TableCompareView::showCell(bool left, const QModelIndex &index)
     metadata->setWordWrap(true);
     metadata->setText(model->data(index, TableGridModel::CellMetadataRole).toString());
     layout->addWidget(metadata);
-    auto *text = new QTextEdit(&dialog);
-    text->setReadOnly(true);
-    text->setPlainText(model->data(index, Qt::EditRole).toString());
+    auto *text = new CellDetailTextEdit(model->data(index, Qt::EditRole).toString(), &dialog);
     layout->addWidget(text);
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);

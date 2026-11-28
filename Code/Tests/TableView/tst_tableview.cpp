@@ -1,5 +1,6 @@
 #include <QtTest>
 #include <QCheckBox>
+#include <QClipboard>
 #include <QComboBox>
 #include <QDialog>
 #include <QDialogButtonBox>
@@ -498,6 +499,57 @@ private slots:
         session.lastDifference();
         QCOMPARE(left->selectionModel()->selectedRows().first().row(), 1);
         QCOMPARE(right->selectionModel()->selectedRows().first().row(), 1);
+    }
+
+    void cellDetailsCopyPreservesOriginalCharacters()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto leftPath = directory.filePath("left.csv");
+        const auto rightPath = directory.filePath("right.csv");
+        const auto raw = QStringLiteral("A\u00a0B\r\nC\u2028D\u2029E\r\n\U0001F680Z");
+        writeFile(leftPath, "id,value\na,\"" + raw.toUtf8() + "\"\n");
+        writeFile(rightPath, "id,value\na,other\n");
+        TableCompareSession session(leftPath, rightPath);
+        QVERIFY(session.open());
+        QScopedPointer<QWidget> widget(session.createWidget());
+        auto *left = widget->findChild<QTableView *>("leftTable");
+        QVERIFY(left);
+        const auto index = left->model()->index(0, 1);
+        QCOMPARE(index.data(Qt::EditRole).toString(), raw);
+        QString full, reverse, afterTwoBreaks;
+        int textLength = -1;
+        QTimer timer;
+        timer.setSingleShot(true);
+        connect(&timer, &QTimer::timeout, widget.data(), [&] {
+            auto *dialog = widget->findChild<QDialog *>();
+            if (!dialog) return;
+            if (auto *editor = dialog->findChild<QTextEdit *>()) {
+                textLength = editor->document()->characterCount() - 1;
+                editor->selectAll();
+                editor->copy();
+                full = QApplication::clipboard()->text();
+                // 反向选择横跨第一个 CRLF；第二次选在两个 CRLF 之后。
+                auto cursor = editor->textCursor();
+                cursor.setPosition(5);
+                cursor.setPosition(2, QTextCursor::KeepAnchor);
+                editor->setTextCursor(cursor);
+                editor->copy();
+                reverse = QApplication::clipboard()->text();
+                cursor.setPosition(10);
+                cursor.setPosition(12, QTextCursor::KeepAnchor);
+                editor->setTextCursor(cursor);
+                editor->copy();
+                afterTwoBreaks = QApplication::clipboard()->text();
+            }
+            dialog->accept();
+        });
+        timer.start(0);
+        QVERIFY(QMetaObject::invokeMethod(left, "doubleClicked", Q_ARG(QModelIndex, index)));
+        QCOMPARE(textLength, raw.size() - 2);
+        QCOMPARE(full, raw);
+        QCOMPARE(reverse, QStringLiteral("B\r\nC"));
+        QCOMPARE(afterTwoBreaks, QStringLiteral("\U0001F680"));
     }
 
     void cellDetailsKeepMetadataOutOfCopyableContent()
