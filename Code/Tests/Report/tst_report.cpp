@@ -312,6 +312,33 @@ private slots:
         }
     }
 
+    void folderReportExclusionsDoNotMakeCompletedScanUnknown()
+    {
+        Folder::Result result;
+        result.scanMaskDeclaration = QStringLiteral("*.txt");
+        result.excludedCount = 1;
+        auto excluded = folderEntry(QStringLiteral("outside.bin"), Folder::Status::Unknown);
+        excluded.excludedByMask = true;
+        auto parent = folderEntry(QStringLiteral("sub"), Folder::Status::Same,
+                                  Folder::Kind::Directory, Folder::Kind::Directory);
+        parent.excludedByMask = true;
+        parent.hasIncludedDescendants = true;
+        result.entries = {excluded, parent,
+                          folderEntry(QStringLiteral("sub/in-scope.txt"), Folder::Status::Same)};
+        const auto model = R::fromFolder(result, {});
+        QCOMPARE(model.rows.size(), 2);
+        QCOMPARE(model.rows.first().path, QStringLiteral("sub"));
+        QCOMPARE(model.rows.last().path, QStringLiteral("sub/in-scope.txt"));
+        const auto stats = R::statistics(model, {});
+        QVERIFY(stats.complete);
+        QCOMPARE(stats.unknown, qint64(0));
+        const auto html = R::render(model, {});
+        QVERIFY(html.contains(QStringLiteral("扫描掩码：*.txt")));
+        QVERIFY(html.contains(QStringLiteral("扫描排除项：1")));
+        QVERIFY(!html.contains(QStringLiteral("结果不完整")));
+        QVERIFY(!html.contains(QStringLiteral("outside.bin")));
+    }
+
     void folderMappingRetainsStatesSourcesAndDirectoryKind()
     {
         Folder::Result result;

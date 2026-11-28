@@ -226,8 +226,14 @@ Model fromFolder(const Folder::Result &result, const Folder::Options &compareOpt
     if (result.cancelled) model.warnings << QStringLiteral("目录比较已取消，结果不完整。");
     if (!result.complete) model.warnings << QStringLiteral("目录扫描未完成，结果不完整。");
     if (!result.error.isEmpty()) model.warnings << result.error;
+    if (!result.scanMaskDeclaration.trimmed().isEmpty()) {
+        model.metadata.settings << QStringLiteral("扫描掩码：%1").arg(result.scanMaskDeclaration);
+        model.metadata.settings << QStringLiteral("扫描排除项：%1").arg(result.excludedCount);
+    }
     model.rows.reserve(result.entries.size());
     for (const Folder::Entry &entry : result.entries) {
+        // 掩码外条目未参与比较，不能当作未知差异或扫描不完整。
+        if (!entry.inComparison()) continue;
         Row row;
         row.path = entry.relativePath;
         row.left = sideText(entry.left);
