@@ -33,7 +33,7 @@ bool supportedSource(const QString &source, QString *error)
 }
 
 bool decode(const QByteArray &bytes, const QByteArray &requestedEncoding,
-            QString *text, QByteArray *actualEncoding, QString *error)
+            bool allowEmptyTsvCell, QString *text, QByteArray *actualEncoding, QString *error)
 {
     QByteArray bomEncoding;
     int bomSize = 0;
@@ -112,8 +112,21 @@ bool decode(const QByteArray &bytes, const QByteArray &requestedEncoding,
             || start.at(tag.size()).isSpace() || start.at(tag.size()) == QLatin1Char('>'));
     };
     if (beginsTag(QStringLiteral("<html")) || beginsTag(QStringLiteral("<table"))
-        || beginsTag(QStringLiteral("<!doctype html")))
-        return fail(error, QStringLiteral("HTML tables are not supported. Export the table as CSV or TSV first."));
+        || beginsTag(QStringLiteral("<!doctype html"))) {
+        // 裸 <table> 后的制表符在单记录 TSV 中表示空字段，不是 HTML 缩进。
+        int i = QStringLiteral("<table>").size();
+        bool literalTsv = allowEmptyTsvCell && text->startsWith(QStringLiteral("<table>"), Qt::CaseInsensitive)
+            && i < text->size() && text->at(i) == QLatin1Char('\t');
+        if (literalTsv) {
+            while (i < text->size() && text->at(i) == QLatin1Char('\t'))
+                ++i;
+            const auto ending = text->midRef(i);
+            literalTsv = ending.isEmpty() || ending == QStringLiteral("\n")
+                || ending == QStringLiteral("\r") || ending == QStringLiteral("\r\n");
+        }
+        if (!literalTsv)
+            return fail(error, QStringLiteral("HTML tables are not supported. Export the table as CSV or TSV first."));
+    }
     return true;
 }
 
@@ -309,7 +322,10 @@ bool Document::parse(const QByteArray &bytes, Document *result, QString *error,
     parsed.path = sourceName;
     parsed.hasHeader = options.firstRowHeader;
     QString text;
-    if (!decode(bytes, options.encoding, &text, &parsed.encoding, error))
+    const bool allowEmptyTsvCell = options.delimiter == QStringLiteral("\t")
+        || (options.delimiter.isEmpty()
+            && QFileInfo(sourceName).suffix().compare(QStringLiteral("tsv"), Qt::CaseInsensitive) == 0);
+    if (!decode(bytes, options.encoding, allowEmptyTsvCell, &text, &parsed.encoding, error))
         return false;
     parsed.delimiter = options.delimiter.isEmpty() ? detectDelimiter(text, sourceName) : options.delimiter;
     if (!parseRecords(text, parsed.delimiter, &parsed.rows, error))

@@ -8,6 +8,7 @@ using namespace LqCompare::Table;
 class TableParserTest : public QObject {
     Q_OBJECT
 private slots:
+    void bareTagKeepsTrailingTsvField();
     void recordBoundaries_data();
     void recordBoundaries();
     void quotesUnicodeAndMultiline();
@@ -28,6 +29,24 @@ private slots:
     void optionsAndLimits();
     void loadAndAtomicFailure();
 };
+
+void TableParserTest::bareTagKeepsTrailingTsvField()
+{
+    for (const QString &delimiter : {QString(), QStringLiteral("\t")}) {
+        ParseOptions options;
+        options.firstRowHeader = false;
+        options.delimiter = delimiter;
+        Document doc;
+        QString error;
+        QVERIFY2(Document::parse("<table>\t\r\n", &doc, &error, options, QStringLiteral("example.tsv")),
+                 qPrintable(error));
+        QCOMPARE(doc.delimiter, QStringLiteral("\t"));
+        QCOMPARE(doc.rows, (QVector<QStringList>{QStringList{QStringLiteral("<table>"), QString()}}));
+        QVERIFY(!Document::parse("<table>\t\r\n<tr><td>A</td></tr>\r\n</table>", &doc, &error,
+                                 options, QStringLiteral("not-html.tsv")));
+        QVERIFY(error.contains(QStringLiteral("HTML tables are not supported")));
+    }
+}
 
 void TableParserTest::recordBoundaries_data()
 {
