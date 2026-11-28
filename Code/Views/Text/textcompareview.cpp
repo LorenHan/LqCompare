@@ -464,6 +464,8 @@ void TextCompareView::refresh()
     // 关掉总开关时阈值没有任何作用，把它一起禁用——留着可改会让人以为「调了阈值
     // 却没反应」，而那正是这个功能最容易被误判成坏掉的方式。
     m_similarity->setEnabled(options.alignSimilarLines);
+    const bool samePair = m_displayedPaths[0] == m_appliedPaths[0]
+        && m_displayedPaths[1] == m_appliedPaths[1];
     for (int side = 0; side < 2; ++side) {
         const auto &document = side == 0 ? m_session->leftDocument() : m_session->rightDocument();
         // 保存策略下拉要在**屏蔽信号**的情况下铺：`setCurrentIndex()` 会发
@@ -496,7 +498,15 @@ void TextCompareView::refresh()
         const int horizontal = m_panes[side]->horizontalScrollBar()->value();
         m_hasNonbreakingSpace[side] = hasNonbreakingSpace;
         const QSignalBlocker paneBlocker(m_panes[side]);
-        m_panes[side]->setPlainText(content.join(QLatin1Char('\n')));
+        // 规则没有改变对齐文本或原文行映射时，不重建文档，保留光标和选择。
+        const auto *paneDocument = m_panes[side]->document();
+        bool unchanged = samePair && m_panes[side]->lineNumbers() == numbers
+            && paneDocument->blockCount() == content.size();
+        for (QTextBlock block = paneDocument->firstBlock(); unchanged && block.isValid(); block = block.next())
+            unchanged = block.text() == content.at(block.blockNumber());
+        if (!unchanged)
+            m_panes[side]->setPlainText(content.join(QLatin1Char('\n')));
+        m_displayedPaths[side] = m_appliedPaths[side];
         m_panes[side]->setLineNumbers(numbers, clipboardSources);
         m_panes[side]->verticalScrollBar()->setValue(position);
         m_panes[side]->horizontalScrollBar()->setValue(horizontal);

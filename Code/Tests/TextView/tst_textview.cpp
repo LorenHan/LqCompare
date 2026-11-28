@@ -551,6 +551,34 @@ private slots:
         QCOMPARE(right->text(), replacement);
     }
 
+    void ruleRefreshKeepsSelectionWhenAlignedSourceIsUnchanged()
+    {
+        TextCompareSession session;
+        QVERIFY(session.open());
+        QVERIFY(session.setText(true, QStringLiteral("L1\nanchor one\nL2\nanchor two\nL3\n")));
+        QVERIFY(session.setText(false, QStringLiteral("R1\nanchor one\nR2\nanchor two\nR3\n")));
+        QScopedPointer<QWidget> widget(session.createWidget());
+        auto *left = widget->findChild<TextPane *>(QStringLiteral("leftTextPane"));
+        QVERIFY(left);
+        QCOMPARE(session.differenceCount(), 3);
+        session.firstDifference();
+        QVERIFY(session.goToLine(4, true));
+        QVERIFY(session.findText(QStringLiteral("anchor two")));
+        QCOMPARE(left->textCursor().selectedText(), QStringLiteral("anchor two"));
+        const int oldAnchor = left->textCursor().anchor();
+        const int oldPosition = left->textCursor().position();
+        const auto oldNumbers = left->lineNumbers();
+        const int oldDifference = session.currentDifference();
+        auto options = session.comparisonOptions();
+        options.ignoreCase = !options.ignoreCase;
+        session.setComparisonOptions(options);
+        QCOMPARE(left->lineNumbers(), oldNumbers);
+        QCOMPARE(left->textCursor().anchor(), oldAnchor);
+        QCOMPARE(left->textCursor().position(), oldPosition);
+        QCOMPARE(left->textCursor().selectedText(), QStringLiteral("anchor two"));
+        QCOMPARE(session.currentDifference(), oldDifference);
+    }
+
     void searchAndLineJumpUseOriginalLineNumbers()
     {
         TextCompareSession session;
