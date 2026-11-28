@@ -13,6 +13,7 @@
 #include <QTimer>
 #include <QComboBox>
 #include <QLabel>
+#include <QLineEdit>
 #include <QShortcut>
 #include <QTextEdit>
 #include <QSplitter>
@@ -512,6 +513,42 @@ private slots:
         QCOMPARE(rightPane->lineNumbers().at(rightPane->textCursor().blockNumber()), 1);
         QVERIFY(session.findText(source));
         QCOMPARE(rightPane->lineNumbers().at(rightPane->textCursor().blockNumber()), 3);
+    }
+
+    void textPathsKeepDraftAcrossRuleChangeAndReload()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto original = directory.filePath(QStringLiteral("before.txt"));
+        const auto replacement = directory.filePath(QStringLiteral("draft.txt"));
+        writeFile(original, "before\n");
+        writeFile(replacement, "after\n");
+        TextCompareSession session({}, original);
+        QVERIFY(session.open());
+        QScopedPointer<QWidget> widget(session.createWidget());
+        auto *right = widget->findChild<QLineEdit *>(QStringLiteral("rightPath"));
+        auto *compare = widget->findChild<QPushButton *>(QStringLiteral("compareFiles"));
+        QVERIFY(right);
+        QVERIFY(compare);
+        QCOMPARE(right->text(), original);
+        right->setText(replacement);
+        auto options = session.comparisonOptions();
+        options.ignoreCase = !options.ignoreCase;
+        session.setComparisonOptions(options);
+        QCOMPARE(session.rightPath(), original);
+        QCOMPARE(right->text(), replacement);
+        QVERIFY(session.reload());
+        QCOMPARE(right->text(), replacement);
+        compare->click();
+        QCOMPARE(session.rightPath(), replacement);
+        QCOMPARE(right->text(), replacement);
+        QCOMPARE(session.rightDocument().normalizedText(), QStringLiteral("after\n"));
+
+        // 主动确认即使仍是同一文件，也将输入框同步为已应用的规范路径。
+        right->setText(directory.path() + QStringLiteral("/./draft.txt"));
+        compare->click();
+        QCOMPARE(session.rightPath(), replacement);
+        QCOMPARE(right->text(), replacement);
     }
 
     void searchAndLineJumpUseOriginalLineNumbers()

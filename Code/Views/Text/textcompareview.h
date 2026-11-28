@@ -82,6 +82,7 @@ private:
     TextCompareSession *m_session;
     TextPane *m_panes[2] = {};
     QLineEdit *m_paths[2] = {};
+    QString m_appliedPaths[2];
     QLabel *m_metadata[2] = {};
     QPushButton *m_edit[2] = {};
     QPushButton *m_save[2] = {};

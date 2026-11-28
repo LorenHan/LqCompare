@@ -204,7 +204,14 @@ TextCompareView::TextCompareView(TextCompareSession *session, QWidget *parent)
     };
     command(tr("Compare"), QStringLiteral("compareFiles"), [this] {
         QString error;
-        if (!m_session->setPaths(m_paths[0]->text(), m_paths[1]->text(), &error)) showError(error);
+        if (!m_session->setPaths(m_paths[0]->text(), m_paths[1]->text(), &error)) {
+            showError(error);
+            return;
+        }
+        // 只有明确提交后，才把等价的输入写法替换为实际打开的路径。
+        const QString opened[] = {m_session->leftPath(), m_session->rightPath()};
+        for (int side = 0; side < 2; ++side)
+            if (m_paths[side]->text() != opened[side]) m_paths[side]->setText(opened[side]);
     });
     command(tr("First"), QStringLiteral("firstDifference"), [session] { session->firstDifference(); });
     command(tr("Previous"), QStringLiteral("previousDifference"), [session] { session->previousDifference(); });
@@ -321,10 +328,18 @@ TextCompareView::TextCompareView(TextCompareSession *session, QWidget *parent)
     connect(session, &TextCompareSession::readOnlyChanged, this, &TextCompareView::refreshActions);
     connect(session, &TextCompareSession::localShortcutsChanged, this, &TextCompareView::setUseLocalShortcuts);
     connect(session, &TextCompareSession::currentDifferenceChanged, this, &TextCompareView::locate);
-    connect(session, &TextCompareSession::pathsChanged, this, [this] {
-        m_paths[0]->setText(m_session->leftPath());
-        m_paths[1]->setText(m_session->rightPath());
-    });
+    const auto syncAppliedPaths = [this] {
+        const QString applied[] = {m_session->leftPath(), m_session->rightPath()};
+        for (int side = 0; side < 2; ++side) {
+            // 只在已打开路径确实改变时更新输入框，不覆盖用户尚未提交的路径。
+            if (m_appliedPaths[side] == applied[side])
+                continue;
+            m_appliedPaths[side] = applied[side];
+            m_paths[side]->setText(applied[side]);
+        }
+    };
+    connect(session, &TextCompareSession::pathsChanged, this, syncAppliedPaths);
+    syncAppliedPaths();
     connect(session, &CompareSession::statusTextChanged, m_summary, &QLabel::setText);
     auto *next = new QShortcut(QKeySequence(Qt::Key_F8), this);
     next->setContext(Qt::WidgetWithChildrenShortcut);
@@ -449,8 +464,6 @@ void TextCompareView::refresh()
     // 关掉总开关时阈值没有任何作用，把它一起禁用——留着可改会让人以为「调了阈值
     // 却没反应」，而那正是这个功能最容易被误判成坏掉的方式。
     m_similarity->setEnabled(options.alignSimilarLines);
-    m_paths[0]->setText(m_session->leftPath());
-    m_paths[1]->setText(m_session->rightPath());
     for (int side = 0; side < 2; ++side) {
         const auto &document = side == 0 ? m_session->leftDocument() : m_session->rightDocument();
         // 保存策略下拉要在**屏蔽信号**的情况下铺：`setCurrentIndex()` 会发
