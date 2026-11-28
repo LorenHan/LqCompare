@@ -355,6 +355,14 @@ QByteArray Document::bytes(QString *error) const
     if (error) error->clear();
     QTextCodec *codec = QTextCodec::codecForName(m_codec);
     if (!codec) { fail(error, QStringLiteral("Unsupported text encoding.")); return {}; }
+    // CR 后若紧接空行的 LF，重新打开时两者会被当成一个 CRLF，导致空行丢失。
+    for (int i = 1; i < m_lines.size(); ++i) {
+        if (m_lines.at(i - 1).eol == Eol::CR && m_lines.at(i).eol == Eol::LF
+            && m_lines.at(i).text.isEmpty()) {
+            fail(error, QStringLiteral("These mixed line endings would remove a blank line when reopened. Choose a uniform line ending before saving."));
+            return {};
+        }
+    }
     const QString text = actualText(m_lines);
     for (int i = 0; i < text.size(); ++i) {
         if (text[i].isHighSurrogate()) {

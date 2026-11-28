@@ -414,6 +414,55 @@ private slots:
         doc.setEol(Eol::CRLF);
         QCOMPARE(doc.bytes(), QByteArray("first\r\nsecond changed\r\nthird\r\nlast"));
     }
+    void saveRefusesMixedEndingThatWouldRemoveBlankLine_data()
+    {
+        QTest::addColumn<bool>("saveAs");
+        QTest::newRow("save") << false;
+        QTest::newRow("save-as-over-existing-target") << true;
+    }
+
+    void saveRefusesMixedEndingThatWouldRemoveBlankLine()
+    {
+        QFETCH(bool, saveAs);
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto source = directory.filePath(QStringLiteral("source.txt"));
+        const auto target = directory.filePath(QStringLiteral("target.txt"));
+        const QByteArray original("first\rsecond\nthird\nlast");
+        const QByteArray existingTarget("keep me");
+        writeFile(source, original);
+        writeFile(target, existingTarget);
+        Document doc;
+        QString error;
+        QVERIFY2(Document::load(source, &doc, &error), qPrintable(error));
+        const auto draft = QStringLiteral("first\n\nthird\nlast");
+        QVERIFY2(doc.setNormalizedText(draft, &error), qPrintable(error));
+        QCOMPARE(doc.normalizedText(), draft);
+        const auto saveDraft = [&] {
+            return saveAs ? doc.saveAs(target, true, &error) : doc.save(&error);
+        };
+        QVERIFY2(!saveDraft(), qPrintable(QStringLiteral("Saved bytes: %1")
+            .arg(QString::fromLatin1(readFile(saveAs ? target : source).toHex(' ')))));
+        QVERIFY(error.contains(QStringLiteral("blank line")));
+        QCOMPARE(readFile(source), original);
+        QCOMPARE(readFile(target), existingTarget);
+        QCOMPARE(doc.path(), source);
+        QVERIFY(doc.canEdit());
+        QVERIFY(doc.isModified());
+        QCOMPARE(doc.normalizedText(), draft);
+
+        doc.setEol(saveAs ? Eol::CRLF : Eol::LF);
+        QVERIFY2(saveDraft(), qPrintable(error));
+        const auto savedPath = saveAs ? target : source;
+        const QByteArray expected = saveAs ? QByteArray("first\r\n\r\nthird\r\nlast")
+                                           : QByteArray("first\n\nthird\nlast");
+        QCOMPARE(readFile(savedPath), expected);
+        QCOMPARE(readFile(saveAs ? source : target), saveAs ? original : existingTarget);
+        Document reopened;
+        QVERIFY2(Document::load(savedPath, &reopened, &error), qPrintable(error));
+        QCOMPARE(reopened.normalizedText(), draft);
+        QCOMPARE(reopened.lines().last().eol, Eol::None);
+    }
     void guardedAtomicSave()
     {
         QTemporaryDir directory;
