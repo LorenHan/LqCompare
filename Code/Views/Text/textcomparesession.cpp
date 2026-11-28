@@ -4,6 +4,7 @@
 
 #include <QFileInfo>
 #include <QSignalBlocker>
+#include <algorithm>
 
 namespace LqCompare {
 namespace {
@@ -142,6 +143,7 @@ void TextCompareSession::setComparisonOptions(const Text::CompareOptions &option
 
 void TextCompareSession::recompute()
 {
+    m_navigationAnchor = -1;
     m_result = Text::compare(m_left.lines(), m_right.lines(), m_options);
     // 把引擎的块列表归并成「一处改动」：判据与理由见 `Text::differenceRuns()`。
     // 归并逻辑只此一份——命令行摘要数「差异数」时走的也是它。
@@ -382,12 +384,32 @@ void TextCompareSession::selectDifference(int index)
             : tr("Reached the %1 difference.").arg(index < 0 ? tr("first") : tr("last")));
         return;
     }
+    m_navigationAnchor = -1;
     m_currentDifference = index;
     updateStatus();
     emit currentDifferenceChanged(index);
 }
-void TextCompareSession::previousDifference() { selectDifference(m_currentDifference - 1); }
-void TextCompareSession::nextDifference() { selectDifference(m_currentDifference + 1); }
+int TextCompareSession::firstDifferenceAfterAnchor() const
+{
+    // 锚点在非差异行，用后方第一处改动定位；前一处就是该位置的前一个。
+    const auto begin = m_differenceRuns.cbegin();
+    const auto end = m_differenceRuns.cend();
+    const auto it = std::lower_bound(begin, end, m_navigationAnchor,
+        [this](const Text::DifferenceRun &run, int row) {
+            return m_result.blocks.at(run.firstBlock).firstRow < row;
+        });
+    return int(it - begin);
+}
+
+void TextCompareSession::previousDifference()
+{
+    selectDifference(m_navigationAnchor < 0 ? m_currentDifference - 1 : firstDifferenceAfterAnchor() - 1);
+}
+
+void TextCompareSession::nextDifference()
+{
+    selectDifference(m_navigationAnchor < 0 ? m_currentDifference + 1 : firstDifferenceAfterAnchor());
+}
 void TextCompareSession::firstDifference() { selectDifference(0); }
 void TextCompareSession::lastDifference() { selectDifference(m_differenceRuns.size() - 1); }
 

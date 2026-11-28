@@ -579,6 +579,27 @@ private slots:
         QCOMPARE(session.currentDifference(), oldDifference);
     }
 
+    void nextAndPreviousUseCursorOnUnchangedLine()
+    {
+        TextCompareSession session;
+        QVERIFY(session.open());
+        QVERIFY(session.setText(true, QStringLiteral("L1\nanchor one\nL2\nanchor two\nL3\n")));
+        QVERIFY(session.setText(false, QStringLiteral("R1\nanchor one\nR2\nanchor two\nR3\n")));
+        QScopedPointer<QWidget> widget(session.createWidget());
+        auto *next = widget->findChild<QPushButton *>(QStringLiteral("nextDifference"));
+        auto *previous = widget->findChild<QPushButton *>(QStringLiteral("previousDifference"));
+        QVERIFY(next);
+        QVERIFY(previous);
+        QCOMPARE(session.differenceCount(), 3);
+        session.firstDifference();
+        QVERIFY(session.goToLine(4, true));
+        next->click();
+        QCOMPARE(session.currentDifference(), 2);
+        QVERIFY(session.goToLine(2, false));
+        previous->click();
+        QCOMPARE(session.currentDifference(), 0);
+    }
+
     void searchAndLineJumpUseOriginalLineNumbers()
     {
         TextCompareSession session;

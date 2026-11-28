@@ -43,6 +43,7 @@ public:
     /// 找位置——一处改动的第二块在那个列表里同样有位置，于是光标一进第二块
     /// 就会跳到另一处去。
     int differenceIndexOfBlock(int block) const;
+    void setNavigationAnchor(int row) { m_navigationAnchor = row; }
 
     bool setPaths(const QString &left, const QString &right, QString *error = nullptr);
     void setComparisonOptions(const Text::CompareOptions &options);
@@ -123,6 +124,7 @@ protected:
 private:
     bool loadPair(const QString &left, const QString &right, QString *error);
     void recompute();
+    int firstDifferenceAfterAnchor() const;
     void updateStatus();
     void updateTitle();
     struct BufferState {
@@ -148,6 +150,7 @@ private:
     Text::BomSavePolicy m_leftBomSavePolicy = Text::BomSavePolicy::Preserve;
     Text::BomSavePolicy m_rightBomSavePolicy = Text::BomSavePolicy::Preserve;
     int m_currentDifference = -1;
+    int m_navigationAnchor = -1;
     /// 每一处改动对应的块下标区间（闭区间），见 `differenceCount()`。
     QVector<Text::DifferenceRun> m_differenceRuns;
     QVector<BufferState> m_undo;

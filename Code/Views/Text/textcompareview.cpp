@@ -315,8 +315,12 @@ TextCompareView::TextCompareView(TextCompareSession *session, QWidget *parent)
         connect(m_panes[side], &QPlainTextEdit::cursorPositionChanged, this, [this, side] {
             const int row = m_panes[side]->textCursor().blockNumber();
             const auto &result = m_session->comparison();
-            if (row >= result.rows.size()) return;
+            if (row < 0 || row >= result.rows.size()) {
+                m_session->setNavigationAnchor(-1);
+                return;
+            }
             const int difference = m_session->differenceIndexOfBlock(result.rows[row].block);
+            m_session->setNavigationAnchor(difference < 0 ? row : -1);
             if (difference >= 0 && difference != m_session->currentDifference()) {
                 m_selectingText = true;
                 m_session->selectDifference(difference);
