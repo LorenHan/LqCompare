@@ -13,6 +13,8 @@
 #include <QSet>
 #include <QTableView>
 #include <QTableWidget>
+#include <QTextEdit>
+#include <QTextDocumentFragment>
 #include <QTemporaryDir>
 #include <QTimer>
 #include "tablecomparesession.h"
@@ -498,6 +500,56 @@ private slots:
         QCOMPARE(right->selectionModel()->selectedRows().first().row(), 1);
     }
 
+    void cellDetailsKeepMetadataOutOfCopyableContent()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const auto leftPath = directory.filePath("left.csv");
+        const auto rightPath = directory.filePath("right.csv");
+        writeFile(leftPath, "id,value\na,\"first line\nsecond line\"\nb\nc,\n");
+        writeFile(rightPath, "id,value\na,other\nb,filled\nc,filled\n");
+        TableCompareSession session(leftPath, rightPath);
+        QVERIFY(session.open());
+        auto options = session.comparisonOptions();
+        options.alignment = Table::RowAlignment::Position;
+        QVERIFY(session.setComparisonOptions(options));
+        QScopedPointer<QWidget> widget(session.createWidget());
+        auto *left = widget->findChild<QTableView *>("leftTable");
+        QVERIFY(left);
+        const auto inspect = [&](int row, QString &body, QString &metadata) {
+            bool seen = false;
+            QTimer timer;
+            timer.setSingleShot(true);
+            connect(&timer, &QTimer::timeout, widget.data(), [&] {
+                auto *dialog = widget->findChild<QDialog *>();
+                if (!dialog)
+                    return;
+                auto *editor = dialog->findChild<QTextEdit *>();
+                if (editor && editor->isReadOnly()) {
+                    editor->selectAll();
+                    body = editor->textCursor().selection().toPlainText();
+                    for (auto *label : dialog->findChildren<QLabel *>())
+                        metadata += label->text();
+                    seen = true;
+                }
+                dialog->accept();
+            });
+            timer.start(0);
+            return QMetaObject::invokeMethod(left, "doubleClicked", Q_ARG(QModelIndex, left->model()->index(row, 1))) && seen;
+        };
+        QString body, metadata;
+        QVERIFY(inspect(0, body, metadata));
+        QCOMPARE(body, QString("first line\nsecond line"));
+        QVERIFY(metadata.contains(QString("Source record 1, column 2")));
+        metadata.clear();
+        QVERIFY(inspect(1, body, metadata));
+        QVERIFY(body.isEmpty());
+        QVERIFY(metadata.contains(QString("Missing cell")));
+        metadata.clear();
+        QVERIFY(inspect(2, body, metadata));
+        QVERIFY(body.isEmpty());
+        QVERIFY(!metadata.contains(QString("Missing cell")));
+    }
     void columnDialogAppliesRulesAndPreservesTinyTolerance()
     {
         QTemporaryDir directory;

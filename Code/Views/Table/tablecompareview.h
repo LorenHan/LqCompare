@@ -17,6 +17,7 @@ class TableCompareSession;
 class TableGridModel : public QAbstractTableModel {
     Q_OBJECT
 public:
+    enum { CellMetadataRole = Qt::UserRole };
     TableGridModel(TableCompareSession *session, bool left, QObject *parent = nullptr);
     int rowCount(const QModelIndex &parent = {}) const override;
     int columnCount(const QModelIndex &parent = {}) const override;

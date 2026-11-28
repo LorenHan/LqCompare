@@ -115,11 +115,18 @@ QVariant TableGridModel::data(const QModelIndex &index, int role) const
         && sourceColumn >= 0 && sourceColumn < document.rows[sourceRow].size();
     const auto status = row.cells.value(index.column(), Table::CellStatus::NotCompared);
     if (role == Qt::DisplayRole) return present ? document.rows[sourceRow][sourceColumn] : QStringLiteral("∅");
-    if (role == Qt::ToolTipRole) {
+    if (role == Qt::EditRole)
+        return present ? QVariant(document.rows[sourceRow][sourceColumn]) : QVariant();
+    if (role == Qt::ToolTipRole || role == CellMetadataRole) {
         QString text = tr("%1 • %2").arg(Table::rowStatusLabel(row.status), roleName(mapping.role));
         if (row.duplicateKey) text += tr(" • Duplicate key; all occurrences retained");
-        text += present ? tr("\nSource record %1, column %2\n%3").arg(sourceRow + 1).arg(sourceColumn + 1)
-                          .arg(document.rows[sourceRow][sourceColumn]) : tr("\nMissing cell (distinct from empty text)");
+        if (present) {
+            text += tr("\nSource record %1, column %2").arg(sourceRow + 1).arg(sourceColumn + 1);
+            if (role == Qt::ToolTipRole)
+                text += QLatin1Char('\n') + document.rows[sourceRow][sourceColumn];
+        } else {
+            text += tr("\nMissing cell (distinct from empty text)");
+        }
         return text;
     }
     if (role == Qt::BackgroundRole) {
@@ -432,9 +439,16 @@ void TableCompareView::showCell(bool left, const QModelIndex &index)
     QDialog dialog(this);
     dialog.setWindowTitle(tr("Cell details — read only"));
     auto *layout = new QVBoxLayout(&dialog);
+    auto *model = m_models[left ? 0 : 1];
+    // 元信息单独显示，用户全选复制时只取得单元格文本。
+    auto *metadata = new QLabel(&dialog);
+    metadata->setTextFormat(Qt::PlainText);
+    metadata->setWordWrap(true);
+    metadata->setText(model->data(index, TableGridModel::CellMetadataRole).toString());
+    layout->addWidget(metadata);
     auto *text = new QTextEdit(&dialog);
     text->setReadOnly(true);
-    text->setPlainText(m_models[left ? 0 : 1]->data(index, Qt::ToolTipRole).toString());
+    text->setPlainText(model->data(index, Qt::EditRole).toString());
     layout->addWidget(text);
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, &dialog);
     connect(buttons, &QDialogButtonBox::rejected, &dialog, &QDialog::reject);
